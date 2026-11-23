@@ -10,6 +10,7 @@ apps/web/dist/
 *.db-shm
 *.writer.lock
 .daemon-token
+.dev-runtime/
 logs/
 staging/
 backups/

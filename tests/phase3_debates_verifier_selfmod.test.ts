@@ -16,6 +16,11 @@ function makeTempRoot(prefix = "bf-p3-"): string {
   return dir;
 }
 
+function openAuthedWs(url: string, token: string): WebSocket {
+  // @types/bun 1.2.15 DOM lib signature omits Bun's runtime { headers } WebSocket init option.
+  return new WebSocket(url, { headers: { "x-bf-token": token } } as unknown as string[]);
+}
+
 function waitForWsEvent(ws: WebSocket, predicate: (msg: any) => boolean, timeoutMs = 2000): Promise<any> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("ws_wait_timeout")), timeoutMs);
@@ -62,8 +67,9 @@ describe("Phase 3 — Conflict Debates, Independent Verifier & Sandboxed Self-Mo
     const app = startBotFactoryDaemon({ rootDir, port: 0 });
     runningApps.push(app);
 
+    const token = readFileSync(join(rootDir, "system", ".daemon-token"), "utf8").trim();
     const wsUrl = app.url.replace("http://", "ws://") + "/ws";
-    const chatWs = new WebSocket(wsUrl);
+    const chatWs = openAuthedWs(wsUrl, token);
     const chatEvents: Array<{ topic: string; eventType?: string; kind: string }> = [];
     await new Promise<void>((res) => (chatWs.onopen = () => res()));
     chatWs.addEventListener("message", (ev) => chatEvents.push(JSON.parse(String(ev.data))));
@@ -90,7 +96,7 @@ describe("Phase 3 — Conflict Debates, Independent Verifier & Sandboxed Self-Mo
     ).project;
 
     // Subscribe to project A debates over WS to verify positive scoped delivery
-    const debateWs = new WebSocket(wsUrl);
+    const debateWs = openAuthedWs(wsUrl, token);
     const debateEvents: Array<{ topic: string; eventType?: string; kind: string }> = [];
     await new Promise<void>((res) => (debateWs.onopen = () => res()));
     debateWs.addEventListener("message", (ev) => debateEvents.push(JSON.parse(String(ev.data))));
@@ -195,7 +201,6 @@ describe("Phase 3 — Conflict Debates, Independent Verifier & Sandboxed Self-Mo
     });
     expect(unauthRes.status).toBe(401);
 
-    const token = readFileSync(join(rootDir, "system", ".daemon-token"), "utf8").trim();
     const badJsonRes = await fetch(`${app.url}/api/mcp/bf_debate_post`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-bf-token": token },
@@ -203,19 +208,19 @@ describe("Phase 3 — Conflict Debates, Independent Verifier & Sandboxed Self-Mo
     });
     expect(badJsonRes.status).toBe(400);
 
-    // Round 1 via RPC
-    const r1 = app.engine.executeCommand({
+    // Round 1 turn 1 via RPC (2 participants -> roundCount = ceil(1 / 2) = 1)
+    const r1t1 = app.engine.executeCommand({
       commandId: "p3_dbt_r1",
       type: "debate.post",
       debateId: opened.debate.id,
       agentId: peer1.id,
       position: "Disk cache survives daemon restart cleanly.",
     }) as { debate: { roundCount: number; status: string }; escalated: boolean };
-    expect(r1.debate.roundCount).toBe(1);
-    expect(r1.escalated).toBe(false);
+    expect(r1t1.debate.roundCount).toBe(1);
+    expect(r1t1.escalated).toBe(false);
 
-    // Round 2 via real HTTP MCP /api/mcp/bf_debate_post
-    const r2Http = await fetch(`${app.url}/api/mcp/bf_debate_post`, {
+    // Round 1 turn 2 via real HTTP MCP /api/mcp/bf_debate_post (roundCount = ceil(2 / 2) = 1)
+    const r1t2Http = await fetch(`${app.url}/api/mcp/bf_debate_post`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-bf-token": token },
       body: JSON.stringify({
@@ -224,18 +229,50 @@ describe("Phase 3 — Conflict Debates, Independent Verifier & Sandboxed Self-Mo
         args: { debateId: opened.debate.id, position: "Bounded LRU avoids disk churn on rapid scrubs.", evidence: "bench: 2ms vs 14ms" },
       }),
     });
-    expect(r2Http.status).toBe(200);
-    const r2 = (await r2Http.json()) as { debate: { roundCount: number; status: string }; escalated: boolean };
-    expect(r2.debate.roundCount).toBe(2);
-    expect(r2.escalated).toBe(false);
+    expect(r1t2Http.status).toBe(200);
+    const r1t2 = (await r1t2Http.json()) as { debate: { roundCount: number; status: string }; escalated: boolean };
+    expect(r1t2.debate.roundCount).toBe(1);
+    expect(r1t2.escalated).toBe(false);
 
-    // Round 3 hits hard cap (3/3) -> auto-escalates to Project Manager!
-    const r3 = app.engine.executeCommand({
-      commandId: "p3_dbt_r3",
+    // Round 2 (turns 3-4)
+    const r2t1 = app.engine.executeCommand({
+      commandId: "p3_dbt_r2_t1",
+      type: "debate.post",
+      debateId: opened.debate.id,
+      agentId: peer1.id,
+      position: "Disk cache stays bounded via LRU eviction manifest.",
+    }) as { debate: { roundCount: number; status: string }; escalated: boolean };
+    expect(r2t1.debate.roundCount).toBe(2);
+    expect(r2t1.escalated).toBe(false);
+
+    const r2t2 = app.engine.executeCommand({
+      commandId: "p3_dbt_r2_t2",
+      type: "debate.post",
+      debateId: opened.debate.id,
+      agentId: peer2.id,
+      position: "In-memory cache handles hot previews; disk fallback only on miss.",
+    }) as { debate: { roundCount: number; status: string }; escalated: boolean };
+    expect(r2t2.debate.roundCount).toBe(2);
+    expect(r2t2.escalated).toBe(false);
+
+    // Round 3 turn 5 (not yet end-of-round -> roundCount = 3, escalated = false)
+    const r3t1 = app.engine.executeCommand({
+      commandId: "p3_dbt_r3_t1",
       type: "debate.post",
       debateId: opened.debate.id,
       agentId: peer1.id,
       position: "Use disk cache with small 16MB in-memory LRU read-through.",
+    }) as { debate: { roundCount: number; status: string }; escalated: boolean };
+    expect(r3t1.debate.roundCount).toBe(3);
+    expect(r3t1.escalated).toBe(false);
+
+    // Round 3 turn 6 hits hard cap (6 >= maxRounds 3 * 2 participants) -> auto-escalates to Project Manager!
+    const r3 = app.engine.executeCommand({
+      commandId: "p3_dbt_r3",
+      type: "debate.post",
+      debateId: opened.debate.id,
+      agentId: peer2.id,
+      position: "Agreed on hybrid, but need PM decision on eviction SLA.",
     }) as { debate: { roundCount: number; status: string; escalatedToAgentId: string | null }; escalated: boolean };
     expect(r3.debate.roundCount).toBe(3);
     expect(r3.escalated).toBe(true);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startBotFactoryDaemon, type BotFactoryApp } from "../apps/daemon/src/index";
@@ -53,8 +53,18 @@ describe("Read-only in-app browser API security", () => {
     writeFileSync(join(repoPath, "secrets.env"), "API_KEY=topsecret\n", "utf8");
     writeFileSync(join(repoPath, "binary.bin"), Buffer.from([0, 1, 2, 3, 4, 0]));
 
+    const token = readFileSync(join(rootDir, "system", ".daemon-token"), "utf8").trim();
+    const authHeaders = { "x-bf-token": token };
+
+    // Unauthenticated requests to /api/projects/* MUST fail closed with 401.
+    expect((await fetch(`${app.url}/api/projects/${projectId}/files`)).status).toBe(401);
+    expect(
+      (await fetch(`${app.url}/api/projects/${projectId}/file?path=${encodeURIComponent("README.md")}`)).status,
+    ).toBe(401);
+    expect((await fetch(`${app.url}/api/projects/${projectId}/diff`)).status).toBe(401);
+
     // --- /files ---
-    const filesRes = await fetch(`${app.url}/api/projects/${projectId}/files`);
+    const filesRes = await fetch(`${app.url}/api/projects/${projectId}/files`, { headers: authHeaders });
     expect(filesRes.status).toBe(200);
     const filesBody = (await filesRes.json()) as { files: Array<{ relativePath: string; name: string }> };
     const listed = filesBody.files.map((f) => f.relativePath);
@@ -68,6 +78,7 @@ describe("Read-only in-app browser API security", () => {
     // --- /file happy path ---
     const readRes = await fetch(
       `${app.url}/api/projects/${projectId}/file?path=${encodeURIComponent("README.md")}`,
+      { headers: authHeaders },
     );
     expect(readRes.status).toBe(200);
     const readBody = (await readRes.json()) as {
@@ -85,6 +96,7 @@ describe("Read-only in-app browser API security", () => {
     for (const blockedPath of ["../project.json", ".git/config", ".env", "secrets.env"]) {
       const res = await fetch(
         `${app.url}/api/projects/${projectId}/file?path=${encodeURIComponent(blockedPath)}`,
+        { headers: authHeaders },
       );
       expect(res.status).toBe(403);
     }
@@ -92,6 +104,7 @@ describe("Read-only in-app browser API security", () => {
     // --- /file binary rejection ---
     const binaryRes = await fetch(
       `${app.url}/api/projects/${projectId}/file?path=${encodeURIComponent("binary.bin")}`,
+      { headers: authHeaders },
     );
     expect(binaryRes.status).toBe(415);
 
@@ -103,7 +116,7 @@ describe("Read-only in-app browser API security", () => {
     );
     writeFileSync(join(repoPath, "notes.txt"), "alpha\nbeta\n", "utf8");
 
-    const diffRes = await fetch(`${app.url}/api/projects/${projectId}/diff`);
+    const diffRes = await fetch(`${app.url}/api/projects/${projectId}/diff`, { headers: authHeaders });
     expect(diffRes.status).toBe(200);
     const diff = (await diffRes.json()) as {
       branch: string;

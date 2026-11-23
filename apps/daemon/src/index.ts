@@ -38,14 +38,17 @@ export function startBotFactoryDaemon(overrides?: {
   const engine = new OrchestrationEngine(runtimeCfg, db, core, memory, router, nativeRuntime, acpRuntime, scrubber);
   const server = new DaemonServer(runtimeCfg, db, core, engine);
 
-  core.startOutboxWorker(200);
-  memory.startDecaySweeper();
   const { port, url } = server.start();
   engine.setBoundPort(port);
+  core.startOutboxWorker(200);
+  memory.startDecaySweeper();
 
   process.stderr.write(
     `[bot-factory] Daemon listening at ${url} (epoch=${db.epoch}, recovered: effects=${recovery.retiredEffects}, admissions=${recovery.unknownAdmissions})\n`,
   );
+  if (import.meta.main) {
+    process.stderr.write(`[bot-factory] Authenticated UI: http://127.0.0.1:${port}/?token=${runtimeCfg.sessionToken}\n`);
+  }
 
   const stop = () => {
     core.stopOutboxWorker();

@@ -188,6 +188,7 @@ export interface ProjectRecord {
   rootPath: string;
   repoPath: string;
   routingOverrides: Record<string, RouteTarget>;
+  verifyChecks?: Array<{ name: string; cmd: string; timeoutMs?: number }>;
   status: "active" | "paused" | "archived";
   createdAt: number;
 }
@@ -230,6 +231,9 @@ export interface AgentRecord {
   pid: number | null;
   activeSessionId: string | null;
   lastSummary: string | null;
+  turnCounter?: number;
+  depth?: number;
+  subagentMode?: "readonly" | "code" | null;
   updatedAt: number;
 }
 
@@ -246,6 +250,8 @@ export interface TaskRecord {
   worktreeBranch: string | null;
   handoffPath: string | null;
   retryCount: number;
+  dependsOn?: string[];
+  autoRetryCount?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -387,6 +393,14 @@ export interface QuietStatusProjection {
   openAnnotations: number;
   activeDebates: number;
   stagedSelfMods: number;
+  unknownAdmissions?: Array<{
+    id: string;
+    sessionId: string;
+    agentId: string;
+    executionGeneration: number;
+    createdAt: number;
+  }>;
+  pendingPermissionsCount?: number;
   inboxNotices: Array<{
     id: string;
     level: "info" | "warn" | "action";
@@ -434,6 +448,7 @@ export const RpcCommandSchema = z.discriminatedUnion("type", [
     provider: z.string().optional(),
     model: z.string().optional(),
     taskId: z.string().optional(),
+    parentAgentId: z.string().optional(),
   }),
   z.object({
     commandId: z.string(),

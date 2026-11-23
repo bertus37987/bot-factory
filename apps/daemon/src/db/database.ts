@@ -29,7 +29,7 @@ import {
   type VerificationVerdict,
 } from "@bot-factory/shared";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export interface OutboxEffectRow {
   id: string;
@@ -110,7 +110,11 @@ export class StateDatabase {
     try {
       const fd = openSync(this.lockPath, "wx");
       try {
-        writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: Date.now() }), "utf8");
+        writeFileSync(
+          fd,
+          JSON.stringify({ pid: process.pid, startedAt: Date.now(), exeHint: "bun" }),
+          "utf8",
+        );
       } finally {
         closeSync(fd);
       }
@@ -123,23 +127,79 @@ export class StateDatabase {
     }
   }
 
+  private isLockHolderAlive(holderPid: number, holderStartedAt: number | null, exeHint: string | null): boolean {
+    if (!isPidAlive(holderPid)) return false;
+    if (holderPid === process.pid) return true;
+    if (process.platform !== "win32") return true;
+
+    try {
+      const psScript =
+        `$p = Get-Process -Id ${holderPid} -ErrorAction SilentlyContinue; ` +
+        `if ($p) { try { $ms = [DateTimeOffset]::new($p.StartTime).ToUnixTimeMilliseconds() } catch { $ms = 0 }; ` +
+        `Write-Output ($p.ProcessName + "|" + $ms) }`;
+      const res = Bun.spawnSync(["powershell", "-NoProfile", "-NonInteractive", "-Command", psScript], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (res.exitCode !== 0) {
+        return true;
+      }
+      const out = res.stdout.toString().trim();
+      if (!out) {
+        return false;
+      }
+      const [rawName, rawStart] = out.split("|");
+      const procName = (rawName ?? "").trim().toLowerCase();
+      const expected = (exeHint ?? "bun").trim().toLowerCase();
+      const matchesExe =
+        procName === expected ||
+        procName === `${expected}.exe` ||
+        (expected === "bun" && (procName === "bun" || procName === "bun.exe"));
+      if (!matchesExe) {
+        return false;
+      }
+      const procStartMs = Number(rawStart);
+      if (
+        Number.isFinite(procStartMs) &&
+        procStartMs > 0 &&
+        holderStartedAt !== null &&
+        Number.isFinite(holderStartedAt) &&
+        procStartMs > holderStartedAt + 15_000
+      ) {
+        return false;
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
   private acquireWriterLock(): void {
     if (this.tryCreateExclusiveLock()) return;
 
-    // Inspect existing lock file to see if holder is still alive (or stale from an unclean crash)
+    // Inspect existing lock file to see if holder is still alive (or stale from an unclean crash / recycled PID)
     let holderPid: number | null = null;
+    let holderStartedAt: number | null = null;
+    let holderExeHint: string | null = null;
     try {
-      const raw = JSON.parse(readFileSync(this.lockPath, "utf8")) as { pid?: unknown };
+      const raw = JSON.parse(readFileSync(this.lockPath, "utf8")) as {
+        pid?: unknown;
+        startedAt?: unknown;
+        exeHint?: unknown;
+      };
       if (typeof raw.pid === "number") holderPid = raw.pid;
+      if (typeof raw.startedAt === "number") holderStartedAt = raw.startedAt;
+      if (typeof raw.exeHint === "string") holderExeHint = raw.exeHint;
     } catch {
       // Unreadable or empty lock file -> treat as stale if removable
     }
 
-    if (holderPid !== null && isPidAlive(holderPid)) {
+    if (holderPid !== null && this.isLockHolderAlive(holderPid, holderStartedAt, holderExeHint)) {
       throw new Error(`database_writer_lock_held: another daemon instance is active (pid=${holderPid})`);
     }
 
-    // Stale lock from dead PID -> clear and atomically re-acquire once
+    // Stale lock from dead PID or recycled non-daemon PID -> clear and atomically re-acquire once
     try {
       unlinkSync(this.lockPath);
     } catch {
@@ -160,12 +220,33 @@ export class StateDatabase {
     }
   }
 
+  private hasColumn(table: string, column: string): boolean {
+    const rows = this.db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    return rows.some((r) => r.name === column);
+  }
+
+  private ensureColumn(table: string, column: string, definitionSql: string): void {
+    if (!this.hasColumn(table, column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definitionSql};`);
+    }
+  }
+
   private migrate(): void {
+    const metaExists = this.db
+      .query("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'runtime_meta'")
+      .get() as { ok: number } | null;
+    const prevMeta = metaExists
+      ? (this.db.query("SELECT schema_version, fts_stale FROM runtime_meta WHERE id = 1").get() as {
+          schema_version: number;
+          fts_stale: number;
+        } | null)
+      : null;
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS runtime_meta (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         epoch INTEGER NOT NULL DEFAULT 0,
-        schema_version INTEGER NOT NULL DEFAULT 1,
+        schema_version INTEGER NOT NULL DEFAULT 2,
         instance_id TEXT NOT NULL,
         daemon_pid INTEGER NOT NULL,
         fts_stale INTEGER NOT NULL DEFAULT 0,
@@ -179,6 +260,7 @@ export class StateDatabase {
         root_path TEXT NOT NULL,
         repo_path TEXT NOT NULL,
         routing_overrides_json TEXT NOT NULL DEFAULT '{}',
+        verify_checks_json TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL DEFAULT 'active',
         created_at INTEGER NOT NULL
       );
@@ -198,6 +280,9 @@ export class StateDatabase {
         pid INTEGER,
         active_session_id TEXT,
         last_summary TEXT,
+        turn_counter INTEGER NOT NULL DEFAULT 0,
+        depth INTEGER NOT NULL DEFAULT 0,
+        subagent_mode TEXT,
         updated_at INTEGER NOT NULL
       );
 
@@ -260,6 +345,8 @@ export class StateDatabase {
         worktree_branch TEXT,
         handoff_path TEXT,
         retry_count INTEGER NOT NULL DEFAULT 0,
+        depends_on_json TEXT NOT NULL DEFAULT '[]',
+        auto_retry_count INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -329,11 +416,13 @@ export class StateDatabase {
         PRIMARY KEY(src_id, dst_id, rel)
       );
 
-      CREATE VIEW IF NOT EXISTS live_memory_facts AS
-      SELECT * FROM memory_facts
-      WHERE is_latest = 1
-        AND is_forgotten = 0
-        AND (forget_after IS NULL OR forget_after > unixepoch());
+      CREATE TABLE IF NOT EXISTS memory_embeddings (
+        fact_id TEXT PRIMARY KEY,
+        model TEXT NOT NULL,
+        dims INTEGER NOT NULL,
+        vector_blob BLOB NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
 
       CREATE TABLE IF NOT EXISTS checkpoints (
         id TEXT PRIMARY KEY,
@@ -454,7 +543,66 @@ export class StateDatabase {
       CREATE INDEX IF NOT EXISTS idx_selfmod_status ON self_mod_proposals(status, updated_at);
     `);
 
-    this.installFtsObjects();
+    // Idempotent v2 column upgrades for pre-existing v1 databases
+    this.ensureColumn("projects", "verify_checks_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("agents", "turn_counter", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("agents", "depth", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("agents", "subagent_mode", "TEXT");
+    this.ensureColumn("tasks", "depends_on_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("tasks", "auto_retry_count", "INTEGER NOT NULL DEFAULT 0");
+
+    // Recreate live_memory_facts view cleanly for epoch-ms forget_after comparisons
+    this.db.exec(`
+      DROP VIEW IF EXISTS live_memory_facts;
+      CREATE VIEW live_memory_facts AS
+      SELECT * FROM memory_facts
+      WHERE is_latest = 1
+        AND is_forgotten = 0
+        AND (forget_after IS NULL OR forget_after > (unixepoch() * 1000));
+    `);
+
+    // Upgrade second-scale memory_facts / memory_edges timestamps (< 1e11) to epoch ms
+    this.db.exec(`
+      UPDATE memory_facts
+      SET
+        created_at = CASE WHEN created_at > 0 AND created_at < 100000000000 THEN created_at * 1000 ELSE created_at END,
+        updated_at = CASE WHEN updated_at > 0 AND updated_at < 100000000000 THEN updated_at * 1000 ELSE updated_at END,
+        valid_from = CASE WHEN valid_from > 0 AND valid_from < 100000000000 THEN valid_from * 1000 ELSE valid_from END,
+        forget_after = CASE WHEN forget_after IS NOT NULL AND forget_after > 0 AND forget_after < 100000000000 THEN forget_after * 1000 ELSE forget_after END
+      WHERE (created_at > 0 AND created_at < 100000000000)
+         OR (updated_at > 0 AND updated_at < 100000000000)
+         OR (valid_from > 0 AND valid_from < 100000000000)
+         OR (forget_after IS NOT NULL AND forget_after > 0 AND forget_after < 100000000000);
+
+      UPDATE memory_edges
+      SET created_at = created_at * 1000
+      WHERE created_at > 0 AND created_at < 100000000000;
+    `);
+
+    if (prevMeta && Number(prevMeta.schema_version) < CURRENT_SCHEMA_VERSION) {
+      this.db.query("UPDATE runtime_meta SET schema_version = ? WHERE id = 1").run(CURRENT_SCHEMA_VERSION);
+      if (Number(prevMeta.fts_stale) === 0) {
+        this.dropFtsTriggers();
+      }
+    }
+
+    if (!prevMeta || Number(prevMeta.fts_stale) === 0) {
+      this.installFtsObjects();
+    }
+  }
+
+  private dropFtsTriggers(): void {
+    this.db.exec(`
+      DROP TRIGGER IF EXISTS trg_messages_ai;
+      DROP TRIGGER IF EXISTS trg_messages_ad;
+      DROP TRIGGER IF EXISTS trg_messages_au;
+      DROP TRIGGER IF EXISTS trg_chunks_ai;
+      DROP TRIGGER IF EXISTS trg_chunks_ad;
+      DROP TRIGGER IF EXISTS trg_chunks_au;
+      DROP TRIGGER IF EXISTS trg_facts_ai;
+      DROP TRIGGER IF EXISTS trg_facts_ad;
+      DROP TRIGGER IF EXISTS trg_facts_au;
+    `);
   }
 
   private installFtsObjects(): void {
@@ -468,6 +616,10 @@ export class StateDatabase {
       CREATE TRIGGER IF NOT EXISTS trg_messages_ad AFTER DELETE ON messages BEGIN
         INSERT INTO messages_fts(messages_fts, rowid, content, title) VALUES('delete', old.rowid, old.content, coalesce(old.title, ''));
       END;
+      CREATE TRIGGER IF NOT EXISTS trg_messages_au AFTER UPDATE OF content, title ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content, title) VALUES('delete', old.rowid, old.content, coalesce(old.title, ''));
+        INSERT INTO messages_fts(rowid, content, title) VALUES (new.rowid, new.content, coalesce(new.title, ''));
+      END;
 
       CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
         text, content='chunks', content_rowid='rowid'
@@ -478,6 +630,10 @@ export class StateDatabase {
       CREATE TRIGGER IF NOT EXISTS trg_chunks_ad AFTER DELETE ON chunks BEGIN
         INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
       END;
+      CREATE TRIGGER IF NOT EXISTS trg_chunks_au AFTER UPDATE OF text ON chunks BEGIN
+        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+        INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+      END;
 
       CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
         fact_text, entity, content='memory_facts', content_rowid='rowid'
@@ -487,6 +643,10 @@ export class StateDatabase {
       END;
       CREATE TRIGGER IF NOT EXISTS trg_facts_ad AFTER DELETE ON memory_facts BEGIN
         INSERT INTO facts_fts(facts_fts, rowid, fact_text, entity) VALUES('delete', old.rowid, old.fact_text, old.entity);
+      END;
+      CREATE TRIGGER IF NOT EXISTS trg_facts_au AFTER UPDATE OF fact_text, entity ON memory_facts BEGIN
+        INSERT INTO facts_fts(facts_fts, rowid, fact_text, entity) VALUES('delete', old.rowid, old.fact_text, old.entity);
+        INSERT INTO facts_fts(rowid, fact_text, entity) VALUES (new.rowid, new.fact_text, new.entity);
       END;
     `);
   }
@@ -534,14 +694,7 @@ export class StateDatabase {
   public detachFtsTriggers(): void {
     this.ftsStale = true;
     try {
-      this.db.exec(`
-        DROP TRIGGER IF EXISTS trg_messages_ai;
-        DROP TRIGGER IF EXISTS trg_messages_ad;
-        DROP TRIGGER IF EXISTS trg_chunks_ai;
-        DROP TRIGGER IF EXISTS trg_chunks_ad;
-        DROP TRIGGER IF EXISTS trg_facts_ai;
-        DROP TRIGGER IF EXISTS trg_facts_ad;
-      `);
+      this.dropFtsTriggers();
       this.db.query("UPDATE runtime_meta SET fts_stale = 1 WHERE id = 1").run();
     } catch {
       // Best-effort detach
@@ -556,6 +709,13 @@ export class StateDatabase {
     return this.closed;
   }
 
+  private isFtsError(msg: string): boolean {
+    if (/\b(fts5|vtable|messages_fts|chunks_fts|facts_fts)\b/i.test(msg)) {
+      return true;
+    }
+    return /malformed/i.test(msg) && /fts/i.test(msg);
+  }
+
   public runAtomicWrite<T>(fn: () => T): T {
     this.assertWritable();
     const tx = this.db.transaction(() => fn());
@@ -563,18 +723,27 @@ export class StateDatabase {
       return tx();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("fts5") || msg.includes("vtable") || msg.includes("malformed")) {
+      const code = (err as { code?: unknown })?.code;
+      if (this.isFtsError(msg)) {
         this.detachFtsTriggers();
         return tx();
       }
-      if (msg.includes("SQLITE_CORRUPT")) {
+      if (
+        code === "SQLITE_CORRUPT" ||
+        /SQLITE_CORRUPT|database disk image is malformed|file is not a database/i.test(msg)
+      ) {
         this.quarantined = true;
       }
       throw err;
     }
   }
 
-  public recoverAfterRestart(): { retiredEffects: number; unknownAdmissions: number; resetAgents: number } {
+  public recoverAfterRestart(): {
+    retiredEffects: number;
+    unknownAdmissions: number;
+    resetAgents: number;
+    resetSelfMods: number;
+  } {
     return this.runAtomicWrite(() => {
       const now = Date.now();
       const eff = this.db
@@ -586,10 +755,14 @@ export class StateDatabase {
       const ag = this.db
         .query("UPDATE agents SET status = 'idle', pid = NULL, updated_at = ? WHERE status = 'working'")
         .run(now);
+      const sm = this.db
+        .query("UPDATE self_mod_proposals SET status = 'staged', updated_at = ? WHERE status = 'verifying'")
+        .run(now);
       return {
         retiredEffects: eff.changes,
         unknownAdmissions: adm.changes,
         resetAgents: ag.changes,
+        resetSelfMods: sm.changes,
       };
     });
   }
@@ -628,6 +801,41 @@ export class StateDatabase {
     return id;
   }
 
+  private mapOutboxEffect(r: Record<string, unknown>): OutboxEffectRow {
+    return {
+      id: String(r.id),
+      effectType: String(r.effect_type),
+      payload: JSON.parse(String(r.payload_json)),
+      status: String(r.status) as OutboxEffectRow["status"],
+      attempts: Number(r.attempts),
+      nextAttemptAt: Number(r.next_attempt_at),
+      epoch: Number(r.epoch),
+      lastError: r.last_error ? String(r.last_error) : null,
+      createdAt: Number(r.created_at),
+    };
+  }
+
+  public listPendingOutboxEffects(limit = 100): OutboxEffectRow[] {
+    const now = Date.now();
+    const rows = this.db
+      .query(
+        "SELECT * FROM outbox_effects WHERE status = 'pending' AND epoch = ? AND next_attempt_at <= ? ORDER BY created_at ASC LIMIT ?",
+      )
+      .all(this.epoch, now, limit) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapOutboxEffect(r));
+  }
+
+  public claimOutboxEffectById(id: string): OutboxEffectRow | null {
+    return this.runAtomicWrite(() => {
+      const r = this.db
+        .query(
+          "UPDATE outbox_effects SET status = 'running', attempts = attempts + 1 WHERE id = ? AND status = 'pending' AND epoch = ? RETURNING *",
+        )
+        .get(id, this.epoch) as Record<string, unknown> | null;
+      return r ? this.mapOutboxEffect(r) : null;
+    });
+  }
+
   public claimPendingEffects(limit = 5): OutboxEffectRow[] {
     const now = Date.now();
     return this.runAtomicWrite(() => {
@@ -643,15 +851,9 @@ export class StateDatabase {
           .query("UPDATE outbox_effects SET status = 'running', attempts = attempts + 1 WHERE id = ? AND status = 'pending'")
           .run(String(r.id));
         claimed.push({
-          id: String(r.id),
-          effectType: String(r.effect_type),
-          payload: JSON.parse(String(r.payload_json)),
+          ...this.mapOutboxEffect(r),
           status: "running",
           attempts: Number(r.attempts) + 1,
-          nextAttemptAt: Number(r.next_attempt_at),
-          epoch: Number(r.epoch),
-          lastError: r.last_error ? String(r.last_error) : null,
-          createdAt: Number(r.created_at),
         });
       }
       return claimed;
@@ -671,9 +873,19 @@ export class StateDatabase {
   public insertProject(p: ProjectRecord): void {
     this.db
       .query(
-        "INSERT INTO projects (id, slug, name, root_path, repo_path, routing_overrides_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO projects (id, slug, name, root_path, repo_path, routing_overrides_json, verify_checks_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(p.id, p.slug, p.name, p.rootPath, p.repoPath, JSON.stringify(p.routingOverrides), p.status, p.createdAt);
+      .run(
+        p.id,
+        p.slug,
+        p.name,
+        p.rootPath,
+        p.repoPath,
+        JSON.stringify(p.routingOverrides),
+        JSON.stringify(p.verifyChecks ?? []),
+        p.status,
+        p.createdAt,
+      );
   }
 
   public listProjects(): ProjectRecord[] {
@@ -697,6 +909,7 @@ export class StateDatabase {
       rootPath: String(r.root_path),
       repoPath: String(r.repo_path),
       routingOverrides: JSON.parse(String(r.routing_overrides_json || "{}")) as Record<string, RouteTarget>,
+      verifyChecks: JSON.parse(String(r.verify_checks_json || "[]")) as NonNullable<ProjectRecord["verifyChecks"]>,
       status: String(r.status) as ProjectRecord["status"],
       createdAt: Number(r.created_at),
     };
@@ -707,8 +920,8 @@ export class StateDatabase {
   public upsertAgent(a: AgentRecord): void {
     this.db
       .query(
-        `INSERT INTO agents (id, project_id, parent_agent_id, scope, name, runtime_type, provider, model, status, worktree_path, worktree_branch, pid, active_session_id, last_summary, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO agents (id, project_id, parent_agent_id, scope, name, runtime_type, provider, model, status, worktree_path, worktree_branch, pid, active_session_id, last_summary, turn_counter, depth, subagent_mode, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            status = excluded.status,
            worktree_path = excluded.worktree_path,
@@ -719,6 +932,9 @@ export class StateDatabase {
            provider = excluded.provider,
            model = excluded.model,
            runtime_type = excluded.runtime_type,
+           turn_counter = CASE WHEN ? = 1 THEN excluded.turn_counter ELSE agents.turn_counter END,
+           depth = CASE WHEN ? = 1 THEN excluded.depth ELSE agents.depth END,
+           subagent_mode = CASE WHEN ? = 1 THEN excluded.subagent_mode ELSE agents.subagent_mode END,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -736,8 +952,26 @@ export class StateDatabase {
         a.pid,
         a.activeSessionId,
         a.lastSummary,
+        a.turnCounter ?? 0,
+        a.depth ?? 0,
+        a.subagentMode ?? null,
         a.updatedAt,
+        a.turnCounter !== undefined ? 1 : 0,
+        a.depth !== undefined ? 1 : 0,
+        a.subagentMode !== undefined ? 1 : 0,
       );
+  }
+
+  public incrementAgentTurnCounter(agentId: string): number {
+    return this.runAtomicWrite(() => {
+      const row = this.db
+        .query("UPDATE agents SET turn_counter = turn_counter + 1, updated_at = ? WHERE id = ? RETURNING turn_counter")
+        .get(Date.now(), agentId) as { turn_counter: number } | null;
+      if (!row) {
+        throw new Error(`Agent not found: ${agentId}`);
+      }
+      return Number(row.turn_counter);
+    });
   }
 
   public getAgent(id: string): AgentRecord | null {
@@ -785,6 +1019,9 @@ export class StateDatabase {
       pid: r.pid !== null && r.pid !== undefined ? Number(r.pid) : null,
       activeSessionId: r.active_session_id ? String(r.active_session_id) : null,
       lastSummary: r.last_summary ? String(r.last_summary) : null,
+      turnCounter: Number(r.turn_counter ?? 0),
+      depth: Number(r.depth ?? 0),
+      subagentMode: r.subagent_mode ? (String(r.subagent_mode) as AgentRecord["subagentMode"]) : null,
       updatedAt: Number(r.updated_at),
     };
   }
@@ -910,6 +1147,97 @@ export class StateDatabase {
     });
   }
 
+  public listUnknownAdmissions(): Array<{
+    id: string;
+    sessionId: string;
+    agentId: string;
+    executionGeneration: number;
+    createdAt: number;
+  }> {
+    const rows = this.db
+      .query(
+        `SELECT sa.id, sa.session_id, s.agent_id, sa.execution_generation, sa.created_at
+         FROM session_admissions sa
+         JOIN sessions s ON s.id = sa.session_id
+         WHERE sa.status = 'unknown'
+         ORDER BY sa.created_at ASC`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: String(r.id),
+      sessionId: String(r.session_id),
+      agentId: String(r.agent_id),
+      executionGeneration: Number(r.execution_generation),
+      createdAt: Number(r.created_at),
+    }));
+  }
+
+  public getQuietStatusCounts(): {
+    activeProjects: number;
+    runningBots: number;
+    waitingReviews: number;
+    openAnnotations: number;
+    activeDebates: number;
+    stagedSelfMods: number;
+  } {
+    const r = this.db
+      .query(
+        `SELECT
+           (SELECT COUNT(*) FROM projects WHERE status = 'active') AS activeProjects,
+           (SELECT COUNT(*) FROM agents WHERE scope != 'global' AND status = 'working') AS runningBots,
+           (SELECT COUNT(*) FROM tasks WHERE status = 'in_review') AS waitingReviews,
+           (SELECT COUNT(*) FROM annotations WHERE status IN ('open', 'in_progress')) AS openAnnotations,
+           (SELECT COUNT(*) FROM debates WHERE status IN ('open', 'escalated')) AS activeDebates,
+           (SELECT COUNT(*) FROM self_mod_proposals WHERE status IN ('staged', 'verifying', 'verified')) AS stagedSelfMods`,
+      )
+      .get() as Record<string, unknown>;
+    return {
+      activeProjects: Number(r?.activeProjects ?? 0),
+      runningBots: Number(r?.runningBots ?? 0),
+      waitingReviews: Number(r?.waitingReviews ?? 0),
+      openAnnotations: Number(r?.openAnnotations ?? 0),
+      activeDebates: Number(r?.activeDebates ?? 0),
+      stagedSelfMods: Number(r?.stagedSelfMods ?? 0),
+    };
+  }
+
+  public pruneOldOperationalRows(
+    keepEvents = 10_000,
+    keepReceipts = 5_000,
+    keepOutbox = 2_000,
+  ): { eventsDeleted: number; receiptsDeleted: number; outboxDeleted: number } {
+    const evtLimit = Math.max(0, Math.floor(keepEvents));
+    const rcptLimit = Math.max(0, Math.floor(keepReceipts));
+    const obxLimit = Math.max(0, Math.floor(keepOutbox));
+    return this.runAtomicWrite(() => {
+      const evtRes = this.db
+        .query("DELETE FROM events WHERE seq NOT IN (SELECT seq FROM events ORDER BY seq DESC LIMIT ?)")
+        .run(evtLimit);
+      const rcptRes = this.db
+        .query(
+          "DELETE FROM command_receipts WHERE rowid NOT IN (SELECT rowid FROM command_receipts ORDER BY created_at DESC, rowid DESC LIMIT ?)",
+        )
+        .run(rcptLimit);
+      const obxRes = this.db
+        .query(
+          `DELETE FROM outbox_effects
+           WHERE status IN ('done', 'retired', 'dead_letter')
+             AND rowid NOT IN (
+               SELECT rowid FROM outbox_effects
+               WHERE status IN ('done', 'retired', 'dead_letter')
+               ORDER BY created_at DESC, rowid DESC
+               LIMIT ?
+             )`,
+        )
+        .run(obxLimit);
+      return {
+        eventsDeleted: evtRes.changes,
+        receiptsDeleted: rcptRes.changes,
+        outboxDeleted: obxRes.changes,
+      };
+    });
+  }
+
   public nextMessageSeq(sessionId: string): number {
     const r = this.db.query("SELECT coalesce(max(seq), 0) AS m FROM messages WHERE session_id = ?").get(sessionId) as { m: number };
     return Number(r.m) + 1;
@@ -1008,8 +1336,8 @@ export class StateDatabase {
   public upsertTask(t: TaskRecord): void {
     this.db
       .query(
-        `INSERT INTO tasks (id, project_id, parent_task_id, title, spec_md, status, priority, assigned_agent_id, source_annotation_id, worktree_branch, handoff_path, retry_count, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO tasks (id, project_id, parent_task_id, title, spec_md, status, priority, assigned_agent_id, source_annotation_id, worktree_branch, handoff_path, retry_count, depends_on_json, auto_retry_count, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            title = excluded.title,
            spec_md = excluded.spec_md,
@@ -1019,6 +1347,8 @@ export class StateDatabase {
            worktree_branch = excluded.worktree_branch,
            handoff_path = excluded.handoff_path,
            retry_count = excluded.retry_count,
+           depends_on_json = CASE WHEN ? = 1 THEN excluded.depends_on_json ELSE tasks.depends_on_json END,
+           auto_retry_count = CASE WHEN ? = 1 THEN excluded.auto_retry_count ELSE tasks.auto_retry_count END,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -1034,8 +1364,12 @@ export class StateDatabase {
         t.worktreeBranch,
         t.handoffPath,
         t.retryCount,
+        JSON.stringify(t.dependsOn ?? []),
+        t.autoRetryCount ?? 0,
         t.createdAt,
         t.updatedAt,
+        t.dependsOn !== undefined ? 1 : 0,
+        t.autoRetryCount !== undefined ? 1 : 0,
       );
   }
 
@@ -1067,6 +1401,8 @@ export class StateDatabase {
       worktreeBranch: r.worktree_branch ? String(r.worktree_branch) : null,
       handoffPath: r.handoff_path ? String(r.handoff_path) : null,
       retryCount: Number(r.retry_count),
+      dependsOn: JSON.parse(String(r.depends_on_json || "[]")) as string[],
+      autoRetryCount: Number(r.auto_retry_count ?? 0),
       createdAt: Number(r.created_at),
       updatedAt: Number(r.updated_at),
     };
@@ -1148,9 +1484,17 @@ export class StateDatabase {
     derivedFromFactIds?: string[];
   }): MemoryFactRecord {
     this.assertWritable();
-    const now = Math.floor(Date.now() / 1000);
+    const now = Date.now();
     const id = params.id ?? newId("mem");
     let version = 1;
+
+    // Normalize legacy second-scale forgetAfter (< 1e11) to epoch milliseconds.
+    const forgetAfterMs =
+      params.forgetAfter !== null && params.forgetAfter !== undefined
+        ? params.forgetAfter > 0 && params.forgetAfter < 1e11
+          ? params.forgetAfter * 1000
+          : params.forgetAfter
+        : null;
 
     if (params.supersedesFactId) {
       const prev = this.db
@@ -1183,7 +1527,7 @@ export class StateDatabase {
         params.isStatic ? 1 : 0,
         params.confidence ?? 0.85,
         now,
-        params.forgetAfter ?? null,
+        forgetAfterMs,
         now,
         now,
       );
@@ -1204,7 +1548,7 @@ export class StateDatabase {
   public addMemoryEdge(srcId: string, dstId: string, rel: MemoryRelation): void {
     this.db
       .query("INSERT OR IGNORE INTO memory_edges (src_id, dst_id, rel, created_at) VALUES (?, ?, ?, ?)")
-      .run(srcId, dstId, rel, Math.floor(Date.now() / 1000));
+      .run(srcId, dstId, rel, Date.now());
   }
 
   public getMemoryFact(id: string): MemoryFactRecord | null {
@@ -1227,12 +1571,13 @@ export class StateDatabase {
 
   public sweepExpiredMemoryFacts(): number {
     return this.runAtomicWrite(() => {
-      const res = this.db
+      const now = Date.now();
+      const rows = this.db
         .query(
-          "UPDATE memory_facts SET is_forgotten = 1, forget_reason = 'expired', updated_at = unixepoch() WHERE is_forgotten = 0 AND forget_after IS NOT NULL AND forget_after <= unixepoch()",
+          "UPDATE memory_facts SET is_forgotten = 1, forget_reason = 'expired', updated_at = ? WHERE is_forgotten = 0 AND forget_after IS NOT NULL AND forget_after <= ? RETURNING id",
         )
-        .run();
-      return res.changes;
+        .all(now, now) as Array<{ id: string }>;
+      return rows.length;
     });
   }
 
@@ -1520,6 +1865,10 @@ export class StateDatabase {
       rows = this.db
         .query("SELECT * FROM verifications WHERE target_kind = ? AND target_id = ? ORDER BY created_at DESC LIMIT ?")
         .all(opts.targetKind, opts.targetId, limit) as Array<Record<string, unknown>>;
+    } else if (opts?.targetKind) {
+      rows = this.db
+        .query("SELECT * FROM verifications WHERE target_kind = ? ORDER BY created_at DESC LIMIT ?")
+        .all(opts.targetKind, limit) as Array<Record<string, unknown>>;
     } else if (opts?.projectId) {
       rows = this.db
         .query("SELECT * FROM verifications WHERE project_id = ? ORDER BY created_at DESC LIMIT ?")
@@ -1529,6 +1878,13 @@ export class StateDatabase {
         Record<string, unknown>
       >;
     }
+    return rows.map((r) => this.mapVerification(r));
+  }
+
+  public listVerificationsByTarget(targetKind: "task" | "selfmod", limit = 40): VerificationReportRecord[] {
+    const rows = this.db
+      .query("SELECT * FROM verifications WHERE target_kind = ? ORDER BY created_at DESC LIMIT ?")
+      .all(targetKind, limit) as Array<Record<string, unknown>>;
     return rows.map((r) => this.mapVerification(r));
   }
 

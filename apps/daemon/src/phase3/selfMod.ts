@@ -123,6 +123,7 @@ export function validateExclusiveRoster(config: HubConfig): { ok: boolean; error
 }
 
 const PLUGIN_TARGET_ID_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/;
+const FORBIDDEN_MERGE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -130,13 +131,43 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function deepMerge(base: unknown, patch: unknown): unknown {
   if (isPlainObject(base) && isPlainObject(patch)) {
-    const out: Record<string, unknown> = { ...base };
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(base)) {
+      if (!FORBIDDEN_MERGE_KEYS.has(k)) out[k] = v;
+    }
     for (const [key, value] of Object.entries(patch)) {
-      out[key] = key in out ? deepMerge(out[key], value) : value;
+      if (FORBIDDEN_MERGE_KEYS.has(key)) continue;
+      const hasOwn = Object.prototype.hasOwnProperty.call(out, key);
+      out[key] = hasOwn ? deepMerge(out[key], value) : deepMerge(undefined, value);
+    }
+    return out;
+  }
+  if (isPlainObject(patch)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(patch)) {
+      if (FORBIDDEN_MERGE_KEYS.has(key)) continue;
+      out[key] = deepMerge(undefined, value);
     }
     return out;
   }
   return patch;
+}
+
+function renameSyncWithRetry(src: string, dst: string, maxRetries = 4, backoffMs = 50): void {
+  const sab = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(src, dst);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if ((code === "EPERM" || code === "EBUSY") && attempt < maxRetries) {
+        Atomics.wait(sab, 0, 0, backoffMs);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 export class SelfModManager {
@@ -412,8 +443,17 @@ export class SelfModManager {
 
   private atomicWrite(targetPath: string, bytes: Buffer): void {
     mkdirSync(dirname(targetPath), { recursive: true });
-    const tmp = join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.tmp`);
-    writeFileSync(tmp, bytes);
-    renameSync(tmp, targetPath);
+    const tmp = join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.${Date.now()}.tmp`);
+    try {
+      writeFileSync(tmp, bytes);
+      renameSyncWithRetry(tmp, targetPath);
+    } catch (err) {
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        // ignore cleanup failure
+      }
+      throw err;
+    }
   }
 }

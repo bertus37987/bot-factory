@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import type { Server, ServerWebSocket } from "bun";
@@ -37,6 +38,56 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 const ALLOWED_ARTIFACT_TOP_DIRS = new Set(["plans", "artifacts", "handoffs"]);
+const SESSION_COOKIE_NAME = "bf_session";
+const SESSION_COOKIE_CONTEXT = "bot-factory-session-v1";
+
+function timingSafeStringEqual(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+function safeDecodeParam(raw: string): string | null {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+}
+
+function parseCookieHeader(cookieHeader: string | null): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!cookieHeader) return out;
+  for (const part of cookieHeader.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq <= 0) continue;
+    const name = part.slice(0, eq).trim();
+    const rawVal = part.slice(eq + 1).trim();
+    if (!name) continue;
+    out.set(name, safeDecodeParam(rawVal) ?? rawVal);
+  }
+  return out;
+}
+
+function extractAuthToken(req: Request): string {
+  const headerToken = req.headers.get("x-bf-token")?.trim();
+  if (headerToken) return headerToken;
+  const authHeader = req.headers.get("authorization") ?? "";
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+  return bearerMatch?.[1] ? bearerMatch[1].trim() : "";
+}
+
+export function signSessionCookie(sessionToken: string): string {
+  const mac = createHmac("sha256", sessionToken).update(SESSION_COOKIE_CONTEXT).digest("hex");
+  return `v1.${mac}`;
+}
+
+export function verifySessionCookie(cookieValue: string, sessionToken: string): boolean {
+  if (!cookieValue || !sessionToken) return false;
+  return timingSafeStringEqual(cookieValue, signSessionCookie(sessionToken));
+}
 
 export function resolveSafeProjectFile(projectRoot: string, relPath: string): string {
   if (!relPath || isAbsolute(relPath) || relPath.startsWith("\\\\") || relPath.startsWith("//") || relPath.includes("\0")) {
@@ -90,6 +141,20 @@ export class DaemonServer {
     this.scrubber = new SecretScrubber(runtimeCfg.secrets);
   }
 
+  private isAuthenticated(req: Request): boolean {
+    const token = extractAuthToken(req);
+    if (token && timingSafeStringEqual(token, this.runtimeCfg.sessionToken)) {
+      return true;
+    }
+    const cookies = parseCookieHeader(req.headers.get("cookie"));
+    const sessionCookie = cookies.get(SESSION_COOKIE_NAME);
+    return Boolean(sessionCookie && verifySessionCookie(sessionCookie, this.runtimeCfg.sessionToken));
+  }
+
+  private sessionCookieHeader(): string {
+    return `${SESSION_COOKIE_NAME}=${signSessionCookie(this.runtimeCfg.sessionToken)}; HttpOnly; SameSite=Strict; Path=/`;
+  }
+
   public start(): { port: number; url: string } {
     this.unsubscribeCore = this.core.onPostCommit((topic, eventType, payload, seq) => {
       this.broadcast(topic, { kind: "event", topic, eventType, data: payload, seq });
@@ -109,7 +174,73 @@ export class DaemonServer {
           return new Response("Forbidden origin/host", { status: 403 });
         }
 
+        if (url.pathname === "/" && req.method === "GET" && url.searchParams.has("token")) {
+          const tokenParam = url.searchParams.get("token") ?? "";
+          if (!timingSafeStringEqual(tokenParam, this.runtimeCfg.sessionToken)) {
+            return new Response("Unauthorized", { status: 401 });
+          }
+          return new Response(null, {
+            status: 302,
+            headers: {
+              "set-cookie": this.sessionCookieHeader(),
+              location: "/",
+            },
+          });
+        }
+
+        if (url.pathname === "/api/auth/status" && req.method === "GET") {
+          return Response.json({ authenticated: this.isAuthenticated(req) });
+        }
+
+        if (url.pathname === "/api/auth/session" && req.method === "POST") {
+          let body: { token?: unknown };
+          try {
+            const raw = await req.json();
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+              return Response.json({ ok: false, error: "invalid_auth_body" }, { status: 400 });
+            }
+            body = raw as { token?: unknown };
+          } catch {
+            return Response.json({ ok: false, error: "invalid_auth_json" }, { status: 400 });
+          }
+          if (typeof body.token !== "string" || !timingSafeStringEqual(body.token, this.runtimeCfg.sessionToken)) {
+            return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+          }
+          return Response.json(
+            { ok: true, authenticated: true },
+            {
+              status: 200,
+              headers: {
+                "set-cookie": this.sessionCookieHeader(),
+              },
+            },
+          );
+        }
+
+        if (url.pathname === "/api/health" && req.method === "GET") {
+          if (!this.isAuthenticated(req)) {
+            return Response.json({
+              ok: true,
+              host,
+              port: boundPort,
+              authRequired: true,
+            });
+          }
+          return Response.json({
+            ok: true,
+            epoch: this.db.epoch,
+            ftsStale: this.db.isFtsStale(),
+            host,
+            port: boundPort,
+            authRequired: false,
+            status: this.engine.getQuietStatusProjection(),
+          });
+        }
+
         if (url.pathname === "/ws") {
+          if (!this.isAuthenticated(req)) {
+            return new Response("Unauthorized", { status: 401 });
+          }
           const upgraded = server.upgrade(req, {
             data: { id: crypto.randomUUID(), topics: new Set<SubscriptionTopic>() },
           });
@@ -117,18 +248,83 @@ export class DaemonServer {
           return new Response("WebSocket upgrade failed", { status: 400 });
         }
 
-        if (url.pathname === "/api/health") {
-          return Response.json({
-            ok: true,
-            epoch: this.db.epoch,
-            ftsStale: this.db.isFtsStale(),
-            host,
-            port: boundPort,
-            status: this.engine.getQuietStatusProjection(),
-          });
+        if (url.pathname.startsWith("/api/mcp/") && req.method === "POST") {
+          const token = extractAuthToken(req);
+          const bound = token ? this.engine.resolveMcpToken(token) : null;
+          const isMasterToken = Boolean(token) && timingSafeStringEqual(token, this.runtimeCfg.sessionToken);
+          if (!bound && !isMasterToken) {
+            return Response.json({ error: "unauthorized_mcp_token" }, { status: 401 });
+          }
+          const toolName = safeDecodeParam(url.pathname.slice("/api/mcp/".length));
+          if (toolName === null || !toolName || toolName.includes("/")) {
+            return Response.json({ error: "invalid_mcp_tool" }, { status: 400 });
+          }
+          let body: { projectId?: unknown; agentId?: unknown; args?: unknown };
+          try {
+            const raw = await req.json();
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+              return Response.json({ error: "invalid_mcp_body" }, { status: 400 });
+            }
+            body = raw as { projectId?: unknown; agentId?: unknown; args?: unknown };
+          } catch {
+            return Response.json({ error: "invalid_mcp_json" }, { status: 400 });
+          }
+
+          let projectId: string;
+          let agentId: string;
+          let scoped: boolean;
+          if (bound) {
+            if (
+              (body.projectId !== undefined && typeof body.projectId !== "string") ||
+              (body.agentId !== undefined && typeof body.agentId !== "string")
+            ) {
+              return Response.json({ error: "invalid_mcp_identity" }, { status: 400 });
+            }
+            if (typeof body.projectId === "string" && body.projectId !== "" && body.projectId !== bound.projectId) {
+              return Response.json({ error: "mcp_scope_forbidden" }, { status: 403 });
+            }
+            if (typeof body.agentId === "string" && body.agentId !== "" && body.agentId !== bound.agentId) {
+              return Response.json({ error: "mcp_scope_forbidden" }, { status: 403 });
+            }
+            projectId = bound.projectId;
+            agentId = bound.agentId;
+            scoped = true;
+          } else {
+            if (typeof body.projectId !== "string" || typeof body.agentId !== "string") {
+              return Response.json({ error: "invalid_mcp_identity" }, { status: 400 });
+            }
+            projectId = body.projectId;
+            agentId = body.agentId;
+            scoped = false;
+          }
+
+          const args =
+            body.args && typeof body.args === "object" && !Array.isArray(body.args)
+              ? (body.args as Record<string, unknown>)
+              : undefined;
+          try {
+            const result = await this.engine.handleMcpToolCall(toolName, {
+              projectId,
+              agentId,
+              args,
+              scoped,
+            });
+            return Response.json(result);
+          } catch (err) {
+            return Response.json(
+              { error: this.scrubber.scrub(err instanceof Error ? err.message : String(err)) },
+              { status: 400 },
+            );
+          }
         }
 
-        if (url.pathname === "/api/snapshot") {
+        if (url.pathname.startsWith("/api/")) {
+          if (!this.isAuthenticated(req)) {
+            return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+          }
+        }
+
+        if (url.pathname === "/api/snapshot" && req.method === "GET") {
           return Response.json(this.engine.getGlobalSnapshot());
         }
 
@@ -146,47 +342,10 @@ export class DaemonServer {
           }
         }
 
-        if (url.pathname.startsWith("/api/mcp/") && req.method === "POST") {
-          const token = req.headers.get("x-bf-token") ?? "";
-          if (token !== this.runtimeCfg.sessionToken) {
-            return Response.json({ error: "unauthorized_mcp_token" }, { status: 401 });
-          }
-          const toolName = url.pathname.slice("/api/mcp/".length);
-          let body: { projectId?: unknown; agentId?: unknown; args?: unknown };
-          try {
-            const raw = await req.json();
-            if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-              return Response.json({ error: "invalid_mcp_body" }, { status: 400 });
-            }
-            body = raw as { projectId?: unknown; agentId?: unknown; args?: unknown };
-          } catch {
-            return Response.json({ error: "invalid_mcp_json" }, { status: 400 });
-          }
-          if (typeof body.projectId !== "string" || typeof body.agentId !== "string") {
-            return Response.json({ error: "invalid_mcp_identity" }, { status: 400 });
-          }
-          const args =
-            body.args && typeof body.args === "object" && !Array.isArray(body.args)
-              ? (body.args as Record<string, unknown>)
-              : undefined;
-          try {
-            const result = await this.engine.handleMcpToolCall(toolName, {
-              projectId: body.projectId,
-              agentId: body.agentId,
-              args,
-            });
-            return Response.json(result);
-          } catch (err) {
-            return Response.json(
-              { error: this.scrubber.scrub(err instanceof Error ? err.message : String(err)) },
-              { status: 400 },
-            );
-          }
-        }
-
         const artifactMatch = /^\/api\/projects\/([^/]+)\/artifact$/.exec(url.pathname);
         if (artifactMatch && req.method === "GET") {
-          const projectId = decodeURIComponent(artifactMatch[1]!);
+          const projectId = safeDecodeParam(artifactMatch[1]!);
+          if (projectId === null) return new Response("Bad Request", { status: 400 });
           const relPath = url.searchParams.get("path") ?? "";
           const project = this.db.getProject(projectId);
           if (!project || !relPath) return new Response("Not found", { status: 404 });
@@ -198,6 +357,9 @@ export class DaemonServer {
               headers: {
                 "content-type": CONTENT_TYPES[ext] ?? "application/octet-stream",
                 "cache-control": "no-cache",
+                "content-security-policy":
+                  "sandbox; default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'",
+                "x-content-type-options": "nosniff",
               },
             });
           } catch {
@@ -208,7 +370,9 @@ export class DaemonServer {
         // Read-only in-app browser API (repo files + workspace diff)
         const filesMatch = /^\/api\/projects\/([^/]+)\/files$/.exec(url.pathname);
         if (filesMatch && req.method === "GET") {
-          const project = this.db.getProject(decodeURIComponent(filesMatch[1]!));
+          const projectId = safeDecodeParam(filesMatch[1]!);
+          if (projectId === null) return new Response("Bad Request", { status: 400 });
+          const project = this.db.getProject(projectId);
           if (!project) return new Response("Not found", { status: 404 });
           const codeRoot = this.resolveProjectCodeRoot(project, url.searchParams.get("agentId"));
           return Response.json({ files: listSafeRepoFiles(codeRoot) });
@@ -216,7 +380,9 @@ export class DaemonServer {
 
         const fileMatch = /^\/api\/projects\/([^/]+)\/file$/.exec(url.pathname);
         if (fileMatch && req.method === "GET") {
-          const project = this.db.getProject(decodeURIComponent(fileMatch[1]!));
+          const projectId = safeDecodeParam(fileMatch[1]!);
+          if (projectId === null) return new Response("Bad Request", { status: 400 });
+          const project = this.db.getProject(projectId);
           const relPath = url.searchParams.get("path") ?? "";
           if (!project || !relPath) return new Response("Not found", { status: 404 });
           const codeRoot = this.resolveProjectCodeRoot(project, url.searchParams.get("agentId"));
@@ -244,10 +410,16 @@ export class DaemonServer {
 
         const diffMatch = /^\/api\/projects\/([^/]+)\/diff$/.exec(url.pathname);
         if (diffMatch && req.method === "GET") {
-          const project = this.db.getProject(decodeURIComponent(diffMatch[1]!));
+          const projectId = safeDecodeParam(diffMatch[1]!);
+          if (projectId === null) return new Response("Bad Request", { status: 400 });
+          const project = this.db.getProject(projectId);
           if (!project) return new Response("Not found", { status: 404 });
           const codeRoot = this.resolveProjectCodeRoot(project, url.searchParams.get("agentId"));
-          return Response.json(computeWorkspaceGitDiff(codeRoot, (text) => this.scrubber.scrub(text)));
+          return Response.json(await computeWorkspaceGitDiff(codeRoot, (text) => this.scrubber.scrub(text)));
+        }
+
+        if (url.pathname.startsWith("/api/")) {
+          return Response.json({ ok: false, error: "not_found" }, { status: 404 });
         }
 
         return this.serveStaticUi(url.pathname);
@@ -290,10 +462,19 @@ export class DaemonServer {
       );
     }
 
-    const candidateRel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-    let abs = resolve(this.webDistDir, candidateRel);
-    const rel = relative(this.webDistDir, abs);
-    if (rel.startsWith("..") || !existsSync(abs) || !statSync(abs).isFile()) {
+    const decoded = safeDecodeParam(pathname);
+    if (decoded === null) {
+      return new Response("Bad Request", { status: 400 });
+    }
+
+    const candidateRel = decoded === "/" ? "index.html" : decoded.replace(/^\/+/, "") || "index.html";
+    const check = isPathStrictlyWithinRoot(this.webDistDir, candidateRel);
+    if (!check.ok) {
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    let abs = check.absTarget;
+    if (!existsSync(abs) || !statSync(abs).isFile()) {
       abs = resolve(this.webDistDir, "index.html");
     }
     const ext = extname(abs).toLowerCase();
@@ -348,7 +529,7 @@ export class DaemonServer {
           kind: "ack",
           commandId: (msg.payload as { commandId?: string })?.commandId ?? "invalid",
           ok: false,
-          error: parsed.error.message,
+          error: this.scrubber.scrub(parsed.error.message),
         });
         return;
       }

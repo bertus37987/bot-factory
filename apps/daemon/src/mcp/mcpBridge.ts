@@ -15,6 +15,7 @@ const SERVER_NAME = "bot-factory-mcp-bridge";
 const SERVER_VERSION = "0.1.0";
 
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:4310";
+const DAEMON_FETCH_TIMEOUT_MS = 15_000;
 
 // --- Types ---
 
@@ -44,12 +45,19 @@ export interface BridgeConfig {
   agentId: string;
 }
 
+export interface McpToolPropertySchema {
+  type: string;
+  description: string;
+  items?: { type: string };
+  enum?: string[];
+}
+
 export interface McpToolDef {
   name: string;
   description: string;
   inputSchema: {
     type: "object";
-    properties: Record<string, { type: string; description: string }>;
+    properties: Record<string, McpToolPropertySchema>;
     required?: string[];
   };
 }
@@ -71,7 +79,8 @@ export const MCP_TOOLS: McpToolDef[] = [
       properties: {
         status: {
           type: "string",
-          description: "Optional TaskStatus filter (backlog, ready, claimed, ...).",
+          enum: ["backlog", "ready", "claimed", "in_review", "verified", "merged", "blocked"],
+          description: "Optional TaskStatus filter (backlog, ready, claimed, in_review, verified, merged, blocked).",
         },
       },
     },
@@ -91,12 +100,16 @@ export const MCP_TOOLS: McpToolDef[] = [
   },
   {
     name: "bf_task_update",
-    description: "Update an owned task (status, spec, or handoff notes).",
+    description: "Update a task status.",
     inputSchema: {
       type: "object",
       properties: {
         taskId: { type: "string", description: "ID of the task to update." },
-        status: { type: "string", description: "New TaskStatus value." },
+        status: {
+          type: "string",
+          enum: ["backlog", "ready", "claimed", "in_review", "verified", "merged", "blocked"],
+          description: "New TaskStatus value.",
+        },
       },
       required: ["taskId"],
     },
@@ -108,18 +121,40 @@ export const MCP_TOOLS: McpToolDef[] = [
       type: "object",
       properties: {
         taskId: { type: "string", description: "ID of the task." },
-        content: { type: "string", description: "Handoff document content (markdown)." },
+        title: { type: "string", description: "Short handoff title (defaults to taskId)." },
+        summary: { type: "string", description: "Summary of completed work and findings (markdown)." },
+        content: { type: "string", description: "Legacy alias for summary (markdown)." },
+        changedFiles: {
+          type: "array",
+          items: { type: "string" },
+          description: "List of modified file paths.",
+        },
+        testsRun: {
+          type: "array",
+          items: { type: "string" },
+          description: "List of test/check commands executed and their outcomes.",
+        },
+        notes: { type: "string", description: "Optional additional notes or caveats." },
       },
       required: ["taskId"],
     },
   },
   {
     name: "bf_memory_search",
-    description: "Search project memory for relevant facts or decisions.",
+    description: "Search project or global memory for relevant facts or decisions.",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "Search query text." },
+        scope: {
+          type: "string",
+          enum: ["project", "global"],
+          description: "Memory scope to search ('project' default or 'global').",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of results to return (default 8).",
+        },
       },
       required: ["query"],
     },
@@ -134,14 +169,14 @@ export const MCP_TOOLS: McpToolDef[] = [
   },
   {
     name: "bf_fix_task_resolve",
-    description: "Resolve a fix task originating from an annotation.",
+    description: "Resolve a fix task or annotation (marks annotation resolved_pending_review).",
     inputSchema: {
       type: "object",
       properties: {
-        taskId: { type: "string", description: "ID of the fix task to resolve." },
-        resolution: { type: "string", description: "Resolution note." },
+        annotationId: { type: "string", description: "ID of the annotation to resolve." },
+        taskId: { type: "string", description: "ID of the linked fix task (used if annotationId is omitted)." },
+        resolution: { type: "string", description: "Resolution summary note." },
       },
-      required: ["taskId"],
     },
   },
   {
@@ -313,6 +348,7 @@ export function makeDaemonCallTool(config: BridgeConfig): CallToolFn {
           agentId: config.agentId,
           args,
         }),
+        signal: AbortSignal.timeout(DAEMON_FETCH_TIMEOUT_MS),
       });
     } catch (err) {
       throw new Error(
@@ -333,8 +369,9 @@ export function makeDaemonCallTool(config: BridgeConfig): CallToolFn {
 
 // --- stdio loop ---
 
-export function startStdioLoop(callTool: CallToolFn): void {
+export function startStdioLoop(callTool: CallToolFn, opts?: { exitOnEnd?: boolean }): void {
   let buffer = "";
+  const inFlight = new Set<Promise<void>>();
 
   const lineHandler = (line: string): void => {
     const trimmed = line.trim();
@@ -346,7 +383,7 @@ export function startStdioLoop(callTool: CallToolFn): void {
       process.stderr.write(`mcpBridge: skipping non-JSON line: ${trimmed.slice(0, 200)}\n`);
       return;
     }
-    void handleMcpJsonRpcRequest(req, callTool)
+    const task = handleMcpJsonRpcRequest(req, callTool)
       .then((resp) => {
         if (resp !== null) {
           process.stdout.write(JSON.stringify(resp) + "\n");
@@ -356,7 +393,11 @@ export function startStdioLoop(callTool: CallToolFn): void {
         process.stderr.write(
           `mcpBridge: internal error handling request: ${err instanceof Error ? err.message : String(err)}\n`,
         );
+      })
+      .finally(() => {
+        inFlight.delete(task);
       });
+    inFlight.add(task);
   };
 
   process.stdin.setEncoding("utf8");
@@ -370,8 +411,31 @@ export function startStdioLoop(callTool: CallToolFn): void {
     }
   });
   process.stdin.on("end", () => {
-    if (buffer.trim()) lineHandler(buffer);
-    process.stderr.write("mcpBridge: stdin closed, exiting\n");
+    void (async () => {
+      if (buffer.trim()) {
+        lineHandler(buffer);
+        buffer = "";
+      }
+      const keepalive = inFlight.size > 0 ? setInterval(() => {}, 50) : null;
+      try {
+        while (inFlight.size > 0) {
+          await Promise.allSettled([...inFlight]);
+        }
+        await new Promise<void>((resolveFlush) => {
+          if (process.stdout.writableFinished) {
+            resolveFlush();
+            return;
+          }
+          process.stdout.write("", () => resolveFlush());
+        });
+      } finally {
+        if (keepalive) clearInterval(keepalive);
+      }
+      process.stderr.write("mcpBridge: stdin closed, exiting\n");
+      if (opts?.exitOnEnd) {
+        process.exit(0);
+      }
+    })();
   });
   process.stdin.on("error", (err: Error) => {
     process.stderr.write(`mcpBridge: stdin error: ${err.message}\n`);
@@ -395,5 +459,5 @@ if (import.meta.main) {
   process.stderr.write(
     `mcpBridge: starting — daemon=${config.daemonUrl} project=${config.projectId || "(unset)"} agent=${config.agentId || "(unset)"}\n`,
   );
-  startStdioLoop(makeDaemonCallTool(config));
+  startStdioLoop(makeDaemonCallTool(config), { exitOnEnd: true });
 }

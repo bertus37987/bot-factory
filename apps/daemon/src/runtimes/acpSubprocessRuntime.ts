@@ -131,6 +131,8 @@ interface ActiveAcpProcess {
   eventQueue: NormalizedAgentEvent[];
   eventWaiter: (() => void) | null;
   activeTurnTimeoutReset: (() => void) | null;
+  turnMutex: Promise<void>;
+  handshakeComplete: boolean;
   stopping: boolean;
   closed: boolean;
 }
@@ -149,14 +151,26 @@ export class AcpSubprocessRuntime implements AgentRuntime {
   public readonly kind = "acp_stdio" as const;
   private readonly active = new Map<string, ActiveAcpProcess>();
   private readonly requestTimeoutMs: number;
+  private onSessionExit?: (sessionId: string) => void;
 
   constructor(
     private readonly config: HubConfig,
     private readonly logsDir: string,
     private readonly scrubber: SecretScrubber,
-    opts?: { requestTimeoutMs?: number },
+    opts?: { requestTimeoutMs?: number; onSessionExit?: (sessionId: string) => void },
   ) {
     this.requestTimeoutMs = opts?.requestTimeoutMs ?? (config.guardrails.permissionRequestTimeoutSeconds ?? 120) * 1000;
+    this.onSessionExit = opts?.onSessionExit;
+  }
+
+  public setOnSessionExit(handler: ((sessionId: string) => void) | undefined): void {
+    this.onSessionExit = handler;
+  }
+
+  public isSessionAlive(sessionId: string): boolean {
+    const state = this.active.get(sessionId);
+    if (!state || state.stopping || state.closed) return false;
+    return state.proc.exitCode === null && !state.proc.killed;
   }
 
   public getActiveCount(): number {
@@ -190,13 +204,32 @@ export class AcpSubprocessRuntime implements AgentRuntime {
       eventQueue: [],
       eventWaiter: null,
       activeTurnTimeoutReset: null,
+      turnMutex: Promise.resolve(),
+      handshakeComplete: false,
       stopping: false,
       closed: false,
     };
 
     this.active.set(spec.sessionId, state);
     void this.pumpStderr(state, logFile);
-    void this.pumpStdout(state);
+    const stdoutDone = this.pumpStdout(state);
+
+    void proc.exited.then(async () => {
+      const removed = this.removeActiveOnUnexpectedExit(state);
+      if (state.stopping) return;
+      if (removed && state.handshakeComplete) {
+        try {
+          this.onSessionExit?.(spec.sessionId);
+        } catch {
+          // ignore listener errors
+        }
+      }
+      await Promise.race([stdoutDone, new Promise<void>((r) => setTimeout(r, 100))]);
+      if (!state.closed && !state.stopping) {
+        state.closed = true;
+        this.failPendingOnUnexpectedExit(state);
+      }
+    });
 
     const handshakeTimeoutMs = Math.min(30_000, this.requestTimeoutMs);
     try {
@@ -222,6 +255,7 @@ export class AcpSubprocessRuntime implements AgentRuntime {
       )) as { sessionId?: string };
 
       state.externalSessionId = newSessionRes?.sessionId ?? spec.sessionId;
+      state.handshakeComplete = true;
     } catch (err) {
       state.stopping = true;
       await this.terminateProcessTree(state);
@@ -245,17 +279,17 @@ export class AcpSubprocessRuntime implements AgentRuntime {
       return;
     }
 
-    const promptText = input.ephemeralContext ? `${input.ephemeralContext}\n\n${input.userText}` : input.userText;
-    const reqId = state.nextClientReqId;
-    const promptPromise = this.sendClientRequest(state, "session/prompt", {
-      sessionId: state.externalSessionId,
-      prompt: [{ type: "text", text: promptText }],
+    // Serialize turns on the same ACP subprocess so JSON-RPC requests/notifications never interleave.
+    const prevTurn = state.turnMutex;
+    let releaseTurn!: () => void;
+    const currentTurnDone = new Promise<void>((res) => {
+      releaseTurn = res;
     });
+    state.turnMutex = prevTurn.catch(() => {}).then(() => currentTurnDone);
 
-    let finished = false;
-    let accumulated = "";
+    await prevTurn.catch(() => {});
+
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
-
     const clearTurnTimer = () => {
       if (idleTimer) {
         clearTimeout(idleTimer);
@@ -264,55 +298,75 @@ export class AcpSubprocessRuntime implements AgentRuntime {
       state.activeTurnTimeoutReset = null;
     };
 
-    const finishWithEvent = (evt: NormalizedAgentEvent) => {
-      if (finished) return;
-      finished = true;
-      clearTurnTimer();
-      this.pushEvent(state, evt);
-    };
-
-    const armTurnTimer = () => {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        if (finished) return;
-        this.flushPendingPermissionsCancelled(state);
-        try {
-          this.writeJsonLine(state, {
-            jsonrpc: "2.0",
-            method: "session/cancel",
-            params: { sessionId: state.externalSessionId },
-          });
-        } catch {
-          // ignore if stdin closed
-        }
-        const pending = state.pendingClientRequests.get(reqId);
-        if (pending) {
-          if (pending.timer) clearTimeout(pending.timer);
-          state.pendingClientRequests.delete(reqId);
-          pending.reject(new Error(`acp_turn_timeout:${this.requestTimeoutMs}ms`));
-        } else {
-          finishWithEvent({ type: "error", message: `acp_turn_timeout:${this.requestTimeoutMs}ms` });
-        }
-      }, this.requestTimeoutMs);
-    };
-
-    state.activeTurnTimeoutReset = armTurnTimer;
-    armTurnTimer();
-
-    promptPromise
-      .then(() => {
-        finishWithEvent({ type: "done", finalText: accumulated });
-      })
-      .catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg === "acp_turn_paused") {
-          finishWithEvent({ type: "done", finalText: accumulated || "[Turn paused by operator]" });
-        } else {
-          finishWithEvent({ type: "error", message: this.scrubber.scrub(msg) });
-        }
-      });
+    let finished = false;
+    let promptPromise: Promise<unknown> | null = null;
 
     try {
+      const current = this.active.get(handle.sessionId);
+      if (!current || current !== state || state.stopping || state.closed || state.proc.exitCode !== null) {
+        yield { type: "error", message: `ACP session not active: ${handle.sessionId}` };
+        return;
+      }
+
+      state.eventQueue.length = 0;
+
+      const promptText = input.ephemeralContext ? `${input.ephemeralContext}\n\n${input.userText}` : input.userText;
+      const reqId = state.nextClientReqId;
+      promptPromise = this.sendClientRequest(state, "session/prompt", {
+        sessionId: state.externalSessionId,
+        prompt: [{ type: "text", text: promptText }],
+      });
+
+      let accumulated = "";
+
+      const finishWithEvent = (evt: NormalizedAgentEvent) => {
+        if (finished) return;
+        finished = true;
+        clearTurnTimer();
+        this.pushEvent(state, evt);
+      };
+
+      const armTurnTimer = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          if (finished) return;
+          this.flushPendingPermissionsCancelled(state);
+          try {
+            this.writeJsonLine(state, {
+              jsonrpc: "2.0",
+              method: "session/cancel",
+              params: { sessionId: state.externalSessionId },
+            });
+          } catch {
+            // ignore if stdin closed
+          }
+          const pending = state.pendingClientRequests.get(reqId);
+          if (pending) {
+            if (pending.timer) clearTimeout(pending.timer);
+            state.pendingClientRequests.delete(reqId);
+            pending.reject(new Error(`acp_turn_timeout:${this.requestTimeoutMs}ms`));
+          } else {
+            finishWithEvent({ type: "error", message: `acp_turn_timeout:${this.requestTimeoutMs}ms` });
+          }
+        }, this.requestTimeoutMs);
+      };
+
+      state.activeTurnTimeoutReset = armTurnTimer;
+      armTurnTimer();
+
+      promptPromise
+        .then(() => {
+          finishWithEvent({ type: "done", finalText: accumulated });
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg === "acp_turn_paused") {
+            finishWithEvent({ type: "done", finalText: accumulated || "[Turn paused by operator]" });
+          } else {
+            finishWithEvent({ type: "error", message: this.scrubber.scrub(msg) });
+          }
+        });
+
       while (!finished || state.eventQueue.length > 0) {
         if (state.eventQueue.length === 0) {
           await new Promise<void>((r) => {
@@ -329,6 +383,22 @@ export class AcpSubprocessRuntime implements AgentRuntime {
       }
     } finally {
       clearTurnTimer();
+      state.eventWaiter = null;
+      if (!finished && promptPromise) {
+        finished = true;
+        this.flushPendingPermissionsCancelled(state);
+        try {
+          this.writeJsonLine(state, {
+            jsonrpc: "2.0",
+            method: "session/cancel",
+            params: { sessionId: state.externalSessionId },
+          });
+        } catch {
+          // ignore if stdin closed
+        }
+        await Promise.race([promptPromise.catch(() => {}), new Promise<void>((r) => setTimeout(r, 1000))]);
+      }
+      releaseTurn();
     }
   }
 
@@ -537,6 +607,23 @@ export class AcpSubprocessRuntime implements AgentRuntime {
     }
   }
 
+  private removeActiveOnUnexpectedExit(state: ActiveAcpProcess): boolean {
+    if (this.active.get(state.spec.sessionId) === state) {
+      this.active.delete(state.spec.sessionId);
+      return true;
+    }
+    return false;
+  }
+
+  private failPendingOnUnexpectedExit(state: ActiveAcpProcess): void {
+    for (const pending of state.pendingClientRequests.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(new Error("acp_subprocess_exited_unexpectedly"));
+    }
+    state.pendingClientRequests.clear();
+    this.pushEvent(state, { type: "error", message: "acp_subprocess_exited_unexpectedly" });
+  }
+
   private async pumpStdout(state: ActiveAcpProcess): Promise<void> {
     if (!state.proc.stdout || typeof state.proc.stdout === "number") return;
     const reader = state.proc.stdout.getReader();
@@ -559,14 +646,21 @@ export class AcpSubprocessRuntime implements AgentRuntime {
     } catch {
       // ignore stream close
     } finally {
-      state.closed = true;
-      if (!state.stopping) {
-        for (const pending of state.pendingClientRequests.values()) {
-          if (pending.timer) clearTimeout(pending.timer);
-          pending.reject(new Error("acp_subprocess_exited_unexpectedly"));
+      if (!state.closed) {
+        state.closed = true;
+        if (!state.stopping) {
+          this.failPendingOnUnexpectedExit(state);
         }
-        state.pendingClientRequests.clear();
-        this.pushEvent(state, { type: "error", message: "acp_subprocess_exited_unexpectedly" });
+      }
+      if (!state.stopping) {
+        const removed = this.removeActiveOnUnexpectedExit(state);
+        if (removed && state.handshakeComplete) {
+          try {
+            this.onSessionExit?.(state.spec.sessionId);
+          } catch {
+            // ignore listener errors
+          }
+        }
       }
     }
   }

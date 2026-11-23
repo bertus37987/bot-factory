@@ -1,15 +1,17 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
+  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFile, stat } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { basename, extname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import {
   newId,
@@ -66,14 +68,14 @@ function runGitSync(
   return finishGitResult(result, args, opts?.allowFail);
 }
 
-async function runGit(
+async function runGitRaw(
   args: string[],
   cwd: string,
   opts?: { env?: Record<string, string>; allowFail?: boolean },
 ): Promise<GitRunResult> {
   let proc;
   try {
-    proc = Bun.spawn(["git", "-c", "core.longpaths=true", ...args], {
+    proc = Bun.spawn(["git", "-c", "core.longpaths=true", "-c", "core.quotePath=false", ...args], {
       cwd,
       env: gitEnv(opts?.env),
       stdin: "ignore",
@@ -89,8 +91,17 @@ async function runGit(
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ]);
-  const result = { code, stdout: stdout.trim(), stderr: stderr.trim() };
+  const result = { code, stdout, stderr: stderr.trim() };
   return finishGitResult(result, args, opts?.allowFail);
+}
+
+async function runGit(
+  args: string[],
+  cwd: string,
+  opts?: { env?: Record<string, string>; allowFail?: boolean },
+): Promise<GitRunResult> {
+  const raw = await runGitRaw(args, cwd, opts);
+  return { ...raw, stdout: raw.stdout.trim() };
 }
 
 function truncate(input: string, max: number): string {
@@ -119,17 +130,81 @@ export interface ProvisionProjectParams {
   seedDemoArtifacts?: boolean;
 }
 
+function expandUserPath(inputPath: string): string {
+  if (inputPath === "~") return homedir();
+  if (inputPath.startsWith("~/") || inputPath.startsWith("~\\")) {
+    return join(homedir(), inputPath.slice(2));
+  }
+  return inputPath;
+}
+
+function validateExternalRepoPath(externalRepoPath: string, projectsDir: string): string {
+  const trimmed = externalRepoPath.trim();
+  if (!trimmed || trimmed.includes("\0") || trimmed.startsWith("\\\\") || trimmed.startsWith("//")) {
+    throw new Error("invalid_external_repo_path: unsafe_path");
+  }
+  const expanded = expandUserPath(trimmed);
+  if (!existsSync(expanded)) {
+    throw new Error("invalid_external_repo_path: path_not_found");
+  }
+  let st;
+  try {
+    st = statSync(expanded);
+  } catch {
+    throw new Error("invalid_external_repo_path: path_unreadable");
+  }
+  if (!st.isDirectory()) {
+    throw new Error("invalid_external_repo_path: not_a_directory");
+  }
+  const realRepo = realpathSync(expanded);
+
+  // Reject ~/bot-factory/system, the active workspace's sibling system dir, and sensitive home dirs (.ssh, .aws, .gnupg, etc.)
+  const home = homedir();
+  const forbiddenRoots = [
+    join(home, "bot-factory", "system"),
+    resolve(projectsDir, "..", "system"),
+    join(home, ".ssh"),
+    join(home, ".aws"),
+    join(home, ".gnupg"),
+    join(home, ".kube"),
+  ];
+  for (const forbidden of forbiddenRoots) {
+    if (isPathStrictlyWithinRoot(forbidden, realRepo).ok) {
+      throw new Error("invalid_external_repo_path: forbidden_system_or_secret_dir");
+    }
+    if (existsSync(forbidden) && isPathStrictlyWithinRoot(realpathSync(forbidden), realRepo).ok) {
+      throw new Error("invalid_external_repo_path: forbidden_system_or_secret_dir");
+    }
+  }
+
+  const segments = realRepo.split(/[\\/]+/).filter(Boolean);
+  if (segments.some((seg) => isSensitiveRepoBasename(seg) || seg.toLowerCase() === ".gnupg")) {
+    throw new Error("invalid_external_repo_path: sensitive_segment_blocked");
+  }
+
+  if (!existsSync(join(realRepo, ".git"))) {
+    throw new Error("invalid_external_repo_path: missing_git_dir");
+  }
+
+  return realRepo;
+}
+
 export function provisionProjectWorkspace(
   params: ProvisionProjectParams,
 ): { rootPath: string; repoPath: string } {
+  let validatedExternalRepo: string | null = null;
+  if (params.externalRepoPath !== undefined && params.externalRepoPath.length > 0) {
+    validatedExternalRepo = validateExternalRepoPath(params.externalRepoPath, params.projectsDir);
+  }
+
   const rootPath = join(resolve(params.projectsDir), params.slug);
   for (const dir of ["plans", "artifacts", "handoffs", "worktrees"]) {
     mkdirSync(join(rootPath, dir), { recursive: true });
   }
 
   let repoPath: string;
-  if (params.externalRepoPath && existsSync(params.externalRepoPath)) {
-    repoPath = resolve(params.externalRepoPath);
+  if (validatedExternalRepo) {
+    repoPath = validatedExternalRepo;
   } else {
     repoPath = join(rootPath, "repo");
     mkdirSync(repoPath, { recursive: true });
@@ -419,10 +494,8 @@ function buildHeroMonolithGlb(): Uint8Array {
 // --- Bot worktrees ---
 
 function shortWorktreeId(agentId: string, taskId: string): string {
-  const basis = (taskId || agentId || "bot").toLowerCase();
-  const tail = basis.replace(/[^a-z0-9]/g, "").slice(-8);
-  if (tail) return tail;
-  return createHash("sha1").update(`${agentId}:${taskId}`).digest("hex").slice(0, 8);
+  const entropy = `${taskId}:${agentId}:${Date.now()}:${Math.random()}:${randomUUID()}`;
+  return createHash("sha1").update(entropy).digest("hex").slice(0, 8);
 }
 
 export function createBotWorktree(params: {
@@ -431,10 +504,14 @@ export function createBotWorktree(params: {
   agentId: string;
   taskId: string;
 }): { worktreePath: string; branch: string } {
-  const shortId = shortWorktreeId(params.agentId, params.taskId);
   const worktreesRoot = join(params.projectRoot, "worktrees");
   mkdirSync(worktreesRoot, { recursive: true });
-  const worktreePath = join(worktreesRoot, `wt-${shortId}`);
+  let shortId = shortWorktreeId(params.agentId, params.taskId);
+  let worktreePath = join(worktreesRoot, `wt-${shortId}`);
+  while (existsSync(worktreePath)) {
+    shortId = shortWorktreeId(params.agentId, params.taskId);
+    worktreePath = join(worktreesRoot, `wt-${shortId}`);
+  }
   const branch = `bf/${shortId}`;
   runGitSync(["worktree", "add", "-b", branch, worktreePath, "HEAD"], params.repoPath);
   return { worktreePath, branch };
@@ -661,7 +738,16 @@ export function writeTaskHandoff(
 
 // --- Read-only in-app browser: repo files & workspace diff ---
 
-const SAFE_REPO_SKIP_DIRS = new Set([".git", "node_modules", "dist", ".next", "worktrees", ".bun"]);
+const SAFE_REPO_SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  ".next",
+  "worktrees",
+  ".bun",
+  ".ssh",
+  ".aws",
+]);
 const SAFE_REPO_MAX_FILE_BYTES = 512 * 1024;
 const SAFE_REPO_BINARY_PROBE_BYTES = 4096;
 const DIFF_MAX_FILES = 40;
@@ -670,13 +756,28 @@ const UNTRACKED_PATCH_MAX_BYTES = 64 * 1024;
 const UNTRACKED_PATCH_MAX_LINES = 120;
 
 function isSensitiveRepoBasename(name: string): boolean {
-  const lower = name.toLowerCase();
+  const lower = name.toLowerCase().trim();
   return (
+    lower === ".daemon-token" ||
+    lower === ".ssh" ||
+    lower === ".aws" ||
+    lower === ".npmrc" ||
+    lower === "config.json" ||
     lower === "secrets.env" ||
     lower === ".env" ||
     lower.startsWith(".env.") ||
     lower.endsWith(".pem") ||
-    lower.endsWith(".key")
+    lower.startsWith(".pem") ||
+    lower.endsWith(".key") ||
+    lower.startsWith(".key") ||
+    lower.endsWith(".db") ||
+    lower.endsWith(".db-wal") ||
+    lower.endsWith(".db-shm") ||
+    lower.endsWith(".sqlite") ||
+    lower === "id_rsa" ||
+    lower.startsWith("id_rsa.") ||
+    lower === "id_ed25519" ||
+    lower.startsWith("id_ed25519.")
   );
 }
 
@@ -685,13 +786,13 @@ function isSensitiveRepoRelPath(relPath: string): boolean {
     .split(/[\\/]+/)
     .filter(Boolean)
     .some((segment) => {
-      const lower = segment.toLowerCase();
+      const lower = segment.toLowerCase().trim();
       return (
         lower === ".git" ||
         lower === "node_modules" ||
-        isSensitiveRepoBasename(segment) ||
-        lower.startsWith(".pem") ||
-        lower.startsWith(".key")
+        lower === ".ssh" ||
+        lower === ".aws" ||
+        isSensitiveRepoBasename(segment)
       );
     });
 }
@@ -709,7 +810,7 @@ export function listSafeRepoFiles(targetRoot: string, maxFiles = 500): RepoFileE
     }
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        if (SAFE_REPO_SKIP_DIRS.has(entry.name.toLowerCase())) continue;
+        if (SAFE_REPO_SKIP_DIRS.has(entry.name.toLowerCase()) || isSensitiveRepoBasename(entry.name)) continue;
         walk(join(dir, entry.name));
         continue;
       }
@@ -784,21 +885,24 @@ interface GitStatusEntry {
   status: GitDiffFileSummary["status"];
 }
 
-function parsePorcelainStatus(stdout: string): GitStatusEntry[] {
+function parsePorcelainStatusZ(stdout: string): GitStatusEntry[] {
   const out: GitStatusEntry[] = [];
-  for (const rawLine of stdout.split(/\r?\n/)) {
-    if (!rawLine.trim()) continue;
-    // Note: runGitSync trims leading whitespace on stdout, so the first line of
-    // `git status --porcelain` (" M README.md") can arrive as "M README.md".
-    const match = /^\s*([MADRCU?!]{1,2})\s+(.+)$/.exec(rawLine);
-    if (!match) continue;
-    const code = match[1]!;
-    let pathPart = match[2]!.trim();
-    if (!pathPart) continue;
-    const arrow = pathPart.lastIndexOf(" -> ");
-    if (arrow !== -1) pathPart = pathPart.slice(arrow + 4).trim();
-    pathPart = pathPart.replace(/^"|"$/g, "").replace(/\\/g, "/");
-    if (!pathPart || isSensitiveRepoRelPath(pathPart)) continue;
+  if (!stdout) return out;
+  const records = stdout.split("\0");
+  for (let i = 0; i < records.length; i += 1) {
+    const rec = records[i];
+    if (!rec || rec.length < 4) continue;
+    const code = rec.slice(0, 2);
+    const pathPart = rec.slice(3).replace(/\\/g, "/");
+    let origPath = "";
+    if (code.includes("R") || code.includes("C")) {
+      // With `git status --porcelain -z`, renames/copies emit `XY dest\0orig\0`.
+      origPath = (records[i + 1] ?? "").replace(/\\/g, "/");
+      i += 1;
+    }
+    if (!pathPart || isSensitiveRepoRelPath(pathPart) || (origPath && isSensitiveRepoRelPath(origPath))) {
+      continue;
+    }
     const status: GitDiffFileSummary["status"] = code.includes("?")
       ? "untracked"
       : code.includes("R")
@@ -824,11 +928,11 @@ function parseNumstatPath(raw: string): string {
   return p.replace(/^"|"$/g, "").replace(/\\/g, "/");
 }
 
-function readNumstat(targetRoot: string): Map<string, { added: number; removed: number }> {
+async function readNumstatAsync(targetRoot: string): Promise<Map<string, { added: number; removed: number }>> {
   const map = new Map<string, { added: number; removed: number }>();
-  let res = runGitSync(["diff", "--numstat", "HEAD"], targetRoot, { allowFail: true });
+  let res = await runGit(["diff", "--numstat", "HEAD"], targetRoot, { allowFail: true });
   if (res.code !== 0) {
-    res = runGitSync(["diff", "--numstat"], targetRoot, { allowFail: true });
+    res = await runGit(["diff", "--numstat"], targetRoot, { allowFail: true });
   }
   if (res.code !== 0) return map;
   for (const line of res.stdout.split(/\r?\n/)) {
@@ -845,12 +949,59 @@ function readNumstat(targetRoot: string): Map<string, { added: number; removed: 
   return map;
 }
 
-function buildSyntheticUntrackedPatch(absPath: string, relPath: string): { patch: string; added: number } {
+function parseUnifiedDiffMap(stdout: string): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!stdout) return map;
+  const normalized = stdout.replace(/\r\n/g, "\n");
+  const chunks = normalized.split(/^diff --git /m);
+  for (const rawChunk of chunks) {
+    if (!rawChunk.trim()) continue;
+    const fullPatch = `diff --git ${rawChunk}`.trimEnd();
+    const lines = fullPatch.split("\n");
+    let minusPath = "";
+    let plusPath = "";
+    let renameToPath = "";
+    for (const line of lines) {
+      if (line.startsWith("@@ ")) break;
+      if (line.startsWith("rename to ")) {
+        renameToPath = line.slice("rename to ".length);
+      } else if (line.startsWith("--- a/")) {
+        minusPath = line.slice("--- a/".length);
+      } else if (line.startsWith("+++ b/")) {
+        plusPath = line.slice("+++ b/".length);
+      }
+    }
+    let filePath = renameToPath || plusPath || minusPath;
+    if (!filePath) {
+      const header = /^diff --git a\/(.+?) b\/(.+)$/.exec(lines[0] ?? "");
+      if (header) filePath = header[2]!;
+    }
+    filePath = filePath.replace(/^"|"$/g, "").replace(/\\/g, "/");
+    if (!filePath || isSensitiveRepoRelPath(filePath)) continue;
+    map.set(filePath, fullPatch);
+  }
+  return map;
+}
+
+async function readUnifiedDiffMapAsync(targetRoot: string): Promise<Map<string, string>> {
+  let res = await runGitRaw(["diff", "--unified=3", "HEAD"], targetRoot, { allowFail: true });
+  if (res.code !== 0) {
+    res = await runGitRaw(["diff", "--unified=3"], targetRoot, { allowFail: true });
+  }
+  if (res.code !== 0) return new Map();
+  return parseUnifiedDiffMap(res.stdout);
+}
+
+async function buildSyntheticUntrackedPatchAsync(
+  absPath: string,
+  relPath: string,
+): Promise<{ patch: string; added: number }> {
   try {
-    if (!existsSync(absPath) || !statSync(absPath).isFile() || statSync(absPath).size > UNTRACKED_PATCH_MAX_BYTES) {
+    const st = await stat(absPath);
+    if (!st.isFile() || st.size > UNTRACKED_PATCH_MAX_BYTES) {
       return { patch: "", added: 0 };
     }
-    const buf = readFileSync(absPath);
+    const buf = await readFile(absPath);
     if (buf.subarray(0, SAFE_REPO_BINARY_PROBE_BYTES).includes(0)) {
       return { patch: "", added: 0 };
     }
@@ -867,17 +1018,25 @@ function buildSyntheticUntrackedPatch(absPath: string, relPath: string): { patch
   }
 }
 
-export function computeWorkspaceGitDiff(targetRoot: string, scrub?: (s: string) => string): GitDiffResponse {
+export async function computeWorkspaceGitDiff(
+  repoOrWorktreePath: string,
+  scrub?: (text: string) => string,
+): Promise<GitDiffResponse> {
   const empty: GitDiffResponse = { branch: "main", filesChanged: 0, insertions: 0, deletions: 0, files: [] };
-  if (!targetRoot || !existsSync(targetRoot)) return empty;
+  if (!repoOrWorktreePath || !existsSync(repoOrWorktreePath)) return empty;
 
-  const branchRes = runGitSync(["rev-parse", "--abbrev-ref", "HEAD"], targetRoot, { allowFail: true });
+  const statusRes = await runGitRaw(["--no-optional-locks", "status", "--porcelain", "-z"], repoOrWorktreePath, {
+    allowFail: true,
+  });
+  const [branchRes, numstat, unifiedPatches] = await Promise.all([
+    runGit(["rev-parse", "--abbrev-ref", "HEAD"], repoOrWorktreePath, { allowFail: true }),
+    readNumstatAsync(repoOrWorktreePath),
+    readUnifiedDiffMapAsync(repoOrWorktreePath),
+  ]);
+
   const branch =
     branchRes.code === 0 && branchRes.stdout && branchRes.stdout !== "HEAD" ? branchRes.stdout : "main";
-
-  const statusRes = runGitSync(["status", "--porcelain"], targetRoot, { allowFail: true });
-  const entries = statusRes.code === 0 ? parsePorcelainStatus(statusRes.stdout) : [];
-  const numstat = readNumstat(targetRoot);
+  const entries = statusRes.code === 0 ? parsePorcelainStatusZ(statusRes.stdout) : [];
   const seen = new Set(entries.map((entry) => entry.path));
   for (const filePath of numstat.keys()) {
     if (seen.has(filePath)) continue;
@@ -892,17 +1051,15 @@ export function computeWorkspaceGitDiff(targetRoot: string, scrub?: (s: string) 
     let patch = "";
     let added = counts.added;
     if (entry.status === "untracked") {
-      const safe = isPathStrictlyWithinRoot(targetRoot, entry.path);
-      const synth = safe.ok ? buildSyntheticUntrackedPatch(safe.absTarget, entry.path) : { patch: "", added: 0 };
+      const safe = isPathStrictlyWithinRoot(repoOrWorktreePath, entry.path);
+      const synth = safe.ok
+        ? await buildSyntheticUntrackedPatchAsync(safe.absTarget, entry.path)
+        : { patch: "", added: 0 };
       patch = synth.patch;
       added = synth.added;
       untrackedInsertions += synth.added;
     } else {
-      let res = runGitSync(["diff", "HEAD", "--", entry.path], targetRoot, { allowFail: true });
-      if (res.code !== 0 || !res.stdout) {
-        res = runGitSync(["diff", "--", entry.path], targetRoot, { allowFail: true });
-      }
-      patch = res.code === 0 ? res.stdout : "";
+      patch = unifiedPatches.get(entry.path) ?? "";
     }
     if (scrub) patch = scrub(patch);
     if (patch.length > DIFF_MAX_PATCH_CHARS) {

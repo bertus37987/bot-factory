@@ -1,5 +1,14 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, parse, resolve, sep } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import type { HubConfig } from "@bot-factory/shared";
 import { SecretScrubber } from "../config";
 import type { AgentRuntime, NormalizedAgentEvent, RuntimeSessionHandle, RuntimeSessionSpec, TurnInput } from "./types";
@@ -9,12 +18,129 @@ interface ActiveNativeSession {
   abortController: AbortController | null;
 }
 
+function stripWinExtendedPrefix(p: string): string {
+  if (process.platform === "win32" && p.startsWith("\\\\?\\")) {
+    if (p.startsWith("\\\\?\\UNC\\")) return p;
+    return p.slice(4);
+  }
+  return p;
+}
+
 function lexicalWithinRoot(absRoot: string, absTarget: string): boolean {
   const normRoot = process.platform === "win32" ? absRoot.toLowerCase() : absRoot;
   const normTarget = process.platform === "win32" ? absTarget.toLowerCase() : absTarget;
   const rootPrefix = normRoot.endsWith(sep) ? normRoot : `${normRoot}${sep}`;
   const sameDrive = parse(normTarget).root === parse(normRoot).root;
   return sameDrive && (normTarget === normRoot || normTarget.startsWith(rootPrefix));
+}
+
+function resolveSymlinkStep(
+  realRoot: string,
+  current: string,
+  depth: number,
+): { exists: boolean; escaped: boolean; resolvedPath: string } {
+  let st;
+  try {
+    st = lstatSync(current);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return { exists: false, escaped: false, resolvedPath: current };
+    }
+    return { exists: false, escaped: true, resolvedPath: current };
+  }
+
+  if (!st.isSymbolicLink()) {
+    return { exists: true, escaped: false, resolvedPath: current };
+  }
+
+  try {
+    const resolved = stripWinExtendedPrefix(realpathSync(current));
+    return {
+      exists: true,
+      escaped: !lexicalWithinRoot(realRoot, resolved),
+      resolvedPath: resolved,
+    };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOENT") {
+      return { exists: true, escaped: true, resolvedPath: current };
+    }
+  }
+
+  // Dangling symlink: realpathSync threw ENOENT, so resolve link target directly via readlinkSync.
+  let rawLink: string;
+  try {
+    rawLink = stripWinExtendedPrefix(readlinkSync(current));
+  } catch {
+    return { exists: true, escaped: true, resolvedPath: current };
+  }
+  if (!rawLink || rawLink.includes("\0") || rawLink.startsWith("\\\\") || rawLink.startsWith("//")) {
+    return { exists: true, escaped: true, resolvedPath: current };
+  }
+  const absLinkTarget = resolve(dirname(current), rawLink);
+  if (!lexicalWithinRoot(realRoot, absLinkTarget)) {
+    return { exists: true, escaped: true, resolvedPath: absLinkTarget };
+  }
+  if (!checkSegmentsWithinRealRoot(realRoot, realRoot, relative(realRoot, absLinkTarget), depth + 1)) {
+    return { exists: true, escaped: true, resolvedPath: absLinkTarget };
+  }
+  return { exists: true, escaped: false, resolvedPath: absLinkTarget };
+}
+
+function checkSegmentsWithinRealRoot(
+  realRoot: string,
+  baseStart: string,
+  relFromRoot: string,
+  depth: number,
+): boolean {
+  if (depth > 16) return false;
+  if (!relFromRoot || relFromRoot === ".") return true;
+
+  const segments = relFromRoot.split(sep).filter((s) => s.length > 0 && s !== ".");
+  let current = baseStart;
+
+  for (const seg of segments) {
+    if (seg === "..") return false;
+    current = join(current, seg);
+    const step = resolveSymlinkStep(realRoot, current, depth);
+    if (step.escaped) return false;
+    if (!step.exists) return true;
+    current = step.resolvedPath;
+  }
+
+  return true;
+}
+
+function checkRawRelativeSegmentsWithinRealRoot(realRoot: string, candidatePath: string): boolean {
+  if (isAbsolute(candidatePath)) return true;
+  const rawParts = candidatePath.split(/[\\/]+/).filter(Boolean);
+  if (!rawParts.includes("..")) return true;
+
+  let current = realRoot;
+  let missingPrefix = false;
+  for (const seg of rawParts) {
+    if (seg === ".") continue;
+    if (seg === "..") {
+      current = dirname(current);
+      if (!lexicalWithinRoot(realRoot, current)) {
+        return false;
+      }
+      // If we climbed back into an existing directory, re-enable lstat checks for subsequent segments.
+      if (missingPrefix && existsSync(current)) missingPrefix = false;
+      continue;
+    }
+    current = join(current, seg);
+    if (missingPrefix) continue;
+    const step = resolveSymlinkStep(realRoot, current, 0);
+    if (step.escaped) return false;
+    if (!step.exists) {
+      missingPrefix = true;
+      continue;
+    }
+    current = step.resolvedPath;
+  }
+  return true;
 }
 
 export function isPathStrictlyWithinRoot(rootDir: string, candidatePath: string): { ok: boolean; absTarget: string } {
@@ -26,23 +152,24 @@ export function isPathStrictlyWithinRoot(rootDir: string, candidatePath: string)
   if (!lexicalWithinRoot(absRoot, absTarget)) {
     return { ok: false, absTarget };
   }
-  // Guard against symlinks / Windows reparse points escaping rootDir
+  // Guard against symlinks / dangling symlinks / Windows reparse points escaping rootDir
   try {
-    if (existsSync(absRoot)) {
-      const realRoot = realpathSync(absRoot);
-      let probe = absTarget;
-      while (probe && !existsSync(probe)) {
-        if (!lexicalWithinRoot(absRoot, probe)) break;
-        const parent = dirname(probe);
-        if (parent === probe) break;
-        probe = parent;
+    try {
+      lstatSync(absRoot);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "ENOENT") {
+        return { ok: true, absTarget };
       }
-      if (existsSync(probe) && lexicalWithinRoot(absRoot, probe)) {
-        const realProbe = realpathSync(probe);
-        if (!lexicalWithinRoot(realRoot, realProbe)) {
-          return { ok: false, absTarget };
-        }
-      }
+      return { ok: false, absTarget };
+    }
+    const realRoot = stripWinExtendedPrefix(realpathSync(absRoot));
+    if (!checkRawRelativeSegmentsWithinRealRoot(realRoot, candidatePath)) {
+      return { ok: false, absTarget };
+    }
+    const relFromRoot = relative(absRoot, absTarget);
+    if (!checkSegmentsWithinRealRoot(realRoot, realRoot, relFromRoot, 0)) {
+      return { ok: false, absTarget };
     }
   } catch {
     return { ok: false, absTarget };
@@ -195,10 +322,13 @@ export class NativeHttpRuntime implements AgentRuntime {
     }
     contents.push({ role: "user", parts: userParts });
 
-    const url = `${baseUrl.replace(/\/$/, "")}/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const url = `${baseUrl.replace(/\/$/, "")}/models/${encodeURIComponent(modelId)}:generateContent`;
     const res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
       body: JSON.stringify({
         system_instruction: { parts: [{ text: frozenSystemPrompt }] },
         contents,

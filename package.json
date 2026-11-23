@@ -8,11 +8,14 @@
   ],
   "scripts": {
     "dev:daemon": "bun --watch apps/daemon/src/index.ts",
+    "dev:daemon:isolated": "bun apps/daemon/src/cli/devIsolated.ts",
     "dev:web": "bun run --cwd apps/web dev",
     "build:web": "bun run --cwd apps/web build",
     "start": "bun apps/daemon/src/index.ts",
+    "doctor": "bun apps/daemon/src/cli/doctor.ts",
     "typecheck": "bun x tsc --noEmit",
-    "test": "bun test tests"
+    "test": "bun test tests",
+    "check": "bun run typecheck && bun test tests && bun run build:web"
   },
   "devDependencies": {
     "@types/bun": "1.2.15",

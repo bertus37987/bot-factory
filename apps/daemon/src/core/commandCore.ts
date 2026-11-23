@@ -9,25 +9,46 @@ export interface DecidedAction<TResult = unknown> {
 }
 
 export type EffectHandler = (effect: OutboxEffectRow) => Promise<void>;
+export type EffectLane = "control" | "interactive" | "work";
+export interface RegisterEffectOptions {
+  lane?: EffectLane;
+  concurrencyKey?: (eff: OutboxEffectRow) => string | null;
+}
 export type PostCommitListener = (topic: SubscriptionTopic, eventType: string, payload: unknown, seq: number) => void;
 
+interface RegisteredHandler {
+  handler: EffectHandler;
+  lane: EffectLane;
+  concurrencyKey?: (eff: OutboxEffectRow) => string | null;
+}
+
 export class CommandCore {
-  private readonly handlers = new Map<string, EffectHandler>();
+  private readonly handlers = new Map<string, RegisteredHandler>();
   private readonly listeners = new Set<PostCommitListener>();
+  private readonly inFlightIds = new Set<string>();
+  private readonly activeConcurrencyKeys = new Set<string>();
+  private readonly activePromises = new Set<Promise<void>>();
   private timer: ReturnType<typeof setInterval> | null = null;
-  private drainPromise: Promise<number> | null = null;
-  private pendingRescan = false;
+  private workInFlightCount = 0;
+  private completedSinceBoot = 0;
   private stopped = false;
 
-  constructor(private readonly db: StateDatabase) {}
+  constructor(
+    private readonly db: StateDatabase,
+    private readonly maxConcurrentWork = 8,
+  ) {}
 
   public onPostCommit(listener: PostCommitListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  public registerEffectHandler(effectType: string, handler: EffectHandler): void {
-    this.handlers.set(effectType, handler);
+  public registerEffectHandler(effectType: string, handler: EffectHandler, options?: RegisterEffectOptions): void {
+    this.handlers.set(effectType, {
+      handler,
+      lane: options?.lane ?? "work",
+      concurrencyKey: options?.concurrencyKey,
+    });
   }
 
   public commitCommand<TResult>(commandId: string, commandType: string, decide: () => DecidedAction<TResult>): TResult {
@@ -37,6 +58,8 @@ export class CommandCore {
     }
 
     const committedEvents: Array<{ topic: SubscriptionTopic; eventType: string; payload: unknown; seq: number }> = [];
+    const enqueuedEffects: Array<{ id: string; effectType: string; payload: Record<string, unknown>; createdAt: number }> =
+      [];
 
     const result = this.db.runAtomicWrite(() => {
       const action = decide();
@@ -47,7 +70,8 @@ export class CommandCore {
         committedEvents.push({ ...evt, seq });
       }
       for (const eff of action.effects) {
-        this.db.enqueueOutboxEffect(eff.effectType, eff.payload);
+        const id = this.db.enqueueOutboxEffect(eff.effectType, eff.payload);
+        enqueuedEffects.push({ id, effectType: eff.effectType, payload: eff.payload, createdAt: Date.now() });
       }
 
       this.db.saveCommandReceipt(commandId, commandType, action.result);
@@ -64,7 +88,15 @@ export class CommandCore {
       }
     }
 
-    void this.drainOutboxOnce();
+    // Immediate out-of-band dispatch for control-lane effects (e.g. bot.abort, permission.respond)
+    for (const eff of enqueuedEffects) {
+      const reg = this.handlers.get(eff.effectType);
+      if (reg?.lane === "control") {
+        this.tryDispatchImmediateControl(eff, reg);
+      }
+    }
+
+    this.dispatchReadyEffects();
     return result;
   }
 
@@ -84,7 +116,7 @@ export class CommandCore {
     this.stopped = false;
     if (this.timer) return;
     this.timer = setInterval(() => {
-      void this.drainOutboxOnce();
+      this.dispatchReadyEffects();
     }, intervalMs);
   }
 
@@ -98,49 +130,143 @@ export class CommandCore {
 
   public async drainOutboxOnce(): Promise<number> {
     if (this.stopped || this.db.isClosed()) return 0;
-    while (this.drainPromise) {
-      this.pendingRescan = true;
-      await this.drainPromise;
-      if (this.stopped || this.db.isClosed()) return 0;
-      if (!this.pendingRescan && !this.drainPromise) return 0;
+    const startCompleted = this.completedSinceBoot;
+    while (!this.stopped && !this.db.isClosed()) {
+      const launched = this.dispatchReadyEffects();
+      if (this.activePromises.size === 0) {
+        if (launched === 0) break;
+        continue;
+      }
+      await Promise.allSettled([...this.activePromises]);
     }
-    this.drainPromise = this.runDrainCycle().finally(() => {
-      this.drainPromise = null;
-    });
-    return this.drainPromise;
+    return this.completedSinceBoot - startCompleted;
   }
 
-  private async runDrainCycle(): Promise<number> {
-    let totalProcessed = 0;
-    do {
-      this.pendingRescan = false;
+  private resolveConcurrencyKey(reg: RegisteredHandler, eff: OutboxEffectRow): string | null {
+    if (!reg.concurrencyKey) return null;
+    const key = reg.concurrencyKey(eff);
+    return key ? key : null;
+  }
+
+  private tryDispatchImmediateControl(
+    enqueued: { id: string; effectType: string; payload: Record<string, unknown>; createdAt: number },
+    reg: RegisteredHandler,
+  ): void {
+    if (this.stopped || this.db.isClosed() || this.inFlightIds.has(enqueued.id)) return;
+    const preview: OutboxEffectRow = {
+      id: enqueued.id,
+      effectType: enqueued.effectType,
+      payload: enqueued.payload,
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: enqueued.createdAt,
+      epoch: this.db.epoch,
+      lastError: null,
+      createdAt: enqueued.createdAt,
+    };
+    const key = this.resolveConcurrencyKey(reg, preview);
+    if (key !== null && this.activeConcurrencyKeys.has(key)) {
+      return;
+    }
+    const claimed = this.db.claimOutboxEffectById(enqueued.id);
+    if (!claimed) return;
+    this.launchClaimedEffect(claimed, reg, key);
+  }
+
+  private dispatchReadyEffects(): number {
+    if (this.stopped || this.db.isClosed()) return 0;
+    const scanLimit = Math.max(64, this.maxConcurrentWork * 8);
+    const pending = this.db.listPendingOutboxEffects(scanLimit);
+    let launched = 0;
+
+    for (const candidate of pending) {
       if (this.stopped || this.db.isClosed()) break;
-      const effects = this.db.claimPendingEffects(5);
-      for (const eff of effects) {
-        if (this.stopped || this.db.isClosed()) break;
-        const handler = this.handlers.get(eff.effectType);
-        if (!handler) {
-          this.db.settleOutboxEffect(eff.id, "dead_letter", `No handler for effect ${eff.effectType}`);
-          continue;
+      if (this.inFlightIds.has(candidate.id)) continue;
+
+      const reg = this.handlers.get(candidate.effectType);
+      if (!reg) {
+        const claimed = this.db.claimOutboxEffectById(candidate.id);
+        if (claimed) {
+          this.db.settleOutboxEffect(claimed.id, "dead_letter", `No handler for effect ${claimed.effectType}`);
         }
+        continue;
+      }
+
+      if (reg.lane === "work" && this.workInFlightCount >= this.maxConcurrentWork) {
+        continue;
+      }
+
+      const key = this.resolveConcurrencyKey(reg, candidate);
+      if (key !== null && this.activeConcurrencyKeys.has(key)) {
+        continue;
+      }
+
+      const claimed = this.db.claimOutboxEffectById(candidate.id);
+      if (!claimed) continue;
+
+      this.launchClaimedEffect(claimed, reg, key);
+      launched += 1;
+    }
+
+    return launched;
+  }
+
+  private launchClaimedEffect(eff: OutboxEffectRow, reg: RegisteredHandler, concurrencyKey: string | null): void {
+    this.inFlightIds.add(eff.id);
+    if (concurrencyKey !== null) {
+      this.activeConcurrencyKeys.add(concurrencyKey);
+    }
+    if (reg.lane === "work") {
+      this.workInFlightCount += 1;
+    }
+
+    const promise = this.executeClaimedEffect(eff, reg, concurrencyKey).finally(() => {
+      this.inFlightIds.delete(eff.id);
+      if (concurrencyKey !== null) {
+        this.activeConcurrencyKeys.delete(concurrencyKey);
+      }
+      if (reg.lane === "work") {
+        this.workInFlightCount = Math.max(0, this.workInFlightCount - 1);
+      }
+      this.activePromises.delete(promise);
+      if (!this.stopped && !this.db.isClosed()) {
+        queueMicrotask(() => {
+          this.dispatchReadyEffects();
+        });
+      }
+    });
+
+    this.activePromises.add(promise);
+  }
+
+  private async executeClaimedEffect(
+    eff: OutboxEffectRow,
+    reg: RegisteredHandler,
+    _concurrencyKey: string | null,
+  ): Promise<void> {
+    try {
+      await reg.handler(eff);
+      if (!this.stopped && !this.db.isClosed()) {
         try {
-          await handler(eff);
-          if (!this.stopped && !this.db.isClosed()) {
-            this.db.settleOutboxEffect(eff.id, "done");
-          }
-          totalProcessed += 1;
-        } catch (err) {
-          if (this.stopped || this.db.isClosed()) break;
-          const msg = err instanceof Error ? err.message : String(err);
-          if (eff.attempts >= 3) {
-            this.db.settleOutboxEffect(eff.id, "dead_letter", msg);
-          } else {
-            const backoffMs = Math.min(30_000, 1000 * 2 ** eff.attempts);
-            this.db.settleOutboxEffect(eff.id, "pending", msg, Date.now() + backoffMs);
-          }
+          this.db.settleOutboxEffect(eff.id, "done");
+          this.completedSinceBoot += 1;
+        } catch {
+          // Teardown / quarantine race
         }
       }
-    } while (this.pendingRescan && !this.stopped && !this.db.isClosed());
-    return totalProcessed;
+    } catch (err) {
+      if (this.stopped || this.db.isClosed()) return;
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        if (eff.attempts >= 3) {
+          this.db.settleOutboxEffect(eff.id, "dead_letter", msg);
+        } else {
+          const backoffMs = Math.min(30_000, 1000 * 2 ** eff.attempts);
+          this.db.settleOutboxEffect(eff.id, "pending", msg, Date.now() + backoffMs);
+        }
+      } catch {
+        // Teardown / quarantine race
+      }
+    }
   }
 }

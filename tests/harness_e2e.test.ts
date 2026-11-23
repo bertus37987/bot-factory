@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,12 +10,22 @@ import { resolveSafeWorktreePath } from "../apps/daemon/src/runtimes/nativeHttpR
 
 const tempDirs: string[] = [];
 const runningApps: BotFactoryApp[] = [];
+let prevOfflineMock: string | undefined;
 
 function makeTempRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "bf-test-"));
   tempDirs.push(dir);
   return dir;
 }
+
+function openAuthedWs(url: string, token: string): WebSocket {
+  // @types/bun 1.2.15 DOM lib signature omits Bun's runtime { headers } WebSocket init option.
+  return new WebSocket(url, { headers: { "x-bf-token": token } } as unknown as string[]);
+}
+
+beforeEach(() => {
+  prevOfflineMock = process.env.BOT_FACTORY_OFFLINE_MOCK;
+});
 
 afterEach(() => {
   while (runningApps.length > 0) {
@@ -29,6 +39,9 @@ afterEach(() => {
       // Windows handle release delay
     }
   }
+  if (prevOfflineMock === undefined) delete process.env.BOT_FACTORY_OFFLINE_MOCK;
+  else process.env.BOT_FACTORY_OFFLINE_MOCK = prevOfflineMock;
+  prevOfflineMock = undefined;
 });
 
 describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
@@ -128,9 +141,10 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
     const app = startBotFactoryDaemon({ rootDir, port: 0 });
     runningApps.push(app);
 
+    const token = readFileSync(join(rootDir, "system", ".daemon-token"), "utf8").trim();
     const wsUrl = app.url.replace("http://", "ws://") + "/ws";
-    const chatClient = new WebSocket(wsUrl);
-    const botClient = new WebSocket(wsUrl);
+    const chatClient = openAuthedWs(wsUrl, token);
+    const botClient = openAuthedWs(wsUrl, token);
 
     const chatReceived: Array<{ topic: string; eventType?: string; kind: string }> = [];
     const botReceived: Array<{ topic: string; eventType?: string; kind: string; data?: any }> = [];
@@ -442,14 +456,15 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
     expect(claimed.task?.status).toBe("claimed");
 
     // 5. Bound port propagated to engine URL & IPv6 loopback origin allowed
+    const token = readFileSync(join(rootDir, "system", ".daemon-token"), "utf8").trim();
     expect(app.engine.getDaemonUrl()).toBe(`http://127.0.0.1:${app.port}`);
     const ipv6Ok = await fetch(`${app.url}/api/health`, {
-      headers: { Origin: `http://[::1]:${app.port}` },
+      headers: { Origin: `http://[::1]:${app.port}`, "x-bf-token": token },
     });
     expect(ipv6Ok.status).toBe(200);
 
     // 6. WS close cleans up topic subscriber count
-    const ws = new WebSocket(app.url.replace("http://", "ws://") + "/ws");
+    const ws = openAuthedWs(app.url.replace("http://", "ws://") + "/ws", token);
     await new Promise<void>((res) => (ws.onopen = () => res()));
     ws.send(JSON.stringify({ kind: "subscribe", topic: "chat:meta" }));
     await new Promise((r) => setTimeout(r, 80));
