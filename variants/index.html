@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="de" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bot-Factory — Generation 1 UI & Chatbar Gallery (20 Prototypes)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #ffffff;
+      --surface: #fafafa;
+      --subtle: #f5f5f5;
+      --hover: #f2f2f3;
+      --border: #ebebeb;
+      --border-strong: #d8d8dc;
+      --ink: #171717;
+      --ink-2: #525252;
+      --muted: #8a8a8a;
+      --ok-bg: #f0fdf4;
+      --ok-ink: #166534;
+      --ok-bd: #dcfce7;
+      --sans: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+    .shell { display: grid; grid-template-columns: 312px 1fr; height: 100vh; overflow: hidden; }
+    .rail { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+    .rail-head { padding: 14px 16px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+    .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .brand-title { font-size: 14px; font-weight: 600; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
+    .count-chip { font-family: var(--mono); font-size: 11px; color: var(--muted); background: var(--bg); border: 1px solid var(--border); padding: 2px 6px; border-radius: 5px; font-variant-numeric: tabular-nums; }
+    .filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--subtle); padding: 3px; border-radius: 8px; border: 1px solid var(--border); }
+    .filter-btn { border: 1px solid transparent; background: transparent; padding: 5px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; color: var(--ink-2); cursor: pointer; font-family: inherit; }
+    .filter-btn.active { background: var(--bg); color: var(--ink); border-color: var(--border); }
+    .list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 4px; }
+    .item { border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 9px 10px; cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 3px; font-family: inherit; transition: background 140ms ease, border-color 140ms ease; }
+    .item:hover { background: var(--hover); }
+    .item.active { background: var(--bg); border-color: var(--border-strong); }
+    .item-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .item-id { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .item-title { font-size: 13px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+    .item-desc { font-size: 11.5px; color: var(--ink-2); line-height: 1.4; }
+    .item-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 2px; }
+    .tag { font-family: var(--mono); font-size: 10px; color: var(--muted); background: var(--subtle); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; }
+    .star-btn { border: 1px solid var(--border); background: var(--bg); color: var(--muted); border-radius: 5px; padding: 1px 6px; font-size: 11px; cursor: pointer; font-family: inherit; }
+    .star-btn.starred { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .rail-foot { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--surface); }
+    .stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--subtle); }
+    .stage-bar { height: 46px; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-shrink: 0; }
+    .stage-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; min-width: 0; }
+    .stage-actions { display: flex; align-items: center; gap: 6px; }
+    .btn { border: 1px solid var(--border); background: var(--bg); color: var(--ink); padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; }
+    .btn:hover { background: var(--hover); border-color: var(--border-strong); }
+    .btn.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .btn.primary:hover { background: #2c2c2c; }
+    .frames { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); }
+    .frames.split { grid-template-columns: 1fr 1fr; }
+    .frame-pane { display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+    .frame-subbar { height: 32px; background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 10px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--ink-2); }
+    .frame-subbar select { font-family: inherit; font-size: 11.5px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); padding: 2px 6px; color: var(--ink); }
+    iframe { flex: 1; width: 100%; height: 100%; border: none; background: #fff; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail">
+      <div class="rail-head">
+        <div class="brand-row">
+          <div class="brand-title">
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="14" rx="3.5"/><circle cx="10" cy="10" r="2.2" fill="currentColor" stroke="none"/></svg>
+            Bot-Factory · Gen 1 Gallery
+          </div>
+          <span class="count-chip">20 Variants</span>
+        </div>
+        <div class="filter-row">
+          <button class="filter-btn active" id="tab-ui" onclick="setCategory('ui')">Full UIs (10)</button>
+          <button class="filter-btn" id="tab-chatbars" onclick="setCategory('chatbars')">Chatbars (10)</button>
+        </div>
+      </div>
+      <div class="list" id="variant-list"></div>
+      <div class="rail-foot">
+        <span style="font-size:11.5px;color:var(--ink-2);" id="pick-count">0 Favoriten</span>
+        <button class="btn" onclick="copyPicks()">Auswahl kopieren</button>
+      </div>
+    </aside>
+
+    <main class="stage">
+      <div class="stage-bar">
+        <div class="stage-title">
+          <span class="count-chip" id="active-id">ui-01</span>
+          <span id="active-name">Devin-Light Dual-Rail Studio</span>
+          <span class="tag" id="active-model">Devin SWE-2</span>
+        </div>
+        <div class="stage-actions">
+          <button class="btn" id="split-toggle" onclick="toggleSplit()">Side-by-Side Compare</button>
+          <a class="btn primary" id="open-direct" href="ui/ui-01.html" target="_blank">Im Tab öffnen ↗</a>
+        </div>
+      </div>
+      <div class="frames" id="frames">
+        <div class="frame-pane">
+          <iframe id="frame-a" src="ui/ui-01.html"></iframe>
+        </div>
+        <div class="frame-pane" id="pane-b" style="display:none;">
+          <div class="frame-subbar">
+            <span>Vergleichs-Slot B</span>
+            <select id="select-b" onchange="setRightVariant(this.value)"></select>
+          </div>
+          <iframe id="frame-b" src="ui/ui-02.html"></iframe>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const VARIANTS = [
+      { id: "ui-01", cat: "ui", file: "ui/ui-01.html", name: "Devin-Light Dual-Rail Studio", model: "Devin SWE-2", desc: "44px Slim Rail (2 Custom Icons) + Sessions Drawer + Devin Diff-Tray Chatbar + Resizable In-App Browser." },
+      { id: "ui-02", cat: "ui", file: "ui/ui-02.html", name: "Grok-Bot Roster + Split Browser", model: "Devin SWE-2", desc: "3 Pinned Bot Cards + Multi-Bot Group Room (@mentions & outcome cards) + Antigravity Top-Lip Composer + Side Browser." },
+      { id: "ui-03", cat: "ui", file: "ui/ui-03.html", name: "Factory Precision Workbench", model: "Devin SWE-2", desc: "Workstreams & Folder-Tree Sidebar + 3-Bar Autonomy Indicator + Model/Effort Composer + Tabbed In-App Browser." },
+      { id: "ui-04", cat: "ui", file: "ui/ui-04.html", name: "T3-Code 3-Column Inspector", model: "Devin SWE-2", desc: "3-Spalten Workbench mit Subagent Run Cards, Git Branch Tags, Settled-Sektion & persistentem Browser/Git Inspector." },
+      { id: "ui-05", cat: "ui", file: "ui/ui-05.html", name: "Codex Work Double-Deck Canvas", model: "Devin SWE-2", desc: "Slim Rail + ruhiger Editorial-Stream (68ch) + Double-Deck Composer mit unterem Projekt/Plugin-Shelf + Browser Drawer." },
+      { id: "ui-06", cat: "ui", file: "ui/ui-06.html", name: "Antigravity Editorial + 50/50 Studio", model: "Devin SWE-2", desc: "Großzügiger Whitespace, 64px Orb Hero, Top-Lip Composer & 50/50 Split-Studio Browser mit Pin→Fix Annotationen." },
+      { id: "ui-07", cat: "ui", file: "ui/ui-07.html", name: "Browser-Tabs Multitask Shell", model: "Devin SWE-2", desc: "38px Desktop Browser-Tab-Leiste für parallele Sessions & Bots + 2 Custom Icons + voller Mini-Browser rechts." },
+      { id: "ui-08", cat: "ui", file: "ui/ui-08.html", name: "Command-First HUD + Floating Drawers", model: "Devin SWE-2", desc: "100% Canvas ohne permanente Sidebars; Top-Left 2 Custom Icons + Ctrl+K Palette + Slide-Over Browser Sheet." },
+      { id: "ui-09", cat: "ui", file: "ui/ui-09.html", name: "Editorial Split-Document Studio", model: "Devin SWE-2", desc: "Skandinavisch-editoraler 48/52 Split mit permanenter Dokument-/Code-/3D-Browser-Hälfte & Margin-Annotationen." },
+      { id: "ui-10", cat: "ui", file: "ui/ui-10.html", name: "Mission-Grid Bot Fleet + Following Browser", model: "Devin SWE-2", desc: "Bot-Fleet Control Grid mit Live-Orbs pro Bot + Devin-inspiriertem Following-Mode im rechten In-App Browser." },
+
+      { id: "chatbar-01", cat: "chatbars", file: "chatbars/chatbar-01.html", name: "Devin Diff-Tray Double-Deck", model: "Devin SWE-2", desc: "Angedocktes '3 files changed +383 -4 | Quick review | View changes' Tray über abgerundeter 16px Composer-Card + Context Ring." },
+      { id: "chatbar-02", cat: "chatbars", file: "chatbars/chatbar-02.html", name: "Antigravity Scoped-Top-Lip", model: "Devin SWE-2", desc: "Obere Projekt- & Browser-Lippe, @/-Menüs, gerahmter Orchestrator-Model-Effort-Pill & Live-Thinking-Orb Send-Trigger." },
+      { id: "chatbar-03", cat: "chatbars", file: "chatbars/chatbar-03.html", name: "Factory Precision Autonomy Bar", model: "Devin SWE-2", desc: "12px Architektur-Card mit 3-Balken Autonomy-Meter (Spec/Low/Med/High), Model·Effort Split & unterem Workspace-Dock." },
+      { id: "chatbar-04", cat: "chatbars", file: "chatbars/chatbar-04.html", name: "Codex Nested Lower-Shelf", model: "Devin SWE-2", desc: "Weiße Haupt-Card über leicht eingerücktem #F5F5F5 Lower-Tray (Projekt, Plugins, Context Ring, Browser-Toggle)." },
+      { id: "chatbar-05", cat: "chatbars", file: "chatbars/chatbar-05.html", name: "Orb-Anchored Living Pill-to-Card", model: "Devin SWE-2", desc: "Links verankerter Smoke-&-Pearl 2D-Canvas Orb in flüsterleiser Pill, die bei Fokus sanft zu vollen Controls expandiert." },
+      { id: "chatbar-06", cat: "chatbars", file: "chatbars/chatbar-06.html", name: "Context-Chips & Multi-Bot Target", model: "Devin SWE-2", desc: "Abnehmbare Datei-/3D-/Diff-Chips oben, Ziel-Routing (Orchestrator / Steer→PM / Group) & 4-Punkt Reasoning-Control." },
+      { id: "chatbar-07", cat: "chatbars", file: "chatbars/chatbar-07.html", name: "Adaptive Approval, Diff & Steer Bar", model: "Devin SWE-2", desc: "Dynamisches Top-Dock morpht sauber zwischen Diff-Tray, Inline-Approval-Prompt und Live-Running/Steer + Stop." },
+      { id: "chatbar-08", cat: "chatbars", file: "chatbars/chatbar-08.html", name: "Swiss Editorial Minimal Line", model: "Devin SWE-2", desc: "Ultraminimale Typo-Leiste mit 1px Hairlines und einzeln klickbarer Monochrom-Metazeile (Model·Effort·Autonomy·Ctx)." },
+      { id: "chatbar-09", cat: "chatbars", file: "chatbars/chatbar-09.html", name: "Command-Palette Hybrid Composer", model: "Devin SWE-2", desc: "Keyboard-first Composer mit interaktiven /, @ und # Popover-Sheets + segmentierten Reasoning-Dots & Context Ring." },
+      { id: "chatbar-10", cat: "chatbars", file: "chatbars/chatbar-10.html", name: "Dual-Deck Telemetry & Browser-Sync", model: "Devin SWE-2", desc: "Pro-Composer mit oberem Telemetry-Ribbon (Live Orb + Diff + Browser-Sync-Zielwahl Code/Diff/Plan/Image/3D)." }
+    ];
+
+    let category = "ui";
+    let activeId = "ui-01";
+    let split = false;
+    const picks = new Set();
+
+    const selectB = document.getElementById("select-b");
+    VARIANTS.forEach(v => {
+      const opt = document.createElement("option");
+      opt.value = v.id;
+      opt.textContent = `${v.id} — ${v.name}`;
+      if (v.id === "ui-02") opt.selected = true;
+      selectB.appendChild(opt);
+    });
+
+    function setCategory(cat) {
+      category = cat;
+      document.getElementById("tab-ui").classList.toggle("active", cat === "ui");
+      document.getElementById("tab-chatbars").classList.toggle("active", cat === "chatbars");
+      const first = VARIANTS.find(v => v.cat === cat);
+      if (first) selectVariant(first.id);
+      renderList();
+    }
+
+    function selectVariant(id) {
+      const v = VARIANTS.find(x => x.id === id);
+      if (!v) return;
+      activeId = id;
+      document.getElementById("active-id").textContent = v.id;
+      document.getElementById("active-name").textContent = v.name;
+      document.getElementById("active-model").textContent = v.model;
+      document.getElementById("frame-a").src = v.file;
+      document.getElementById("open-direct").href = v.file;
+      renderList();
+    }
+
+    function setRightVariant(id) {
+      const v = VARIANTS.find(x => x.id === id);
+      if (v) document.getElementById("frame-b").src = v.file;
+    }
+
+    function toggleSplit() {
+      split = !split;
+      document.getElementById("frames").classList.toggle("split", split);
+      document.getElementById("pane-b").style.display = split ? "flex" : "none";
+      document.getElementById("split-toggle").classList.toggle("primary", split);
+    }
+
+    function toggleStar(e, id) {
+      e.stopPropagation();
+      if (picks.has(id)) picks.delete(id); else picks.add(id);
+      document.getElementById("pick-count").textContent = `${picks.size} Favoriten`;
+      renderList();
+    }
+
+    function copyPicks() {
+      const text = picks.size ? "Favoriten für Gen 2: " + [...picks].join(", ") : "Noch keine Favoriten markiert.";
+      navigator.clipboard?.writeText(text);
+      alert(text);
+    }
+
+    function renderList() {
+      const list = document.getElementById("variant-list");
+      list.innerHTML = "";
+      VARIANTS.filter(v => v.cat === category).forEach(v => {
+        const el = document.createElement("button");
+        el.className = "item" + (v.id === activeId ? " active" : "");
+        el.onclick = () => selectVariant(v.id);
+        const starred = picks.has(v.id);
+        el.innerHTML = `
+          <div class="item-top">
+            <span class="item-id">${v.id}</span>
+            <button type="button" class="star-btn ${starred ? "starred" : ""}" onclick="toggleStar(event, '${v.id}')">${starred ? "★ Pick" : "☆ Pick"}</button>
+          </div>
+          <div class="item-title">${v.name}</div>
+          <div class="item-desc">${v.desc}</div>
+          <div class="item-meta"><span class="tag">${v.model}</span></div>
+        `;
+        list.appendChild(el);
+      });
+    }
+
+    renderList();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bot-Factory · Arc-Light Sidebar + Group Chat (gen2-01)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --bg:#FFFFFF; --sf:#FAFAFA; --sf2:#F5F5F5; --hv:#F2F2F3; --ac:#EAEAEB;
+  --bd:#EBEBEB; --bd2:#DCDCE0; --c-bd:#E7E7E7;
+  --ink:#171717; --ink2:#525252; --mut:#8A8A8A; --fnt:#A8A8A8;
+  --grn:#166534; --grn-bg:#F0FDF4; --grn-bd:#DCFCE7;
+  --blu:#1D4ED8; --blu-bg:#F2F6FA; --blu-bd:#D7E4F0;
+  --amb:#B45309; --amb2:#D97706; --amb-bg:#FFFBEB; --amb-bd:#FDE68A;
+  --red:#B91C1C; --red-bg:#FEF2F2; --red-bd:#FECACA;
+  --org:#D95D22; --org-dk:#C24E1A; --org-bg:#FCF0E8; --org-bd:#F0D5C2;
+  --trk:#E7E7EA; --dot:#A1A1AA;
+  --slate:#3F4A5E; --slate-bg:#E8EAF0; --slate-bd:#D3D8E4;
+  --sage:#4C7A55;  --sage-bg:#E4F0E4;  --sage-bd:#CFE3D0;
+  --terr:#B05A28;  --terr-bg:#F6E5D9;  --terr-bd:#EDD3BE;
+  --cob:#3A5BA8;   --cob-bg:#E3EAF8;   --cob-bd:#CBD8F0;
+  --shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px -6px rgba(0,0,0,.06);
+  --shadow-pop:0 2px 6px rgba(0,0,0,.05),0 14px 34px -8px rgba(0,0,0,.12);
+  --sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:13px;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit}
+input,textarea{font-family:inherit;color:inherit}
+svg{display:block}
+.mono,.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#DDDDE0;border:3px solid transparent;background-clip:content-box;border-radius:8px}
+::-webkit-scrollbar-thumb:hover{background:#C9C9CE;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+
+.app{display:flex;height:100vh}
+
+/* ============ FAR-LEFT ICON RAIL (44px) ============ */
+.rail{width:44px;flex:none;background:var(--sf);border-right:1px solid var(--bd);display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:2px}
+.rbtn{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:var(--mut);position:relative;transition:background .12s,color .12s}
+.rbtn:hover{background:var(--hv);color:var(--ink2)}
+.rbtn.on{background:var(--ac);color:var(--ink)}
+.rbtn.on::before{content:"";position:absolute;left:-7px;top:8px;bottom:8px;width:2.5px;border-radius:2px;background:var(--ink)}
+.rbtn .tip{position:absolute;left:38px;top:50%;transform:translateY(-50%);background:var(--ink);color:#fff;font-size:11px;font-weight:500;padding:3px 8px;border-radius:6px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s .05s;z-index:60}
+.rbtn:hover .tip{opacity:1}
+.rail .sp{flex:1}
+.rsep{width:20px;height:1px;background:var(--bd);margin:6px 0}
+.avatar-w{width:26px;height:26px;border-radius:50%;background:var(--ink);color:#fff;font-size:11px;font-weight:600;display:grid;place-items:center;margin-top:4px;cursor:default}
+
+/* ============ SECONDARY SIDEBAR (248px) ============ */
+.side{width:248px;flex:none;background:var(--sf);border-right:1px solid var(--bd);display:flex;flex-direction:column;min-height:0}
+.side-h{display:flex;align-items:center;justify-content:space-between;padding:12px 14px 8px}
+.side-h .t{font-size:13px;font-weight:600;letter-spacing:-.01em}
+.iconb{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;color:var(--mut)}
+.iconb:hover{background:var(--hv);color:var(--ink)}
+.newb{display:flex;align-items:center;gap:7px;margin:2px 12px 10px;padding:7px 10px;background:var(--hv);border-radius:8px;font-size:12.5px;font-weight:500;color:var(--ink);transition:background .12s}
+.newb:hover{background:var(--ac)}
+.side-scroll{flex:1;overflow-y:auto;padding:0 8px 12px}
+.slab{display:flex;align-items:center;gap:5px;padding:10px 8px 4px;font-size:11px;font-weight:600;color:var(--mut);letter-spacing:.02em;text-transform:uppercase;cursor:pointer;user-select:none}
+.slab .chev{transition:transform .15s}
+.slab.closed .chev{transform:rotate(-90deg)}
+.srow{display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border-radius:7px;cursor:pointer;color:var(--ink2)}
+.srow:hover{background:var(--hv)}
+.srow.on{background:var(--ac);color:var(--ink)}
+.srow .g{flex:none;margin-top:1px;color:var(--fnt)}
+.srow.on .g{color:var(--mut)}
+.srow .r{min-width:0;flex:1}
+.srow .n{font-size:12.5px;font-weight:450;color:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.35}
+.srow .m{font-size:11px;color:var(--fnt);margin-top:1px;display:flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums}
+.srow .m .cdot{width:3px;height:3px;border-radius:50%;background:#D4D4D8}
+.srow .unr{width:6px;height:6px;border-radius:50%;background:var(--ink);flex:none;margin-top:7px}
+.foot{padding:10px 12px;border-top:1px solid var(--bd);display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--mut)}
+.prog{width:18px;height:18px;transform:rotate(-90deg)}
+.prog circle{fill:none;stroke-width:2.4}
+.prog .pb{stroke:var(--bd)}
+.prog .pv{stroke:var(--grn);stroke-linecap:round;stroke-dasharray:44;stroke-dashoffset:15}
+.mini-orb{flex:none;border-radius:50%}
+.botrow{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:7px;cursor:pointer}
+.botrow:hover{background:var(--hv)}
+.botrow.on{background:var(--ac)}
+.botrow .bn{font-size:12.5px;font-weight:500;color:var(--ink);display:flex;align-items:center;gap:6px}
+.botrow .bs{font-size:11px;color:var(--fnt);margin-top:1px}
+.botrow .bav{width:22px;height:22px;flex:none;border-radius:50%}
+.badge-pm{font-family:var(--mono);font-size:9.5px;color:var(--mut);border:1px solid var(--bd);border-radius:4px;padding:0 4px;background:var(--bg)}
+.stack{display:flex}
+.stack span{width:20px;height:20px;border-radius:50%;border:1.5px solid var(--sf);background:var(--bg);display:grid;place-items:center;overflow:hidden}
+.stack span:not(:first-child){margin-left:-7px}
+.stack .more{background:var(--sf2);font-size:9px;font-family:var(--mono);color:var(--mut)}
+
+/* ============ MAIN COLUMN ============ */
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg)}
+.topbar{height:38px;flex:none;display:flex;align-items:center;gap:4px;padding:0 10px;border-bottom:1px solid var(--bd);background:var(--sf)}
+.ws{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:500;padding:4px 8px;border-radius:6px;color:var(--ink)}
+.ws:hover{background:var(--hv)}
+.hb{width:26px;height:26px;border-radius:6px;display:grid;place-items:center;color:var(--mut)}
+.hb:hover{background:var(--hv);color:var(--ink)}
+.tsep{width:1px;height:16px;background:var(--bd);margin:0 6px}
+.tab{display:flex;align-items:center;gap:7px;padding:4px 10px;font-size:12px;color:var(--ink2);background:var(--bg);border:1px solid var(--bd);border-radius:7px;cursor:default}
+.roommeta{display:flex;align-items:center;gap:8px;margin-left:8px;color:var(--fnt);font-size:11px}
+.roommeta .mstack{display:flex}
+.roommeta .mstack span{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--sf);overflow:hidden;margin-left:-5px;background:var(--bg)}
+.roommeta .mstack span:first-child{margin-left:0}
+.topbar .sp{flex:1}
+.btg{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:500;color:var(--ink2);border:1px solid var(--bd);background:var(--bg);padding:4px 10px;border-radius:7px}
+.btg:hover{background:var(--hv)}
+.btg.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+
+/* ============ GROUP-CHAT STREAM ============ */
+.stream{flex:1;overflow-y:auto;position:relative}
+.gcol{max-width:760px;margin:0 auto;padding:24px 26px 14px;display:flex;flex-direction:column;gap:14px}
+.dayline{display:flex;align-items:center;gap:12px;color:var(--fnt);font-size:10.5px;font-family:var(--mono);margin:4px 0 2px}
+.dayline::before,.dayline::after{content:"";flex:1;height:1px;background:var(--bd)}
+.gm{display:flex;gap:10px;max-width:88%}
+.gm.l{align-self:flex-start}
+.gm.r{align-self:flex-end;flex-direction:row-reverse}
+.gm.cont{margin-top:-11px}
+.gav{width:32px;height:32px;flex:none;align-self:flex-end;margin-bottom:1px;border-radius:50%}
+.gav svg,.bav svg,.stack .stav svg,.roommeta .mstack span svg,.qav svg{width:100%;height:100%;display:block}
+.gm.cont .gav{visibility:hidden}
+.gcol2{display:flex;flex-direction:column;gap:3px;min-width:0}
+.gm.r .gcol2{align-items:flex-end}
+.gmeta{display:flex;align-items:baseline;gap:7px;padding:0 4px}
+.gm.r .gmeta{flex-direction:row-reverse}
+.gnm{font-size:12px;font-weight:600;letter-spacing:-.01em}
+.grole{font-family:var(--mono);font-size:8.5px;font-weight:500;letter-spacing:.06em;padding:1px 5px;border-radius:4px;border:1px solid}
+.grole.slate{color:var(--slate);background:var(--slate-bg);border-color:var(--slate-bd)}
+.grole.sage{color:var(--sage);background:var(--sage-bg);border-color:var(--sage-bd)}
+.grole.terr{color:var(--terr);background:var(--terr-bg);border-color:var(--terr-bd)}
+.grole.cob{color:var(--cob);background:var(--cob-bg);border-color:var(--cob-bd)}
+.gtm{font-size:10.5px;color:var(--fnt);font-variant-numeric:tabular-nums}
+.gbub{background:var(--sf2);border:1px solid var(--bd);border-radius:16px;padding:9px 13px;font-size:13.5px;line-height:1.6;color:var(--ink);max-width:560px}
+.gm.l .gbub.tail{border-bottom-left-radius:5px}
+.gm.r .gbub{background:#F6F3EE;border-color:#EAE4DA}
+.gm.r .gbub.tail{border-bottom-right-radius:5px}
+.gm.r.human .gbub{background:var(--ink);border-color:var(--ink);color:#F4F4F5}
+.gbub p+p{margin-top:6px}
+.gbub code{font-family:var(--mono);font-size:11.5px;background:rgba(255,255,255,.75);border:1px solid var(--bd);border-radius:4px;padding:0 4px}
+.gm.r.human .gbub code{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.18)}
+/* reply-quote bar */
+.qbar{display:flex;gap:8px;align-items:flex-start;border-left:2.5px solid var(--bd2);padding:2px 0 2px 9px;margin-bottom:8px;font-size:11.5px;color:var(--mut);line-height:1.45}
+.qbar .qav{width:15px;height:15px;border-radius:50%;flex:none;margin-top:1px}
+.qbar .qn{font-weight:600;color:var(--ink2);white-space:nowrap}
+.qbar .qt{overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.qbar.q-slate{border-left-color:#8B95A9}
+.qbar.q-sage{border-left-color:#8FB896}
+.qbar.q-terr{border-left-color:#D69B73}
+.qbar.q-cob{border-left-color:#8AA3D6}
+.qbar.q-ink{border-left-color:#3B3B3F}
+/* mention chips */
+.ment{display:inline-flex;align-items:center;gap:4px;vertical-align:-2px;background:#fff;border:1px solid var(--bd);border-radius:7px;padding:0 6px 0 2px;font-size:11px;font-weight:600;color:var(--ink);cursor:pointer;transition:background .12s,border-color .12s}
+.ment:hover{background:var(--hv);border-color:var(--bd2)}
+.ment svg{width:15px;height:15px;border-radius:50%}
+/* artifact cards inside bubbles */
+.acard{display:flex;align-items:center;gap:10px;border:1px solid var(--bd);border-radius:10px;background:#fff;padding:8px 11px;cursor:pointer;max-width:360px;margin-top:8px;transition:border-color .12s,box-shadow .12s}
+.acard:hover{border-color:var(--bd2);box-shadow:var(--shadow)}
+.acard .ai{width:30px;height:30px;border-radius:8px;background:var(--sf2);display:grid;place-items:center;color:var(--ink2);flex:none}
+.acard .an{font-size:12.5px;font-weight:550}
+.acard .at{font-size:11px;color:var(--mut);margin-top:1px}
+.acard .go{margin-left:auto;color:var(--fnt)}
+/* collapsible tool-trace pill */
+.tpill{border:1px solid var(--bd);border-radius:9px;background:#fff;overflow:hidden;max-width:400px;margin-top:8px}
+.tpill-h{display:flex;align-items:center;gap:7px;padding:5px 9px;cursor:pointer;font-size:11.5px;color:var(--ink2);font-family:var(--mono)}
+.tpill-h:hover{background:var(--sf)}
+.tpill-h .dot{width:6px;height:6px;border-radius:50%;flex:none}
+.dot.g{background:var(--grn)}.dot.a{background:var(--amb2)}.dot.k{background:#C9C9CE}
+.tpill-h .chev{margin-left:auto;color:var(--fnt);transition:transform .15s}
+.tpill.open .tpill-h .chev{transform:rotate(90deg)}
+.tpill-b{max-height:0;overflow:hidden;transition:max-height .2s ease}
+.tpill.open .tpill-b{max-height:200px}
+.tpill-b pre{font-family:var(--mono);font-size:10.5px;line-height:1.6;color:var(--ink2);background:var(--sf);border-top:1px solid var(--bd);padding:8px 10px;white-space:pre-wrap}
+/* verifier check card */
+.vcheck{border:1px solid var(--grn-bd);background:var(--grn-bg);border-radius:9px;padding:8px 10px;margin-top:8px;display:flex;flex-direction:column;gap:5px;max-width:400px}
+.vcheck .vrow{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--grn)}
+.vcheck .vrow .cp{font-family:var(--mono);font-size:10.5px}
+.vcheck .vrow svg{flex:none}
+/* typing bubble */
+.typing{display:inline-flex;align-items:center;gap:9px;padding:7px 13px}
+.typing .tlbl{font-size:12px;color:var(--mut)}
+.typing .tlbl b{color:var(--ink2);font-weight:600}
+.stream-foot{height:8px}
+
+/* ============ DOCK / COMPOSER (ui-03 precision card) ============ */
+.dock{flex:none;padding:0 20px 12px;position:relative}
+.dock-in{max-width:760px;margin:0 auto;position:relative}
+.dtray{display:flex;align-items:center;gap:8px;background:var(--sf2);border:1px solid var(--bd);border-bottom:0;border-radius:12px 12px 0 0;padding:8px 16px 8px 14px;font-size:12px;transform:translateY(1px);position:relative;z-index:2;max-width:760px;margin:0 auto}
+.dtray .pg{color:var(--ink2)}
+.dtray .fc{color:var(--ink2);font-weight:500}
+.dtray .add{color:var(--grn);font-family:var(--mono);font-size:11.5px}
+.dtray .del{color:var(--red);font-family:var(--mono);font-size:11.5px}
+.dtray .sp{flex:1}
+.dlink{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--ink2);padding:3px 7px;border-radius:6px}
+.dlink:hover{background:var(--ac)}
+.dlink.blue{color:var(--blu);font-weight:500}
+.composer{background:var(--bg);border:1px solid var(--c-bd);border-radius:12px;box-shadow:var(--shadow);position:relative;z-index:3}
+.composer textarea{display:block;width:100%;border:0;outline:0;resize:none;font-family:inherit;font-size:13.5px;line-height:1.5;color:var(--ink);padding:13px 15px 6px;min-height:44px;max-height:150px;background:transparent}
+.composer textarea::placeholder{color:var(--fnt)}
+.c-bar{display:flex;align-items:center;gap:6px;padding:8px 10px 10px}
+.cbtn{width:28px;height:28px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:6px;color:var(--mut);font-size:12px;font-weight:500;transition:all .14s;position:relative}
+.cbtn:hover{background:var(--hv);color:var(--ink)}
+.cbar-sep{width:1px;height:16px;background:var(--bd);margin:0 2px}
+/* 3-bar stepped autonomy */
+.auto-ctl{display:flex;align-items:center;gap:8px;height:28px;padding:0 9px;border-radius:8px;border:1px solid var(--bd);background:var(--sf);transition:all .15s}
+.auto-ctl:hover{border-color:var(--bd2);background:var(--hv)}
+.auto-bars{display:flex;align-items:flex-end;gap:2.5px;height:12px}
+.auto-bars i{width:3px;border-radius:1.5px;background:transparent;border:1.3px solid var(--fnt);transition:all .18s}
+.auto-bars i:nth-child(1){height:6px}.auto-bars i:nth-child(2){height:9px}.auto-bars i:nth-child(3){height:12px}
+.auto-ctl[data-level="low"] .auto-bars i:nth-child(1),
+.auto-ctl[data-level="medium"] .auto-bars i:nth-child(-n+2),
+.auto-ctl[data-level="high"] .auto-bars i{background:var(--amb2);border-color:var(--amb2)}
+.auto-ctl[data-level="spec"] .auto-bars i{border-style:dashed;border-color:var(--amb2)}
+.auto-label{font-size:12px;font-weight:500;color:var(--ink2);white-space:nowrap}
+.auto-ctl[data-level="spec"] .auto-label,.auto-ctl[data-level="high"] .auto-label{color:var(--amb)}
+/* effort (Aufwand) trigger pill */
+.eff-pill{display:flex;align-items:center;gap:7px;height:28px;padding:0 9px;border-radius:8px;border:1px solid var(--bd);background:var(--sf);transition:all .15s}
+.eff-pill:hover{border-color:var(--bd2);background:var(--hv)}
+.eff-mini{width:24px;height:4px;border-radius:99px;background:var(--trk);overflow:hidden;flex:none}
+.eff-mini i{display:block;height:100%;background:var(--org);border-radius:99px;transition:width .18s}
+.eff-lbl{font-size:12px;font-weight:600;color:var(--org-dk)}
+.eff-pill svg{color:var(--fnt)}
+.c-bar .sp{flex:1}
+.modelb{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;color:var(--ink2);padding:5px 8px;border-radius:7px}
+.modelb:hover{background:var(--hv);color:var(--ink)}
+.send{width:30px;height:30px;border-radius:9px;background:var(--ink);color:#fff;display:grid;place-items:center;transition:background .12s,transform .08s;margin-left:2px;flex:none}
+.send:hover{background:#2B2B2B}
+.send:active{transform:scale(.94)}
+.send.off{background:#C9C9CE;cursor:default}
+.send.stop{background:var(--red)}
+.shelf{display:flex;align-items:center;gap:4px;padding:7px 4px 0;font-size:11.5px;color:var(--mut)}
+.shelf .si{display:flex;align-items:center;gap:5px;padding:3px 7px;border-radius:6px;cursor:pointer}
+.shelf .si:hover{background:var(--sf2);color:var(--ink2)}
+.shelf .sr{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--fnt)}
+/* popovers */
+.pop{position:absolute;bottom:calc(100% + 8px);background:var(--bg);border:1px solid var(--bd2);border-radius:11px;box-shadow:var(--shadow-pop);padding:5px;min-width:210px;z-index:80;display:none}
+.pop.show{display:block;animation:popIn .13s ease}
+@keyframes popIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.pop .pi{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:7px 9px;border-radius:7px;font-size:12.5px;color:var(--ink2)}
+.pop .pi:hover{background:var(--hv);color:var(--ink)}
+.pop .pi .ck{margin-left:auto;color:var(--grn)}
+.pop .pi .pi-sub{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--fnt)}
+.pop .pl{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fnt);padding:7px 9px 4px}
+.pop .psep{height:1px;background:var(--bd);margin:5px 4px}
+.pop-desc{font-size:11px;color:var(--mut);line-height:1.45;padding:0}
+/* ============ AUFWAND SLIDER POPOVER ============ */
+.effpop{min-width:272px;padding:14px 14px 11px}
+.effpop .ep-head{display:flex;align-items:center;justify-content:space-between;padding:0 2px 12px}
+.effpop .ep-t{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fnt)}
+.effpop .ep-model{font-family:var(--mono);font-size:10px;color:var(--mut)}
+.esl-in{position:relative;height:34px;margin:0 10px;cursor:pointer;touch-action:none}
+.esl-track{position:absolute;left:0;right:0;top:12px;height:10px;border-radius:99px;background:var(--trk)}
+.esl-fill{position:absolute;left:0;top:12px;height:10px;border-radius:99px;background:var(--org);width:66.7%;transition:width .14s ease}
+.esl-dot{position:absolute;top:17px;width:4px;height:4px;border-radius:50%;background:var(--dot);transform:translate(-50%,-50%);z-index:2;transition:background .14s}
+.esl-dot.fill{background:#fff}
+.esl-thumb{position:absolute;top:17px;width:20px;height:20px;border-radius:50%;background:#fff;border:1.5px solid rgba(23,23,23,.14);box-shadow:0 1px 4px rgba(0,0,0,.18);transform:translate(-50%,-50%);z-index:3;cursor:grab;transition:left .14s ease}
+.esl-in.drag .esl-thumb,.esl-in.drag .esl-fill{transition:none}
+.esl-thumb:active{cursor:grabbing}
+.esl-row{display:flex;align-items:baseline;justify-content:space-between;padding:6px 2px 0}
+.esl-row .lk{font-size:13.5px;font-weight:600;letter-spacing:-.01em;color:var(--ink)}
+.esl-row .lv{font-size:13px;font-weight:600;color:var(--org-dk)}
+.esl-ticks{display:flex;justify-content:space-between;padding:5px 2px 0;font-family:var(--mono);font-size:8.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--fnt)}
+.esl-ticks span{width:44px;text-align:center}
+.esl-ticks span:first-child{text-align:left}
+.esl-ticks span:last-child{text-align:right}
+.esl-ticks span.on{color:var(--org-dk)}
+.effpop .ep-note{font-size:11px;color:var(--mut);line-height:1.5;border-top:1px solid var(--bd);margin-top:10px;padding:9px 2px 0}
+
+/* ============ RIGHT ARC-LIGHT BROWSER ============ */
+.gutter{width:5px;flex:none;cursor:col-resize;position:relative}
+.gutter::after{content:"";position:absolute;left:2px;top:0;bottom:0;width:1px;background:var(--bd)}
+.gutter:hover::after,.gutter.dr::after{background:var(--ink);width:2px;left:1.5px}
+.browser{flex:none;width:0;min-width:0;background:var(--sf);display:flex;flex-direction:column;overflow:hidden}
+.b-in{width:100%;min-width:320px;display:flex;flex-direction:column;height:100%}
+.b-chrome{display:flex;align-items:center;gap:5px;padding:8px 10px;border-bottom:1px solid var(--bd)}
+.omni{flex:1;display:flex;align-items:center;gap:7px;background:var(--bg);border:1px solid var(--bd);border-radius:9px;padding:6px 10px;min-width:0;cursor:text}
+.omni .lock{color:var(--mut);flex:none}
+.omni .u-t{font-family:var(--mono);font-size:11px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.omni .u-t b{color:var(--ink);font-weight:500}
+.omni .u-go{margin-left:auto;color:var(--fnt);flex:none}
+.napill{display:flex;align-items:center;background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:2px;gap:1px;flex:none}
+.napill button{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:500;color:var(--mut);padding:4px 9px;border-radius:6px}
+.napill button.on{background:var(--ac);color:var(--ink)}
+.napill button svg{color:var(--fnt)}
+.napill button.on svg{color:var(--ink2)}
+.bbody{flex:1;min-height:0;position:relative;background:var(--bg);overflow:hidden}
+.bpane{position:absolute;inset:0;overflow:hidden;display:none;flex-direction:column;--pz:1}
+.bpane.on{display:flex}
+.pscroll{flex:1;overflow-y:auto;min-height:0}
+.ptool{position:absolute;top:10px;left:10px;display:flex;align-items:center;gap:2px;background:rgba(255,255,255,.9);backdrop-filter:blur(8px);border:1px solid var(--bd);border-radius:9px;padding:3px;z-index:20;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+.ptool .pt{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--ink2);padding:3px 8px;border-radius:6px;white-space:nowrap}
+.ptool button.pt:hover{background:var(--hv);color:var(--ink)}
+.ptool button.pt.on{background:var(--ink);color:#fff}
+.ptool .ptmeta{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--mut);padding:3px 8px;white-space:nowrap}
+.ptool .ptsep{width:1px;height:14px;background:var(--bd);margin:0 2px}
+/* floating bottom dock */
+.bdock{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:flex;align-items:center;gap:2px;background:rgba(255,255,255,.9);backdrop-filter:blur(12px);border:1px solid var(--bd2);border-radius:99px;padding:4px;box-shadow:0 6px 24px rgba(0,0,0,.10);z-index:30;white-space:nowrap;max-width:calc(100% - 12px);overflow:hidden}
+.bdock svg{flex:none}
+.dseg{display:flex;gap:1px}
+.dbtn{display:flex;align-items:center;gap:5px;height:26px;padding:0 10px;border-radius:99px;font-size:11.5px;font-weight:500;color:var(--ink2);transition:background .12s}
+.dbtn:hover{background:var(--hv);color:var(--ink)}
+.dbtn.on{background:var(--ink);color:#fff}
+.dbtn svg{color:var(--fnt)}
+.dbtn.on svg{color:#fff}
+.dsep{width:1px;height:16px;background:var(--bd);margin:0 5px}
+.dzoom{display:flex;align-items:center;gap:5px;height:26px;padding:0 10px;border-radius:99px;font-size:11px;font-weight:500;color:var(--ink2);font-family:var(--mono)}
+.dzoom:hover{background:var(--hv);color:var(--ink)}
+.dann{display:flex;align-items:center;gap:5px;height:26px;padding:0 10px;border-radius:99px;font-size:11px;font-weight:500;color:var(--ink2)}
+.dann:hover{background:var(--hv);color:var(--ink)}
+.dann.on{background:var(--org-bg);color:var(--org-dk)}
+.dann .dotc{width:5px;height:5px;border-radius:50%;background:var(--org)}
+/* zoom mini menu */
+.zmenu{position:absolute;bottom:52px;left:50%;transform:translateX(-50%);background:var(--bg);border:1px solid var(--bd2);border-radius:10px;box-shadow:var(--shadow-pop);padding:4px;z-index:31;display:none;min-width:110px}
+.zmenu.on{display:block}
+.zmenu button{display:flex;align-items:center;justify-content:space-between;width:100%;font-family:var(--mono);font-size:11px;color:var(--ink2);padding:6px 10px;border-radius:6px}
+.zmenu button:hover{background:var(--hv);color:var(--ink)}
+.zmenu button.on{color:var(--ink);font-weight:600}
+/* annotations drawer */
+.andrawer{position:absolute;left:12px;right:12px;bottom:56px;background:var(--bg);border:1px solid var(--bd2);border-radius:14px;box-shadow:0 12px 36px rgba(0,0,0,.12);z-index:29;display:flex;flex-direction:column;max-height:46%;transform:translateY(14px);opacity:0;pointer-events:none;transition:transform .22s ease,opacity .22s ease;overflow:hidden}
+.andrawer.on{transform:none;opacity:1;pointer-events:auto}
+.an-h{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--bd);font-size:12px;font-weight:600}
+.an-h .cnt{font-family:var(--mono);font-size:10px;color:var(--org-dk);background:var(--org-bg);border:1px solid var(--org-bd);border-radius:5px;padding:1px 6px}
+.an-h .sp{flex:1}
+.an-h .hint{font-size:10.5px;color:var(--fnt);font-weight:400}
+.an-list{overflow-y:auto;padding:8px}
+.an-sec{font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--fnt);padding:7px 8px 4px}
+.an-row{display:flex;align-items:flex-start;gap:9px;padding:7px 9px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+.an-row:hover{background:var(--sf);border-color:var(--bd)}
+.an-row .an-n{width:18px;height:18px;border-radius:50%;background:var(--bg);border:1.5px solid var(--ink);font-family:var(--mono);font-size:9.5px;font-weight:600;display:grid;place-items:center;flex:none;margin-top:1px}
+.an-row .an-t{flex:1;min-width:0}
+.an-row .an-t .l1{font-size:12px;font-weight:600;color:var(--ink)}
+.an-row .an-t .l2{font-size:11px;color:var(--mut);margin-top:1px;line-height:1.45}
+.an-row .an-j{color:var(--fnt);flex:none;margin-top:2px}
+.an-empty{padding:18px 14px;font-size:12px;color:var(--mut);text-align:center}
+/* code pane */
+.code-scroll{flex:1;overflow:auto;padding:52px 0 90px;font-family:var(--mono);font-size:calc(11.5px*var(--pz,1));line-height:1.7}
+.cl{display:flex;white-space:pre}
+.cl:hover{background:var(--sf)}
+.cl .ln{width:44px;flex:none;text-align:right;padding-right:14px;color:#C4C4C9;user-select:none;font-variant-numeric:tabular-nums}
+.cl .cc{color:var(--ink2);padding-right:16px}
+.tk-k{color:#8B3A3A}.tk-s{color:var(--grn)}.tk-c{color:var(--fnt);font-style:italic}.tk-f{color:var(--blu)}.tk-n{color:var(--amb)}.tk-t{color:var(--ink);font-weight:600}.tk-p{color:var(--ink2)}
+/* diff pane */
+.diff-scroll{flex:1;overflow:auto;padding:52px 14px 90px}
+.diff-sum{display:flex;align-items:center;gap:9px;margin-bottom:12px;font-size:12.5px;padding:2px 4px}
+.d-chip{font-family:var(--mono);font-size:11px;font-weight:500;border-radius:5px;padding:1px 6px;font-variant-numeric:tabular-nums}
+.d-chip.add{color:var(--grn);background:var(--grn-bg);border:1px solid var(--grn-bd)}
+.d-chip.del{color:var(--red);background:var(--red-bg);border:1px solid var(--red-bd)}
+.diff-file{border:1px solid var(--bd);border-radius:9px;overflow:hidden;margin-bottom:12px}
+.df-head{display:flex;align-items:center;gap:8px;padding:7px 11px;background:var(--sf);border-bottom:1px solid var(--bd);font-family:var(--mono);font-size:11.5px}
+.df-head .dfn{flex:1;color:var(--ink);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.df-body{font-family:var(--mono);font-size:calc(11px*var(--pz,1));line-height:1.7}
+.dl{display:flex;white-space:pre-wrap;word-break:break-all}
+.dl .dln{flex:0 0 34px;text-align:right;padding-right:10px;color:#C4C4C9;user-select:none}
+.dl .dlc{color:var(--ink2)}
+.dl.a{background:var(--grn-bg)}.dl.a .dlc{color:var(--grn)}
+.dl.d{background:var(--red-bg)}.dl.d .dlc{color:var(--red)}
+.dl.h{background:var(--sf)}.dl.h .dlc{color:var(--mut)}
+/* plan pane */
+.doc-scroll{flex:1;overflow:auto;padding:52px 22px 90px}
+.doc-inner{max-width:560px;margin:0 auto}
+.doc-inner .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--org-dk);background:var(--org-bg);border:1px solid var(--org-bd);border-radius:20px;padding:3px 11px;display:inline-block;margin-bottom:12px}
+.doc-inner h1{font-size:19px;font-weight:700;letter-spacing:-.02em;margin-bottom:8px}
+.doc-inner .dmeta{display:flex;gap:10px;font-family:var(--mono);font-size:10px;color:var(--fnt);margin-bottom:16px}
+.doc-inner h2{font-size:14px;font-weight:700;margin:18px 0 7px;letter-spacing:-.01em}
+.doc-inner p{font-size:13px;line-height:1.65;color:var(--ink2);margin-bottom:8px}
+.doc-inner .callout{border:1px solid var(--amb-bd);background:var(--amb-bg);border-radius:9px;padding:9px 12px;font-size:12.5px;color:var(--amb);line-height:1.55;margin:10px 0;display:flex;gap:9px}
+.doc-inner .callout svg{flex:none;margin-top:1px}
+.doc-inner .quote{border-left:2.5px solid var(--bd2);padding:2px 0 2px 12px;color:var(--mut);font-size:12.5px;font-style:italic;margin:10px 0;line-height:1.6}
+.checklist{margin:8px 0;display:flex;flex-direction:column;gap:5px}
+.checklist .ci{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink2)}
+.checklist .cb{width:14px;height:14px;border-radius:4px;border:1.5px solid var(--bd2);display:flex;align-items:center;justify-content:center;flex:none;color:#fff}
+.checklist .cb.on{background:var(--grn);border-color:var(--grn)}
+.ann-line{position:relative;padding:2px 26px 2px 0;border-radius:5px;margin-left:-8px;padding-left:8px}
+.ann-line:hover{background:var(--sf)}
+.ann-add{position:absolute;right:0;top:4px;width:18px;height:18px;border-radius:5px;background:var(--bg);border:1px solid var(--bd);color:var(--mut);display:none;align-items:center;justify-content:center;font-size:12px;line-height:1}
+body.annotate .ann-line:hover .ann-add{display:flex}
+.ann-add:hover{color:var(--org-dk);border-color:var(--org-bd);background:var(--org-bg)}
+.ann-line.has-ann{background:var(--org-bg)}
+.ann-line .ann-pin{position:absolute;right:5px;top:8px;width:7px;height:7px;border-radius:50%;background:var(--org);display:none}
+.ann-line.has-ann .ann-pin{display:block}
+.ann-note{border:1px solid var(--org-bd);background:var(--org-bg);border-radius:7px;padding:6px 9px;font-size:11.5px;color:var(--org-dk);margin:4px 0 6px;display:flex;gap:7px;align-items:flex-start}
+.ann-note .an-x{margin-left:auto;color:var(--org);font-size:12px;flex:none}
+.ann-note .an-x:hover{color:var(--red)}
+.ann-editor{display:flex;gap:6px;margin:5px 0 8px}
+.ann-editor input{flex:1;border:1px solid var(--org-bd);border-radius:7px;padding:5px 9px;font-size:12px;outline:none;background:var(--org-bg)}
+.ann-editor button{background:var(--ink);color:#fff;border-radius:7px;font-size:11.5px;font-weight:600;padding:0 11px}
+/* image pane */
+.img-stage{flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:center;padding:52px 18px 90px;position:relative}
+.img-frame{position:relative;border:1px solid var(--bd2);border-radius:10px;overflow:hidden;background:#F7F7F8;box-shadow:0 1px 3px rgba(0,0,0,.05);transform-origin:top center}
+body.annotate .img-frame{cursor:crosshair}
+.pin{position:absolute;width:22px;height:22px;border-radius:50%;background:var(--bg);border:1.5px solid var(--ink);color:var(--ink);font-family:var(--mono);font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;transform:translate(-50%,-50%);box-shadow:0 1px 3px rgba(0,0,0,.15);transition:all .14s;z-index:5}
+.pin:hover{transform:translate(-50%,-50%) scale(1.12)}
+.pin.on{background:var(--ink);color:#fff}
+.pin-card{position:absolute;width:210px;background:var(--bg);border:1px solid var(--bd2);border-radius:9px;box-shadow:var(--shadow-pop);padding:10px 12px;z-index:6;display:none}
+.pin-card.on{display:block}
+.pin-card .pc-t{font-size:12px;font-weight:700;margin-bottom:3px;display:flex;align-items:center;gap:6px}
+.pin-card .pc-t .pcn{font-family:var(--mono);font-size:9px;background:var(--ink);color:#fff;border-radius:4px;padding:1px 5px}
+.pin-card .pc-n{font-size:11.5px;color:var(--ink2);line-height:1.5}
+/* 3d pane */
+.stage3d{flex:1;position:relative;min-height:0;background:#F5F5F5}
+.stage3d canvas{position:absolute;inset:0;width:100%;height:100%;cursor:grab}
+.stage3d canvas:active{cursor:grabbing}
+.s3-hint{position:absolute;bottom:56px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:10px;color:var(--fnt);background:rgba(255,255,255,.85);border:1px solid var(--bd);border-radius:6px;padding:3px 9px;pointer-events:none}
+.s3-card{position:absolute;width:200px;background:var(--bg);border:1px solid var(--bd2);border-radius:9px;box-shadow:var(--shadow-pop);padding:10px 12px;z-index:7;display:none}
+.s3-card.on{display:block}
+/* web pane */
+.web-body{flex:1;overflow:auto;background:#EDEDEF;padding:0;display:flex;justify-content:center}
+.webwrap{width:100%;padding:0 0 90px;transform-origin:top center}
+.webwrap.mobile{max-width:402px;padding:18px 12px 90px}
+.webwrap.mobile .webpage{border:1px solid var(--bd2);border-radius:22px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.10);min-height:640px}
+.webpage{min-height:100%;background:#fff}
+.wp-nav{display:flex;align-items:center;gap:14px;padding:14px 26px;border-bottom:1px solid var(--bd)}
+.wp-nav .wp-logo{width:22px;height:22px;border-radius:6px;background:var(--ink);display:flex;align-items:center;justify-content:center}
+.wp-nav a{font-size:12.5px;color:var(--ink2);text-decoration:none;cursor:pointer}
+.wp-nav a:hover{color:var(--ink)}
+.wp-nav .wp-cta{margin-left:auto;background:var(--ink);color:#fff;font-size:12px;font-weight:600;border-radius:7px;padding:6px 13px;cursor:pointer}
+.wp-hero{padding:54px 26px 40px;text-align:center}
+.wp-hero .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--org-dk);background:var(--org-bg);border:1px solid var(--org-bd);border-radius:20px;padding:3px 11px}
+.wp-hero h1{font-size:32px;font-weight:700;letter-spacing:-.03em;margin:16px 0 10px}
+.wp-hero p{font-size:14px;color:var(--mut);max-width:440px;margin:0 auto 20px;line-height:1.6}
+.wp-hero .hbb{display:inline-flex;gap:8px}
+.wp-hero .hbb .b1{background:var(--ink);color:#fff;border-radius:8px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer}
+.wp-hero .hbb .b2{border:1px solid var(--bd2);border-radius:8px;padding:9px 18px;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer}
+.wp-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:0 26px 40px;max-width:760px;margin:0 auto}
+.webwrap.mobile .wp-cards{grid-template-columns:1fr}
+.webwrap.mobile .wp-nav a{display:none}
+.wp-card{border:1px solid var(--bd);border-radius:11px;padding:16px}
+.wp-card .wc-ic{width:30px;height:30px;border-radius:8px;background:var(--sf2);border:1px solid var(--bd);display:flex;align-items:center;justify-content:center;color:var(--ink2);margin-bottom:10px}
+.wp-card h3{font-size:13px;font-weight:700;margin-bottom:4px}
+.wp-card p{font-size:11.5px;color:var(--mut);line-height:1.5}
+
+/* toast */
+.toast{position:fixed;bottom:24px;left:50%;transform:translate(-50%,20px);background:var(--ink);color:#fff;font-size:12px;font-weight:500;padding:8px 15px;border-radius:9px;opacity:0;transition:all .25s;z-index:99;pointer-events:none}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ FAR-LEFT RAIL (44px) ============ -->
+  <nav class="rail">
+    <button class="rbtn" id="rChat">
+      <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3.6 5.2A1.8 1.8 0 0 1 5.4 3.4h9.2a1.8 1.8 0 0 1 1.8 1.8v7.4a1.8 1.8 0 0 1-1.8 1.8H8.6l-3 2.4v-2.4h-.2a1.8 1.8 0 0 1-1.8-1.8z"/>
+        <circle cx="10" cy="8.9" r="2.7"/>
+        <path d="M10 6.2v1.6M12.2 9.9l-1.5-.8M7.8 9.9l1.5-.8"/>
+      </svg>
+      <span class="tip">Agent Chat</span>
+    </button>
+    <button class="rbtn on" id="rBots">
+      <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="10" cy="4" r="1.8"/><circle cx="4.2" cy="14.6" r="1.8"/><circle cx="15.8" cy="14.6" r="1.8"/>
+        <path d="M8.7 5.5 5.5 13.1M11.3 5.5l3.2 7.6M6 14.6h8"/>
+        <path d="M10 5.8v3.3M5.9 13.1l2.7-1.5M14.1 13.1l-2.7-1.5"/>
+        <circle cx="10" cy="10.7" r="1.15"/>
+      </svg>
+      <span class="tip">Bot Management</span>
+    </button>
+    <div class="rsep"></div>
+    <button class="rbtn" onclick="toast('Search palette — demo')">
+      <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="9" cy="9" r="5.6"/><path d="M13.2 13.2 16.8 16.8"/></svg>
+      <span class="tip">Search</span>
+    </button>
+    <button class="rbtn" onclick="openBrowser('diff')">
+      <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.4 4.8 5.5v4.3c0 3.2 2.2 5.5 5.2 6.8 3-1.3 5.2-3.6 5.2-6.8V5.5z"/><path d="m7.4 9.9 1.9 1.9 3.4-3.6"/></svg>
+      <span class="tip">Reviews &amp; Checks</span>
+    </button>
+    <button class="rbtn" onclick="toast('More modules — demo')">
+      <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1.1" fill="currentColor" stroke="none"/></svg>
+      <span class="tip">More</span>
+    </button>
+    <div class="sp"></div>
+    <button class="rbtn" onclick="toast('Docs — devin.ai/support')">
+      <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="6.6"/><path d="M8.1 7.9a2 2 0 0 1 3.9.7c0 1.3-1.9 1.6-1.9 2.9"/><circle cx="10" cy="13.8" r=".6" fill="currentColor" stroke="none"/></svg>
+      <span class="tip">Help</span>
+    </button>
+    <button class="rbtn" onclick="toast('Plugins marketplace — demo')">
+      <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.4" y="3.4" width="5.4" height="5.4" rx="1.2"/><rect x="11.2" y="3.4" width="5.4" height="5.4" rx="1.2"/><rect x="3.4" y="11.2" width="5.4" height="5.4" rx="1.2"/><path d="M13.9 11.2v5.4M11.2 13.9h5.4"/></svg>
+      <span class="tip">Plugins</span>
+    </button>
+    <button class="rbtn" onclick="toast('Settings — demo')">
+      <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.4 6.2h9M16.4 6.2h.2M3.4 13.8h3.8M11.2 13.8h5.4"/><circle cx="14.4" cy="6.2" r="1.9"/><circle cx="9.2" cy="13.8" r="1.9"/></svg>
+      <span class="tip">Settings</span>
+    </button>
+    <div class="avatar-w">W</div>
+  </nav>
+
+  <!-- ============ SECONDARY SIDEBAR (248px) ============ -->
+  <aside class="side">
+    <div class="side-h">
+      <span class="t" id="sideTitle">Bots</span>
+      <div style="display:flex;gap:2px">
+        <button class="iconb" title="Inbox" onclick="toast('Inbox empty')"><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.4 10.9V14a1.6 1.6 0 0 0 1.6 1.6h10a1.6 1.6 0 0 0 1.6-1.6v-3.1"/><path d="M3.4 10.9 5.5 4.7A1.6 1.6 0 0 1 7 3.6h6a1.6 1.6 0 0 1 1.5 1.1l2.1 6.2"/><path d="M3.4 10.9H8a2 2 0 0 0 4 0h4.6"/></svg></button>
+        <button class="iconb" title="Options"><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="10" cy="5" r="1.1" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="10" cy="15" r="1.1" fill="currentColor" stroke="none"/></svg></button>
+      </div>
+    </div>
+    <button class="newb" id="newBtn"><svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg><span id="newLbl">New bot</span></button>
+
+    <div class="side-scroll">
+      <!-- CHAT MODE CONTENT -->
+      <div id="sideChat" style="display:none">
+        <div class="slab" data-g="g1"><svg class="chev" width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m5.5 7.5 4.5 4.5 4.5-4.5"/></svg>Projects / Folders</div>
+        <div class="grp" id="g1">
+          <div class="srow on"><svg class="g" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3.4 5.4a1.6 1.6 0 0 1 1.6-1.6h3l1.8 2h6.8a1.6 1.6 0 0 1 1.6 1.6v7.4a1.6 1.6 0 0 1-1.6 1.6H5a1.6 1.6 0 0 1-1.6-1.6z"/></svg><div class="r"><div class="n">Mixar_Tests_01</div><div class="m">local · main</div></div></div>
+          <div class="srow"><svg class="g" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3.4 5.4a1.6 1.6 0 0 1 1.6-1.6h3l1.8 2h6.8a1.6 1.6 0 0 1 1.6 1.6v7.4a1.6 1.6 0 0 1-1.6 1.6H5a1.6 1.6 0 0 1-1.6-1.6z"/></svg><div class="r"><div class="n">bot-factory / system</div><div class="m">local · harness</div></div></div>
+          <div class="srow"><svg class="g" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M10 4.4a4 4 0 0 1 4 4v.4a2.8 2.8 0 0 1-.5 5.6h-7a3.2 3.2 0 0 1-.6-6.4A4 4 0 0 1 10 4.4z"/></svg><div class="r"><div class="n">devin-cloud / workspace-7</div><div class="m">cloud · synced</div></div></div>
+        </div>
+        <div class="slab" data-g="g2"><svg class="chev" width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m5.5 7.5 4.5 4.5 4.5-4.5"/></svg>Recent</div>
+        <div class="grp" id="g2">
+          <div class="srow on"><svg class="g" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3.4" y="4.4" width="13.2" height="9.4" rx="1.4"/><path d="M8 16.8h4"/></svg><div class="r"><div class="n">Roadmap review with Core Factory room</div><div class="m">18:42<span class="cdot"></span>3 files changed</div></div><span class="unr"></span></div>
+          <div class="srow"><svg class="g" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3.4" y="4.4" width="13.2" height="9.4" rx="1.4"/><path d="M8 16.8h4"/></svg><div class="r"><div class="n">Wireframe monolith scene for landing</div><div class="m">40 minutes ago</div></div></div>
+          <div class="srow"><svg class="g" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4.4a4 4 0 0 1 4 4v.4a2.8 2.8 0 0 1-.5 5.6h-7a3.2 3.2 0 0 1-.6-6.4A4 4 0 0 1 10 4.4z"/></svg><div class="r"><div class="n">Read-only engineering audit of bot-factory</div><div class="m">2 hours ago</div></div></div>
+          <div class="srow"><svg class="g" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3.4" y="4.4" width="13.2" height="9.4" rx="1.4"/><path d="M8 16.8h4"/></svg><div class="r"><div class="n">Implement git worktrees for scoped runs</div><div class="m">3 hours ago</div></div></div>
+          <div class="srow"><svg class="g" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3.4" y="4.4" width="13.2" height="9.4" rx="1.4"/><path d="M8 16.8h4"/></svg><div class="r"><div class="n">Reasoning slider — Aufwand study</div><div class="m">yesterday</div></div></div>
+        </div>
+      </div>
+
+      <!-- BOTS MODE CONTENT -->
+      <div id="sideBots">
+        <div class="slab" data-g="g3"><svg class="chev" width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m5.5 7.5 4.5 4.5 4.5-4.5"/></svg>Bot Fleet</div>
+        <div class="grp" id="g3">
+          <div class="botrow"><span class="bav" data-av="pm"></span><div style="flex:1;min-width:0"><div class="bn">Architect PM<span class="badge-pm">PM</span></div><div class="bs">routing milestone 3</div></div><canvas class="mini-orb" width="20" height="20" data-orb="think"></canvas></div>
+          <div class="botrow on"><span class="bav" data-av="builder"></span><div style="flex:1;min-width:0"><div class="bn">Builder Bot</div><div class="bs">editing harness/router.ts</div></div><canvas class="mini-orb" width="20" height="20" data-orb="think"></canvas><span class="unr"></span></div>
+          <div class="botrow"><span class="bav" data-av="sculpt"></span><div style="flex:1;min-width:0"><div class="bn">3D Sculptor</div><div class="bs">staging monolith gallery</div></div><canvas class="mini-orb" width="20" height="20" data-orb="idle"></canvas></div>
+          <div class="botrow"><span class="bav" data-av="verif"></span><div style="flex:1;min-width:0"><div class="bn">Verifier Bot</div><div class="bs">matrix 24/24 passing</div></div><canvas class="mini-orb" width="20" height="20" data-orb="idle"></canvas></div>
+        </div>
+        <div class="slab" data-g="g4"><svg class="chev" width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m5.5 7.5 4.5 4.5 4.5-4.5"/></svg>Group Rooms</div>
+        <div class="grp" id="g4">
+          <div class="srow on">
+            <span class="stack"><span data-av="pm" class="stav"></span><span data-av="builder" class="stav"></span><span data-av="verif" class="stav"></span><span class="more">+2</span></span>
+            <div class="r"><div class="n">Core Factory</div><div class="m">Verifier: 24/24 tests pass<span class="cdot"></span>18:39</div></div><span class="unr"></span>
+          </div>
+          <div class="srow">
+            <span class="stack"><span data-av="sculpt" class="stav"></span><span class="more">+2</span></span>
+            <div class="r"><div class="n">Scene Crew</div><div class="m">Sculptor: pins exported<span class="cdot"></span>11:12</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">
+      <svg class="prog" width="18" height="18" viewBox="0 0 18 18"><circle class="pb" cx="9" cy="9" r="7"/><circle class="pv" cx="9" cy="9" r="7"/></svg>
+      <span>Setup 2/3 — connect a tool</span>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+    <header class="topbar">
+      <button class="hb" id="hideSide" title="Toggle sidebar"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="3.4" y="4" width="13.2" height="12" rx="1.6"/><path d="M8 4v12"/></svg></button>
+      <button class="ws"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.2l6 3.4v6.8l-6 3.4-6-3.4V6.6z"/><circle cx="10" cy="10" r="2.2"/></svg>Bot-Factory<svg width="10" height="10" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m5.5 7.5 4.5 4.5 4.5-4.5"/></svg></button>
+      <div class="tsep"></div>
+      <button class="hb"><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 4.5 7 10l5.5 5.5"/></svg></button>
+      <button class="hb" style="opacity:.35"><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 4.5 13 10l-5.5 5.5"/></svg></button>
+      <div class="tsep"></div>
+      <div class="tab"><span id="tabLbl">Core Factory</span></div>
+      <div class="roommeta" id="roomMeta"><span class="mstack"><span data-av="pm" class="stav"></span><span data-av="builder" class="stav"></span><span data-av="sculpt" class="stav"></span><span data-av="verif" class="stav"></span></span>4 bots · 1 room</div>
+      <div class="sp"></div>
+      <button class="btg on" id="browserToggle"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="3.4" y="4" width="13.2" height="12" rx="1.6"/><path d="M10 4v12M12.6 6.6h1.8M12.6 9.4h1.8"/></svg>Browser</button>
+    </header>
+
+    <div class="stream" id="stream"></div>
+
+    <!-- DOCK -->
+    <div class="dock"><div class="dock-in">
+      <div class="dtray" id="dtray">
+        <svg class="pg" width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.8 4.4 2.8 2.8-8.6 8.6-3.6.8.8-3.6z"/><path d="m11.3 5.9 2.8 2.8"/></svg>
+        <span class="fc">3 files changed</span><span class="add">+383</span><span class="del">−4</span>
+        <span class="sp"></span>
+        <button class="dlink" onclick="toast('Quick review — opening diff');openBrowser('diff')"><svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="3.4" y="3.4" width="13.2" height="13.2" rx="1.8"/><path d="m7 10 2 2 4-4.2"/></svg>Quick review</button>
+        <button class="dlink blue" onclick="openBrowser('diff')">View changes</button>
+        <button class="iconb" style="width:20px;height:20px" onclick="document.getElementById('dtray').style.display='none'"><svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m5 5 10 10M15 5 5 15"/></svg></button>
+      </div>
+
+      <div class="composer">
+        <textarea id="ta" rows="1" placeholder="Message Core Factory — @ to mention a bot…"></textarea>
+        <div class="c-bar">
+          <button class="cbtn" id="attachBtn" title="Attach"><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4.5v11M4.5 10h11"/></svg></button>
+          <button class="cbtn" id="slashBtn" title="Commands" style="font-family:var(--mono);font-size:13px">/</button>
+          <span class="cbar-sep"></span>
+          <button class="auto-ctl" id="autoBtn" data-level="medium" title="Autonomy level">
+            <span class="auto-bars"><i></i><i></i><i></i></span>
+            <span class="auto-label" id="autoLbl">Medium</span>
+            <svg width="9" height="9" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m5.5 7.5 4.5 4.5 4.5-4.5"/></svg>
+          </button>
+          <button class="eff-pill" id="effBtn" title="Reasoning effort — Aufwand">
+            <span class="eff-mini"><i id="effFillMini" style="width:75%"></i></span>
+            <span class="eff-lbl" id="effLvl">Hoch</span>
+            <svg width="9" height="9" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m5.5 7.5 4.5 4.5 4.5-4.5"/></svg>
+          </button>
+          <span class="sp"></span>
+          <button class="modelb" id="modelBtn"><span id="modelLbl">SWE-2 High</span><svg width="9" height="9" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m5.5 7.5 4.5 4.5 4.5-4.5"/></svg></button>
+          <button class="cbtn" id="micBtn" title="Voice input"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="7.2" y="3.2" width="5.6" height="9" rx="2.8"/><path d="M4.8 10.2a5.2 5.2 0 0 0 10.4 0M10 15.4v2"/></svg></button>
+          <button class="send off" id="sendBtn" title="Send"><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9"/></svg></button>
+        </div>
+
+        <!-- popovers -->
+        <div class="pop" id="popAttach" style="left:8px">
+          <button class="pi"><svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M4 16.6V5.4A1.6 1.6 0 0 1 5.6 3.8h8.8A1.6 1.6 0 0 1 16 5.4v11.2"/></svg>Attach file…</button>
+          <button class="pi"><svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3.4 5.4a1.6 1.6 0 0 1 1.6-1.6h3l1.8 2h6.8a1.6 1.6 0 0 1 1.6 1.6v7.4a1.6 1.6 0 0 1-1.6 1.6H5a1.6 1.6 0 0 1-1.6-1.6z"/></svg>Add folder context</button>
+          <button class="pi"><svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m7 7-3 3 3 3M13 7l3 3-3 3"/></svg>Paste as snippet</button>
+        </div>
+        <div class="pop" id="popSlash" style="left:44px;min-width:250px">
+          <div class="pl">Commands</div>
+          <button class="pi" data-c="/review"><b class="mono">/review</b><span style="color:var(--mut)">quick diff review</span></button>
+          <button class="pi" data-c="/plan"><b class="mono">/plan</b><span style="color:var(--mut)">draft a work plan</span></button>
+          <button class="pi" data-c="/test"><b class="mono">/test</b><span style="color:var(--mut)">run test suite</span></button>
+          <button class="pi" data-c="/delegate"><b class="mono">/delegate</b><span style="color:var(--mut)">hand off to a bot</span></button>
+          <button class="pi" data-c="/browser"><b class="mono">/browser</b><span style="color:var(--mut)">open preview pane</span></button>
+        </div>
+        <div class="pop" id="popAuto" style="left:80px;min-width:236px">
+          <div class="pl">Autonomy</div>
+          <button class="pi" data-a="spec"><div><div>Spec</div><div class="pop-desc">Plan &amp; specify only — no execution.</div></div></button>
+          <button class="pi" data-a="low"><div><div>Low</div><div class="pop-desc">Ask before every tool call.</div></div></button>
+          <button class="pi" data-a="medium"><div><div>Medium</div><div class="pop-desc">Scoped edits, ask on destructive ops.</div></div><svg class="ck" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 10.5 3.2 3.2L15 7"/></svg></button>
+          <button class="pi" data-a="high"><div><div>High</div><div class="pop-desc">Full-speed, review the diff after.</div></div></button>
+        </div>
+        <!-- AUFWAND EFFORT POPOVER -->
+        <div class="pop effpop" id="popEff" style="left:150px">
+          <div class="ep-head"><span class="ep-t">Reasoning Effort</span><span class="ep-model" id="effModelLbl">SWE-2 High</span></div>
+          <div class="esl-in" id="eslIn">
+            <div class="esl-track"></div>
+            <div class="esl-fill" id="eslFill"></div>
+            <span class="esl-dot" style="left:0%"></span>
+            <span class="esl-dot" style="left:33.3333%"></span>
+            <span class="esl-dot" style="left:66.6667%"></span>
+            <span class="esl-dot" style="left:100%"></span>
+            <div class="esl-thumb" id="eslThumb"></div>
+          </div>
+          <div class="esl-row"><span class="lk">Aufwand</span><span class="lv" id="eslLvl">Hoch</span></div>
+          <div class="esl-ticks" id="eslTicks"><span>Niedrig</span><span>Mittel</span><span class="on">Hoch</span><span>Max</span></div>
+          <div class="ep-note">Deeper plans, longer verification passes. <b>Max</b> holds the room until every gate is green.</div>
+        </div>
+        <div class="pop" id="popModel" style="right:40px">
+          <div class="pl">Model</div>
+          <button class="pi" data-m="SWE-2 High">SWE-2 High<svg class="ck" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 10.5 3.2 3.2L15 7"/></svg></button>
+          <button class="pi" data-m="SWE-2 Max">SWE-2 Max</button>
+          <button class="pi" data-m="DeepSeek V4.1">DeepSeek V4.1</button>
+          <button class="pi" data-m="GPT-5.2">GPT-5.2</button>
+        </div>
+      </div>
+
+      <div class="shelf">
+        <span class="si" id="envChip"><svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3.4" y="4.4" width="13.2" height="9.4" rx="1.4"/><path d="M8 16.8h4"/></svg><span id="envLbl">Local</span><svg width="9" height="9" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m5.5 7.5 4.5 4.5 4.5-4.5"/></svg></span>
+        <span class="si" id="wtChip"><svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.6" cy="5.4" r="1.9"/><circle cx="5.6" cy="14.6" r="1.9"/><circle cx="14.4" cy="7" r="1.9"/><path d="M5.6 7.3v5.4M5.6 12.7c0-3 3-3.4 5.4-4.2 1.4-.5 3.4-.8 3.4-1.5"/></svg><span id="wtLbl">Worktree</span><svg width="9" height="9" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m5.5 7.5 4.5 4.5 4.5-4.5"/></svg></span>
+        <span class="si" id="foldChip"><svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3.4 5.4a1.6 1.6 0 0 1 1.6-1.6h3l1.8 2h6.8a1.6 1.6 0 0 1 1.6 1.6v7.4a1.6 1.6 0 0 1-1.6 1.6H5a1.6 1.6 0 0 1-1.6-1.6z"/></svg><span id="foldLbl">Mixar_Tests_01</span></span>
+        <span class="sr" id="stripStatus">room: Core Factory · idle</span>
+      </div>
+      <div class="pop" id="envPop" style="left:0;min-width:170px">
+        <button class="pi" data-e="Local">Local<span class="pi-sub">this machine</span></button>
+        <button class="pi" data-e="Cloud">Cloud<span class="pi-sub">factory runner</span></button>
+      </div>
+      <div class="pop" id="wtPop" style="left:0;min-width:170px">
+        <button class="pi" data-w="Worktree">Worktree<span class="pi-sub">isolated</span></button>
+        <button class="pi" data-w="Local branch">Local branch</button>
+        <button class="pi" data-w="Remote">Remote</button>
+      </div>
+      <div class="pop" id="foldPop" style="left:0;min-width:170px">
+        <button class="pi" data-f="Mixar_Tests_01">Mixar_Tests_01</button>
+        <button class="pi" data-f="bot-factory">bot-factory</button>
+        <button class="pi" data-f="Roblox_Game_Rom">Roblox_Game_Rom</button>
+      </div>
+    </div></div>
+  </main>
+
+  <!-- ============ RESIZE GUTTER + ARC-LIGHT BROWSER ============ -->
+  <div class="gutter" id="gutter"></div>
+  <aside class="browser" id="browser">
+    <div class="b-in" id="bIn">
+      <div class="b-chrome">
+        <button class="hb" id="brBack" title="Back"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 4.5 7 10l5.5 5.5"/></svg></button>
+        <button class="hb" id="brFwd" title="Forward" style="opacity:.4"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 4.5 13 10l-5.5 5.5"/></svg></button>
+        <button class="hb" id="brReload" title="Reload"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16.2 10a6.2 6.2 0 1 1-1.8-4.3M16.2 3.6v3.4h-3.4"/></svg></button>
+        <div class="omni" title="botfactory://mixar/plans/roadmap.md">
+          <svg class="lock" width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="4.6" y="9" width="10.8" height="7.4" rx="1.6"/><path d="M7 9V6.8a3 3 0 0 1 6 0V9"/></svg>
+          <span class="u-t" id="urlTxt">botfactory://mixar/plans/<b>roadmap.md</b></span>
+          <svg class="u-go" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5.6h6.4V12M14 5.8 6 13.8"/></svg>
+        </div>
+        <div class="napill" id="naPill">
+          <button class="on" data-na="nav" title="Navigate"><svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="6.6"/><path d="m13 7-2 4-4 2 2-4z"/></svg>Navigate</button>
+          <button data-na="ann" title="Annotate"><svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12.8 4.4 2.8 2.8-8.6 8.6-3.6.8.8-3.6z"/></svg>Annotate</button>
+        </div>
+        <button class="hb" id="brClose" title="Collapse"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.4" y="4" width="13.2" height="12" rx="1.6"/><path d="m13 7-3 3 3 3"/></svg></button>
+      </div>
+
+      <div class="bbody">
+        <!-- CODE -->
+        <div class="bpane" id="p-code">
+          <div class="ptool" id="filepick">
+            <button class="pt on" data-f="0">router.ts</button>
+            <button class="pt" data-f="1">composer.tsx</button>
+            <button class="pt" data-f="2">contract.json</button>
+            <span class="ptsep"></span><span class="ptmeta">typescript · utf-8</span>
+          </div>
+          <div class="code-scroll" id="codeview"></div>
+        </div>
+        <!-- DIFF -->
+        <div class="bpane" id="p-diff">
+          <div class="ptool"><span class="ptmeta" style="font-weight:600;color:var(--ink)">Diff</span><span class="ptsep"></span><span class="ptmeta" style="color:var(--grn)">+383</span><span class="ptmeta" style="color:var(--red)">−4</span><span class="ptmeta">3 files · uncommitted</span></div>
+          <div class="diff-scroll" id="diffview"></div>
+        </div>
+        <!-- PLAN -->
+        <div class="bpane on" id="p-plan">
+          <div class="ptool"><span class="ptmeta" style="font-weight:600;color:var(--ink)">roadmap.md</span><span class="ptsep"></span><span class="ptmeta">markdown · rendered</span><span class="ptmeta" id="annCount" style="display:none;color:var(--org-dk)">0 notes</span></div>
+          <div class="doc-scroll"><div class="doc-inner" id="docInner"></div></div>
+        </div>
+        <!-- IMAGE -->
+        <div class="bpane" id="p-img">
+          <div class="ptool"><span class="ptmeta" style="font-weight:600;color:var(--ink)">hero-wireframe.png</span><span class="ptsep"></span><span class="ptmeta">1342 × 722 · svg-mock</span><span class="ptmeta" id="imgPinHint">navigate mode</span></div>
+          <div class="img-stage">
+            <div class="img-frame" id="imgFrame">
+              <svg width="560" height="330" viewBox="0 0 560 330" fill="none" style="display:block">
+                <rect width="560" height="330" fill="#FFFFFF"/>
+                <rect y="0" width="560" height="40" fill="#FAFAFA"/><line x1="0" y1="40" x2="560" y2="40" stroke="#EBEBEB"/>
+                <rect x="22" y="13" width="80" height="14" rx="4" fill="#171717"/>
+                <rect x="382" y="16" width="36" height="9" rx="3" fill="#DCDCE0"/><rect x="426" y="16" width="36" height="9" rx="3" fill="#DCDCE0"/><rect x="470" y="16" width="58" height="9" rx="3" fill="#DCDCE0"/>
+                <text x="280" y="128" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="30" font-weight="700" fill="#171717" letter-spacing="-1">The quiet monolith.</text>
+                <text x="280" y="156" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#8A8A8A">A single surface for every agent, artifact and approval.</text>
+                <rect x="216" y="176" width="64" height="26" rx="13" fill="#171717"/><rect x="292" y="176" width="64" height="26" rx="13" fill="#F5F5F5" stroke="#EBEBEB"/>
+                <g stroke="#DCDCE0" fill="none" stroke-width="1.4">
+                  <path d="M280 330 338 258 222 258 Z"/><path d="M280 330v-72M222 258l58-13 58 13"/>
+                </g>
+                <rect x="22" y="300" width="110" height="8" rx="4" fill="#EBEBEB"/><rect x="22" y="314" width="74" height="8" rx="4" fill="#F2F2F3"/>
+              </svg>
+              <button class="pin" style="left:57%;top:39%" data-pin="p1">1</button>
+              <button class="pin" style="left:24%;top:88%" data-pin="p2">2</button>
+              <button class="pin" style="left:80%;top:70%" data-pin="p3">3</button>
+              <div class="pin-card" id="pinCard"><div class="pc-t"><span class="pcn" id="pcN">1</span><span id="pcT"></span></div><div class="pc-n" id="pcNote"></div></div>
+            </div>
+          </div>
+        </div>
+        <!-- 3D -->
+        <div class="bpane" id="p-d3">
+          <div class="ptool">
+            <button class="pt on" data-cam="iso">Iso</button>
+            <button class="pt" data-cam="front">Front</button>
+            <button class="pt" data-cam="top">Top</button>
+            <span class="ptsep"></span>
+            <button class="pt" id="d3shade">Shaded</button>
+            <span class="ptsep"></span><span class="ptmeta">monolith.obj</span>
+          </div>
+          <div class="stage3d">
+            <canvas id="mono3d"></canvas>
+            <div class="s3-card" id="s3card"><div class="pc-t"><span class="pcn" id="s3N">1</span><span id="s3T"></span></div><div class="pc-n" id="s3Note"></div></div>
+            <div class="s3-hint">drag to orbit · click pins</div>
+          </div>
+        </div>
+        <!-- WEB -->
+        <div class="bpane" id="p-web">
+          <div class="ptool">
+            <button class="pt on" id="devDesk">Desktop</button>
+            <button class="pt" id="devMob">Mobile</button>
+            <span class="ptsep"></span><span class="ptmeta">localhost:3000/preview · staged</span>
+          </div>
+          <div class="web-body"><div class="webwrap" id="webwrap"><div class="webpage">
+            <div class="wp-nav">
+              <span class="wp-logo"><svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"><path d="M7 1.5 12.5 7 7 12.5 1.5 7Z"/></svg></span>
+              <a>Product</a><a>Docs</a><a>Pricing</a><a>Changelog</a>
+              <button class="wp-cta">Get started</button>
+            </div>
+            <div class="wp-hero">
+              <span class="k">Generation 2 · Preview</span>
+              <h1>The quiet monolith.</h1>
+              <p>A single surface for every agent, artifact and approval. Staged build · session-4412.</p>
+              <div class="hbb"><button class="b1">Start a session</button><button class="b2">Read the plan</button></div>
+            </div>
+            <div class="wp-cards">
+              <div class="wp-card"><span class="wc-ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="3"/><path d="M8 5.4 10.4 6.8v2.8L8 10.9 5.6 9.6V6.8Z"/></svg></span><h3>Group rooms</h3><p>PM, builders and verifiers share one messenger stream with steer controls.</p></div>
+              <div class="wp-card"><span class="wc-ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="4" r="1.6"/><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M8 5.6v3M7 9.7l-1.8 1.6M9 9.7l1.8 1.6"/></svg></span><h3>Peer specialists</h3><p>Bots talk to bots — quotes, mentions and artifact cards inline.</p></div>
+              <div class="wp-card"><span class="wc-ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.4" width="12" height="11.2" rx="2.4"/><path d="M9.6 2.4v11.2"/></svg></span><h3>Arc-light browser</h3><p>Code, diff, plan, image, 3D and web previews ride beside the chat.</p></div>
+            </div>
+          </div></div></div>
+        </div>
+
+        <!-- FLOATING BOTTOM PILL DOCK -->
+        <div class="bdock" id="bdock">
+          <div class="dseg">
+            <button class="dbtn" data-tab="code"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m7 6.5-3.5 3.5L7 13.5M13 6.5l3.5 3.5-3.5 3.5"/></svg>Code</button>
+            <button class="dbtn" data-tab="diff"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h4l2-4 2 8 2-4h2"/></svg>Diff</button>
+            <button class="dbtn on" data-tab="plan"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M5 3.4h8.6L16.4 6v10.4H5z"/><path d="M13.4 3.4V6h3M8 9.4h5M8 12.4h5"/></svg>Plan</button>
+            <button class="dbtn" data-tab="img"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.4" y="4.4" width="13.2" height="11.2" rx="1.6"/><circle cx="7.4" cy="8.4" r="1.4"/><path d="m4.6 14.4 3.6-3.6 2.6 2.6 3-3 2.2 2.2"/></svg>Image</button>
+            <button class="dbtn" data-tab="d3"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 3.4 16.2 6.8 10 10.2 3.8 6.8z"/><path d="M3.8 6.8v6.4L10 16.6l6.2-3.4V6.8M10 10.2v6.4"/></svg>3D</button>
+            <button class="dbtn" data-tab="web"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="10" cy="10" r="6.6"/><path d="M3.4 10h13.2M10 3.4c-3.8 3.8-3.8 9.4 0 13.2M10 3.4c3.8 3.8 3.8 9.4 0 13.2"/></svg>Web</button>
+          </div>
+          <span class="dsep"></span>
+          <button class="dzoom" id="zoomBtn"><span id="zoomLbl">Fit</span><svg width="8" height="8" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m5.5 7.5 4.5 4.5 4.5-4.5"/></svg></button>
+          <button class="dann" id="annBtn" title="Annotations"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12v9H8l-4 3z"/></svg><span id="annBtnLbl">Notes</span><span class="dotc" id="annDot" style="display:none"></span></button>
+        </div>
+        <div class="zmenu" id="zmenu">
+          <button data-z="fit" class="on">Fit</button>
+          <button data-z="0.75">75%</button>
+          <button data-z="1">100%</button>
+          <button data-z="1.5">150%</button>
+        </div>
+
+        <!-- ANNOTATIONS DRAWER -->
+        <div class="andrawer" id="andrawer">
+          <div class="an-h">
+            <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12v9H8l-4 3z"/></svg>
+            Annotations<span class="cnt" id="anCnt">5</span><span class="sp"></span>
+            <span class="hint">click a note to jump to it</span>
+            <button class="iconb" id="anClose" style="width:20px;height:20px"><svg width="10" height="10" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m5 5 10 10M15 5 5 15"/></svg></button>
+          </div>
+          <div class="an-list" id="anList"></div>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+<div class="toast" id="toastEl"></div>
+
+<script>
+"use strict";
+/* ================================================================ helpers */
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function toast(m){const t=$('#toastEl');t.textContent=m;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),1800)}
+
+/* ================================================================ THINKING ORB (2D canvas) */
+function Orb(cv){
+  const ctx=cv.getContext('2d'),dpr=Math.min(devicePixelRatio||1,2);
+  let W,H,raf,t0=performance.now(),state=cv.dataset.orb||'idle';
+  const pts=[];const N=110;
+  for(let i=0;i<N;i++){const y=1-(i/(N-1))*2,r=Math.sqrt(1-y*y),th=i*2.399963;pts.push([Math.cos(th)*r,y,Math.sin(th)*r])}
+  function size(){const r=cv.getBoundingClientRect();W=r.width;H=r.height;cv.width=W*dpr;cv.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
+  size();new ResizeObserver(size).observe(cv);
+  function draw(now){
+    const dt=(now-t0)/1000;t0=now;
+    const speed=state==='idle'?0.25:state==='stream'?0.9:1.6;
+    Orb.rot=(Orb.rot||0)+dt*speed;
+    ctx.clearRect(0,0,W,H);
+    const cx=W/2,cy=H/2,R=Math.min(W,H)/2;
+    ctx.beginPath();ctx.arc(cx,cy,R-1.5,0,7);ctx.strokeStyle='#E4E4E7';ctx.lineWidth=1;ctx.stroke();
+    const breathe=state==='idle'?1:1+0.06*Math.sin(now/380);
+    const r0=(R-4)*breathe*.92;
+    for(const p of pts){
+      const[p0,p1,p2]=p;
+      const x=p0*Math.cos(Orb.rot)+p2*Math.sin(Orb.rot),z=-p0*Math.sin(Orb.rot)+p2*Math.cos(Orb.rot),y=p1;
+      const wob=state==='idle'?0:Math.sin(now/300+p1*4)*0.06;
+      const X=cx+(x+wob)*r0,Y=cy+(y*0.92)*r0;
+      const a=state==='idle'?0.18+0.28*(z+1)/2:0.22+0.6*(z+1)/2;
+      const s=(0.6+0.9*(z+1)/2)*(state==='idle'?0.8:1.1);
+      ctx.beginPath();ctx.arc(X,Y,Math.max(.35,s*(R/12)),0,7);
+      ctx.fillStyle='rgba(23,23,23,'+a.toFixed(3)+')';ctx.fill();
+    }
+    if(!reduced)raf=requestAnimationFrame(draw);
+  }
+  if(reduced){draw(performance.now());}
+  else raf=requestAnimationFrame(draw);
+  return{set(s){state=s},cv};
+}
+const orbs=[];
+function mountOrbs(root){(root||document).querySelectorAll('canvas[data-orb]').forEach(c=>{if(!c._orb){c._orb=Orb(c);orbs.push(c._orb)}})}
+
+/* ================================================================ BESPOKE BOT AVATARS */
+const AV={
+ pm:'<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="15.5" fill="#E8EAF0"/><path d="M16 8.4 23.8 21.8H8.2Z" fill="none" stroke="#3F4A5E" stroke-width="1.6" stroke-linejoin="round"/><path d="M12.2 17.6h7.6" stroke="#3F4A5E" stroke-width="1.6" stroke-linecap="round"/><circle cx="16" cy="13" r="1.8" fill="#3F4A5E"/></svg>',
+ builder:'<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="15.5" fill="#E4F0E4"/><rect x="8.6" y="14.4" width="14.8" height="4.6" rx="1" fill="none" stroke="#4C7A55" stroke-width="1.6"/><rect x="11.6" y="9.8" width="8.8" height="4.6" rx="1" fill="none" stroke="#4C7A55" stroke-width="1.6"/><rect x="12.4" y="19" width="7.2" height="3.4" rx="1" fill="#4C7A55"/></svg>',
+ sculpt:'<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="15.5" fill="#F6E5D9"/><path d="M16 8.2 23.6 12.4v7.8L16 24.6 8.4 20.2v-7.8Z" fill="none" stroke="#B05A28" stroke-width="1.6" stroke-linejoin="round"/><path d="M16 16.4 23.6 12.4M16 16.4v8.2M16 16.4 8.4 12.4" fill="none" stroke="#B05A28" stroke-width="1.6"/></svg>',
+ verif:'<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="15.5" fill="#E3EAF8"/><path d="M16 8.4 22.6 10.9v4.9c0 4.1-2.8 7-6.6 8.3-3.8-1.3-6.6-4.2-6.6-8.3v-4.9Z" fill="none" stroke="#3A5BA8" stroke-width="1.6" stroke-linejoin="round"/><path d="m13 16 2.2 2.2 4.1-4.5" fill="none" stroke="#3A5BA8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+ human:'<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="15.5" fill="#171717"/><text x="16" y="20.8" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="12.5" font-weight="600" fill="#F5F5F5">W</text></svg>',
+ devin:'<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="15.5" fill="#F1EFE9"/><circle cx="16" cy="16" r="5.6" fill="none" stroke="#171717" stroke-width="1.6"/><path d="M16 10.4v3.4M19.9 13 17.6 15M12.1 13l2.3 2M16 21.6v-3.4" stroke="#171717" stroke-width="1.6" stroke-linecap="round"/></svg>'
+};
+function av(k){return AV[k]}
+const BOT={
+ pm:{n:'Architect PM',k:'pm',role:'PM',rc:'slate',side:'r',qc:'q-slate'},
+ builder:{n:'Builder Bot',k:'builder',role:'BUILD',rc:'sage',side:'l',qc:'q-sage'},
+ sculpt:{n:'3D Sculptor',k:'sculpt',role:'3D',rc:'terr',side:'l',qc:'q-terr'},
+ verif:{n:'Verifier Bot',k:'verif',role:'QA',rc:'cob',side:'l',qc:'q-cob'},
+ human:{n:'Du',k:'human',role:'',rc:'',side:'r',qc:'q-ink'},
+ devin:{n:'Devin',k:'devin',role:'AGENT',rc:'slate',side:'l',qc:'q-ink'}
+};
+$$('[data-av]').forEach(el=>{el.innerHTML=AV[el.dataset.av]});
+
+/* ---------- chat-building helpers ---------- */
+const icoDoc='<svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M5 3.4h8.6L16.4 6v10.4H5z"/><path d="M13.4 3.4V6h3M8 9.4h5M8 12.4h5"/></svg>';
+const ico3d='<svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 3.4 16.2 6.8 10 10.2 3.8 6.8z"/><path d="M3.8 6.8v6.4L10 16.6l6.2-3.4V6.8M10 10.2v6.4"/></svg>';
+const icoImg='<svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.4" y="4.4" width="13.2" height="11.2" rx="1.6"/><circle cx="7.4" cy="8.4" r="1.4"/><path d="m4.6 14.4 3.6-3.6 2.6 2.6 3-3 2.2 2.2"/></svg>';
+const icoCode='<svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m7 6.5-3.5 3.5L7 13.5M13 6.5l3.5 3.5-3.5 3.5"/></svg>';
+const icoDiff='<svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h4l2-4 2 8 2-4h2"/></svg>';
+const acard=(tab,ico,title,sub)=>'<div class="acard" onclick="openBrowser(\''+tab+'\')"><span class="ai">'+ico+'</span><div><div class="an">'+title+'</div><div class="at">'+sub+'</div></div><svg class="go" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 4.5 13 10l-5.5 5.5"/></svg></div>';
+const ment=(k)=>'<span class="ment" onclick="toast(\'Opens '+BOT[k].n+' profile — demo\')">'+AV[k]+'@'+BOT[k].n+'</span>';
+const tpill=(dot,label,detail)=>'<div class="tpill"><div class="tpill-h" onclick="this.parentNode.classList.toggle(\'open\')"><span class="dot '+dot+'"></span><span>'+label+'</span><svg class="chev" width="10" height="10" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m7.5 5.5 4.5 4.5-4.5 4.5"/></svg></div><div class="tpill-b"><pre>'+detail+'</pre></div></div>';
+const qbar=(k,txt)=>'<div class="qbar '+BOT[k].qc+'"><span class="qav">'+AV[k]+'</span><span class="qt"><span class="qn">↳ '+BOT[k].n+'</span> · '+txt+'</span></div>';
+const vcheck=(rows)=>'<div class="vcheck">'+rows.map(r=>'<span class="vrow"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 6.2 2.4 2.4 4.6-5"/></svg><span class="cp">'+r+'</span></span>').join('')+'</div>';
+
+function gm(botKey,bodyHtml,opts){
+  opts=opts||{};const b=BOT[botKey];
+  const human=botKey==='human'?' human':'';
+  const cont=opts.cont?' cont':'';
+  const tail=opts.tail===false?'':' tail';
+  const role=b.role?'<span class="grole '+b.rc+'">'+b.role+'</span>':'';
+  const meta=opts.meta===false?'':'<div class="gmeta"><span class="gnm">'+b.n+'</span>'+role+'<span class="gtm">'+(opts.time||'')+'</span></div>';
+  return '<div class="gm '+b.side+human+cont+'"><span class="gav">'+av(b.k)+'</span><div class="gcol2">'+meta+'<div class="gbub'+tail+'">'+bodyHtml+'</div></div></div>';
+}
+
+/* ================================================================ MODE SWITCH */
+let mode='bots';
+function setMode(m){
+  mode=m;
+  $('#rChat').classList.toggle('on',m==='chat');
+  $('#rBots').classList.toggle('on',m==='bots');
+  $('#sideTitle').textContent=m==='chat'?'Sessions':'Bots';
+  $('#newLbl').textContent=m==='chat'?'New session':'New bot';
+  $('#sideChat').style.display=m==='chat'?'':'none';
+  $('#sideBots').style.display=m==='bots'?'':'none';
+  $('#tabLbl').textContent=m==='chat'?'Home':'Core Factory';
+  $('#roomMeta').style.display=m==='bots'?'':'none';
+  $('#ta').placeholder=m==='chat'?'Ask Devin to work on something…':'Message Core Factory — @ to mention a bot…';
+  $('#stripStatus').textContent=m==='chat'?'agent: Devin · idle':'room: Core Factory · idle';
+  renderStream();
+}
+$('#rChat').onclick=()=>setMode('chat');
+$('#rBots').onclick=()=>setMode('bots');
+
+/* ================================================================ STREAMS */
+function botsStream(){
+  let h='<div class="gcol"><div class="dayline">TODAY · 18:31 — 18:44 · CORE FACTORY</div>';
+  h+=gm('human','Ship the roadmap plan into the browser and get the hero monolith through QA before tomorrow\u2019s review. Keep everything inside the scoped worktree.',{time:'18:31'});
+  h+=gm('pm','Route locked. '+ment('builder')+' takes the pane contract, '+ment('sculpt')+' preps the gallery stage on <code>#F5F5F5</code>, '+ment('verif')+' holds the merge gate until the matrix is green.'+tpill('g','route_plan · room=core-factory','mentions: 3 resolved\nlead: architect-pm\ntickets: pane-contract, gallery-stage, merge-gate\nbudget: scoped worktree only'),{time:'18:32'});
+  h+=gm('builder',qbar('pm','Builder Bot takes the pane contract\u2026')+'Contract mounted — clicking <b>View changes</b> now routes straight into the Diff tab, and artifact cards deep-link per pane. '+ment('sculpt')+' your pins ride on the projection pass.'+acard('code',icoCode,'harness/router.ts','Code · session → bot routing · 412 lines')+tpill('g','edit_file · harness/router.ts','applied 2 hunks · +46 −3\nartifact:open events wired to dock\ntokens normalized to light spec'),{time:'18:34'});
+  h+=gm('sculpt',qbar('builder','your pins ride on the projection pass')+'Gallery stage is live — drag-orbit on the monolith, camera presets <code>Iso / Front / Top</code>, and the three pins exported from markup are clickable.'+acard('d3',ico3d,'monolith-scene.obj','3D preview · 3 pins · orbit'),{time:'18:37'});
+  h+=gm('human','Verifier gate stays until 24/24 — no merge on amber.',{time:'18:38'});
+  h+=gm('verif',qbar('human','Verifier gate stays until 24/24')+'Matrix re-ran clean on the staged worktree. Holding the gate open for the PM sign-off.'+vcheck(['api/schema.ts → updated','tests → 24/24 passing','diff → +383 −4 staged in worktree'])+acard('diff',icoDiff,'worktree diff','+383 −4 · 3 files · uncommitted'),{time:'18:39',tail:false});
+  h+=gm('verif','Second pass on the image annotations — pins P1\u2013P3 all resolve inside the frame, no drift at 150% zoom.',{time:'18:40',cont:true});
+  h+=gm('pm','Sign-off granted. Flipping the roadmap checkboxes and parking the release note in the plan.'+acard('plan',icoDoc,'roadmap.md','Plan · rendered markdown · 2 notes'),{time:'18:44'});
+  h+='<div id="liveTurn"></div><div class="stream-foot"></div></div>';
+  return h;
+}
+function chatStream(){
+  let h='<div class="gcol"><div class="dayline">TODAY · SESSION-4412</div>';
+  h+=gm('human','Audit the dashboard preview, update the release plan, and wire the monolith scene into the 3D tab.',{time:'18:41'});
+  h+=gm('devin','Reviewed the preview and the plan. The monolith scene is mounted in the 3D tab with orbit controls and three annotation pins — the diff tray above the composer reflects the working tree.'+tpill('g','read_file · docs/roadmap.md','214 lines · checklist + callouts parsed')+tpill('g','edit · 3 files','harness/router.ts      +46 −3\ndocs/roadmap.md       +58 −4\nui/browserPane.ts     +13 −0')+acard('plan',icoDoc,'roadmap.md','Plan · 2 annotations')+acard('img',icoImg,'hero-wireframe.png','Image · click to pin'),{time:'18:42'});
+  h+='<div id="liveTurn"></div><div class="stream-foot"></div></div>';
+  return h;
+}
+function renderStream(){
+  const s=$('#stream');
+  s.innerHTML=mode==='chat'?chatStream():botsStream();
+  mountOrbs(s);s.scrollTop=s.scrollHeight;
+}
+
+/* ================================================================ COMPOSER */
+const ta=$('#ta'),sendBtn=$('#sendBtn');
+let busy=false;
+ta.addEventListener('input',()=>{
+  sendBtn.classList.toggle('off',!ta.value.trim()||busy);
+  ta.style.height='auto';ta.style.height=Math.min(150,ta.scrollHeight)+'px';
+  if(ta.value==='/'){openPop('slash')}else if(!ta.value.startsWith('/'))$('#popSlash').classList.remove('show');
+});
+ta.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}
+  if(e.key==='Escape')closePops();
+});
+sendBtn.onclick=send;
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+function typingBubble(botKey,label){
+  const b=BOT[botKey];
+  const d=document.createElement('div');
+  d.className='gm '+b.side;
+  d.innerHTML='<span class="gav">'+av(b.k)+'</span><div class="gcol2"><div class="gbub tail"><span class="typing"><canvas width="20" height="20" data-orb="think"></canvas><span class="tlbl"><b>'+b.n+'</b> '+label+'</span></span></div></div>';
+  return d;
+}
+async function send(){
+  const txt=ta.value.trim();if(!txt||busy)return;
+  closePops();busy=true;
+  const s=$('#stream'),foot=s.querySelector('.stream-foot');
+  const u=document.createElement('div');u.innerHTML=gm('human',esc(txt),{time:new Date().toTimeString().slice(0,5)});
+  foot.before(u.firstElementChild);
+  ta.value='';ta.dispatchEvent(new Event('input'));
+  s.scrollTop=s.scrollHeight;
+  $('#stripStatus').textContent=mode==='chat'?'agent: Devin · thinking…':'room: Core Factory · thinking…';
+  const tb=typingBubble(mode==='chat'?'devin':'builder',mode==='chat'?'is thinking…':'is drafting a reply…');
+  foot.before(tb);mountOrbs(tb);s.scrollTop=s.scrollHeight;
+  await wait(reduced?250:1500);
+  tb.remove();
+  if(mode==='chat'){
+    const d=document.createElement('div');
+    d.innerHTML=gm('devin','Done — mapped the request to the pane contract, staged the edits and re-checked the light-mode tokens. '+acard('diff',icoDiff,'worktree diff','+383 −4 · review in the Diff tab'),{time:'just now'});
+    foot.before(d.firstElementChild);
+  }else{
+    const d=document.createElement('div');
+    d.innerHTML=gm('builder',qbar('human',esc(txt.slice(0,64)))+'On it — I\u2019ll fold that into the pane contract and echo back a diff card when the worktree is staged. '+ment('verif')+' keep the gate warm.'+tpill('a','queue_ticket · pane-contract','priority: high\nassignee: builder-bot\ngate: verifier 24/24'),{time:'just now'});
+    foot.before(d.firstElementChild);
+  }
+  s.scrollTop=s.scrollHeight;
+  busy=false;sendBtn.classList.toggle('off',!ta.value.trim());
+  $('#stripStatus').textContent=mode==='chat'?'agent: Devin · idle':'room: Core Factory · idle';
+}
+$('#micBtn').onclick=function(){if(this._on)return;this._on=1;this.style.color='var(--red)';toast('Listening…');setTimeout(()=>{this._on=0;this.style.color='';toast('Voice captured — demo')},2000)};
+
+/* ================================================================ POPOVERS */
+const pops={attach:$('#popAttach'),slash:$('#popSlash'),auto:$('#popAuto'),eff:$('#popEff'),model:$('#popModel'),env:$('#envPop'),wt:$('#wtPop'),fold:$('#foldPop')};
+function closePops(){Object.values(pops).forEach(p=>p.classList.remove('show'));$('#zmenu').classList.remove('on')}
+function openPop(k){const p=pops[k];const was=p.classList.contains('show');closePops();if(!was)p.classList.add('show')}
+$('#attachBtn').onclick=e=>{e.stopPropagation();openPop('attach')};
+$('#slashBtn').onclick=e=>{e.stopPropagation();openPop('slash')};
+$('#autoBtn').onclick=e=>{e.stopPropagation();openPop('auto')};
+$('#effBtn').onclick=e=>{e.stopPropagation();openPop('eff')};
+$('#modelBtn').onclick=e=>{e.stopPropagation();openPop('model')};
+function stripPop(btn,k){btn.onclick=e=>{e.stopPropagation();const r=btn.getBoundingClientRect();const zr=$('.dock-in').getBoundingClientRect();pops[k].style.left=(r.left-zr.left-4)+'px';pops[k].style.bottom=(zr.bottom-r.top+6)+'px';openPop(k)}}
+stripPop($('#envChip'),'env');stripPop($('#wtChip'),'wt');stripPop($('#foldChip'),'fold');
+document.addEventListener('click',e=>{if(!e.target.closest('.pop,.zmenu,#attachBtn,#slashBtn,#autoBtn,#effBtn,#modelBtn,.si,#zoomBtn'))closePops()});
+$('#popAttach').addEventListener('click',e=>{const pi=e.target.closest('.pi');if(!pi)return;closePops();toast(pi.textContent.trim())});
+$('#popSlash').addEventListener('click',e=>{const pi=e.target.closest('.pi');if(!pi)return;
+  ta.value='';ta.dispatchEvent(new Event('input'));closePops();
+  if(pi.dataset.c==='/browser')openBrowser('web');else if(pi.dataset.c==='/review')openBrowser('diff');else toast(pi.dataset.c+' queued')});
+$('#popAuto').addEventListener('click',e=>{const pi=e.target.closest('.pi');if(!pi)return;
+  const lvl=pi.dataset.a;$('#autoBtn').dataset.level=lvl;
+  $('#autoLbl').textContent=lvl==='medium'?'Medium':lvl.charAt(0).toUpperCase()+lvl.slice(1);
+  $$('#popAuto .pi .ck').forEach(c=>c.remove());
+  pi.insertAdjacentHTML('beforeend','<svg class="ck" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 10.5 3.2 3.2L15 7"/></svg>');
+  closePops();toast('Autonomy → '+lvl)});
+$('#popModel').addEventListener('click',e=>{const pi=e.target.closest('.pi');if(!pi)return;
+  $$('#popModel .pi .ck').forEach(c=>c.remove());
+  pi.insertAdjacentHTML('beforeend','<svg class="ck" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 10.5 3.2 3.2L15 7"/></svg>');
+  $('#modelLbl').textContent=pi.dataset.m;$('#effModelLbl').textContent=pi.dataset.m;closePops();toast('Model → '+pi.dataset.m)});
+$('#envPop').addEventListener('click',e=>{const pi=e.target.closest('.pi');if(!pi)return;$('#envLbl').textContent=pi.dataset.e;closePops()});
+$('#wtPop').addEventListener('click',e=>{const pi=e.target.closest('.pi');if(!pi)return;$('#wtLbl').textContent=pi.dataset.w;closePops()});
+$('#foldPop').addEventListener('click',e=>{const pi=e.target.closest('.pi');if(!pi)return;$('#foldLbl').textContent=pi.dataset.f;closePops()});
+
+/* ================================================================ AUFWAND STEPPED SLIDER */
+const EFF=['Niedrig','Mittel','Hoch','Max'];
+let effI=2;
+const eslIn=$('#eslIn');
+function setEff(i,quiet){
+  effI=Math.max(0,Math.min(3,i));
+  const p=effI/3*100;
+  $('#eslFill').style.width=p+'%';
+  $('#eslThumb').style.left=p+'%';
+  $$('#eslIn .esl-dot').forEach((d,k)=>d.classList.toggle('fill',k<=effI));
+  $('#eslLvl').textContent=EFF[effI];
+  $('#effLvl').textContent=EFF[effI];
+  $('#effFillMini').style.width=((effI+1)/4*100)+'%';
+  $$('#eslTicks span').forEach((t,k)=>t.classList.toggle('on',k===effI));
+  if(!quiet)toast('Aufwand → '+EFF[effI]);
+}
+function effFromX(clientX){
+  const r=eslIn.getBoundingClientRect();
+  const f=Math.max(0,Math.min(1,(clientX-r.left)/r.width));
+  return Math.round(f*3);
+}
+eslIn.addEventListener('pointerdown',e=>{
+  e.preventDefault();e.stopPropagation();
+  eslIn.classList.add('drag');eslIn.setPointerCapture(e.pointerId);
+  setEff(effFromX(e.clientX),true);
+  const mv=ev=>setEff(effFromX(ev.clientX),true);
+  const up=ev=>{eslIn.classList.remove('drag');setEff(effFromX(ev.clientX));
+    removeEventListener('pointermove',mv);removeEventListener('pointerup',up)};
+  addEventListener('pointermove',mv);addEventListener('pointerup',up);
+});
+setEff(2,true);
+
+/* ================================================================ SIDEBAR GROUPS + ROWS */
+$$('.slab').forEach(s=>s.onclick=()=>{s.classList.toggle('closed');$('#'+s.dataset.g).style.display=s.classList.contains('closed')?'none':''});
+$$('.srow,.botrow').forEach(r=>r.addEventListener('click',()=>{
+  r.parentElement.querySelectorAll('.srow,.botrow').forEach(x=>x.classList.remove('on'));r.classList.add('on');
+}));
+$('#hideSide').onclick=()=>{const sd=$('.side');sd.style.display=sd.style.display==='none'?'':'none'};
+$('#newBtn').onclick=()=>toast(mode==='chat'?'New session — Ctrl N':'New bot — draft spec first');
+
+/* ================================================================ ARC-LIGHT BROWSER */
+const browser=$('#browser'),gutter=$('#gutter'),bIn=$('#bIn');
+let bOpen=true,bW=470;
+function setB(w){bW=Math.max(320,Math.min(720,w));browser.style.width=bW+'px'}
+function openBrowser(tab){
+  if(!bOpen){bOpen=true;setB(bW);gutter.style.display='';$('#browserToggle').classList.add('on')}
+  if(tab)setBTab(tab);
+}
+function closeBrowser(){bOpen=false;browser.style.width='0px';gutter.style.display='none';$('#browserToggle').classList.remove('on')}
+const URLS={
+  code:'botfactory://mixar/code/<b>router.ts</b>',
+  diff:'botfactory://mixar/diff/<b>worktree</b>',
+  plan:'botfactory://mixar/plans/<b>roadmap.md</b>',
+  img:'botfactory://mixar/assets/<b>hero-wireframe.png</b>',
+  d3:'botfactory://mixar/scene/<b>monolith.obj</b>',
+  web:'botfactory://mixar/preview/<b>localhost:3000</b>'
+};
+const TABNAMES={code:'Code',diff:'Diff',plan:'Plan',img:'Image',d3:'3D',web:'Web'};
+let curTab='plan',tabHist=['plan'];
+function setBTab(t,skipHist){
+  curTab=t;
+  if(!skipHist&&tabHist[tabHist.length-1]!==t){tabHist.push(t);if(tabHist.length>30)tabHist.shift()}
+  $$('#bdock .dbtn').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));
+  $$('.bpane').forEach(p=>p.classList.remove('on'));
+  $('#p-'+t).classList.add('on');
+  $('#urlTxt').innerHTML=URLS[t]||'';
+  $('#imgPinHint').textContent=document.body.classList.contains('annotate')?'annotate mode — click to pin':'navigate mode';
+  if(t==='d3')setTimeout(()=>mono&&mono.size(),40);
+  if(t==='img')applyZoom();
+  renderAnnList();
+}
+$('#bdock').addEventListener('click',e=>{const b=e.target.closest('.dbtn');if(b)setBTab(b.dataset.tab)});
+$('#browserToggle').onclick=()=>bOpen?closeBrowser():openBrowser();
+$('#brClose').onclick=closeBrowser;
+$('#brReload').onclick=()=>{toast(TABNAMES[curTab]+' reloaded');if(curTab==='d3'&&mono)mono.reset();setBTab(curTab,true)};
+$('#brBack').onclick=()=>{if(tabHist.length>1){tabHist.pop();setBTab(tabHist[tabHist.length-1],true)}};
+$('#brFwd').onclick=()=>toast('Forward stack empty');
+gutter.addEventListener('mousedown',e=>{
+  e.preventDefault();gutter.classList.add('dr');
+  const mv=ev=>{const w=innerWidth-ev.clientX;if(w<220){closeBrowser()}else setB(w)};
+  const up=()=>{gutter.classList.remove('dr');removeEventListener('mousemove',mv);removeEventListener('mouseup',up)};
+  addEventListener('mousemove',mv);addEventListener('mouseup',up);
+});
+/* Navigate / Annotate mode */
+$('#naPill').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b)return;
+  const ann=b.dataset.na==='ann';
+  $$('#naPill button').forEach(x=>x.classList.toggle('on',x===b));
+  document.body.classList.toggle('annotate',ann);
+  $('#imgPinHint').textContent=ann?'annotate mode — click to pin':'navigate mode';
+  toast(ann?'Annotate mode — click blocks & frames':'Navigate mode');
+});
+$('#anClose').onclick=()=>$('#andrawer').classList.remove('on');
+$('#annBtn').onclick=e=>{e.stopPropagation();$('#andrawer').classList.toggle('on');renderAnnList()};
+/* zoom */
+let zoom='fit';
+$('#zoomBtn').onclick=e=>{e.stopPropagation();$('#zmenu').classList.toggle('on')};
+$$('#zmenu button').forEach(b=>b.onclick=e=>{e.stopPropagation();zoom=b.dataset.z;
+  $$('#zmenu button').forEach(x=>x.classList.toggle('on',x===b));
+  $('#zoomLbl').textContent=zoom==='fit'?'Fit':Math.round(zoom*100)+'%';
+  $('#zmenu').classList.remove('on');applyZoom()});
+function applyZoom(){
+  const z=zoom==='fit'?1:parseFloat(zoom);
+  $$('.bpane').forEach(p=>p.style.setProperty('--pz',z));
+  const frame=$('#imgFrame'),stage=$('.img-stage');
+  if(frame&&stage){
+    if(zoom==='fit'){
+      const avail=Math.min(stage.clientWidth-36,620);
+      frame.style.transform='scale('+Math.min(1,avail/560)+')';
+    }else frame.style.transform='scale('+z+')';
+  }
+  $('#webwrap').style.transform=zoom==='fit'?'':'scale('+Math.min(z,1.5)+')';
+}
+
+/* ================================================================ CODE TAB */
+const FILES=[
+`// system/harness/router.ts — session → bot routing
+import { RoomBus } from "./bus";
+import { ThinkingOrb } from "./orb";
+
+export class Harness {
+  private bus = new RoomBus();
+  private orb = new ThinkingOrb({ dots: 110 });
+
+  route(msg: TaskMsg) {
+    const room = this.bus.roomFor(msg.workstream);
+    this.orb.set("thinking");
+    return room.dispatch(msg);
+  }
+
+  // group-room messages fan out to every
+  // mentioned bot, then to the room lead
+  mentions(text: string): string[] {
+    return text.match(/@\\w+/g) ?? [];
+  }
+}`,
+`// Composer.tsx — precision input deck
+export function Composer() {
+  const [autonomy, setAutonomy] = useState("medium");
+  const [effort, setEffort] = useState("hoch");
+
+  return (
+    <Deck radius={12}>
+      <AutonomyBars steps={["spec","low","medium","high"]}
+        value={autonomy} onChange={setAutonomy} />
+      <AufwandSlider stops={["niedrig","mittel","hoch","max"]}
+        value={effort} onChange={setEffort} />
+      <SendButton shape="square-rounded" />
+    </Deck>
+  );
+}`,
+`{
+  "contract": "bot-factory/ui@2",
+  "palette": {
+    "canvas": "#FFFFFF",
+    "surface": "#FAFAFA",
+    "hairline": "#EBEBEB",
+    "ink": "#171717",
+    "aufwand": "#D95D22"
+  },
+  "icons": { "stroke": 1.5, "caps": "round" },
+  "bans": ["dark-mode", "purple-gradient", "emoji-icon"]
+}`];
+function tintLine(line){
+  const esc2=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  let ci=-1,inQ=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(inQ){if(ch==='"')inQ=false;continue}
+    if(ch==='"'){inQ=true;continue}
+    if(ch==='/'&&line[i+1]==='/'){ci=i;break}
+  }
+  const code=ci>=0?line.slice(0,ci):line,com=ci>=0?line.slice(ci):'';
+  let out='',i=0;
+  while(i<code.length){
+    if(code[i]==='"'){
+      let j=i+1;while(j<code.length&&code[j]!=='"')j++;
+      out+='<span class="tk-s">'+esc2(code.slice(i,j+1))+'</span>';i=j+1;continue;
+    }
+    let j=i;while(j<code.length&&code[j]!=='"')j++;
+    out+=esc2(code.slice(i,j))
+      .replace(/\b(import|export|from|class|private|async|await|const|return|new|function|Number|process|if|else|for|of|in|useState)\b/g,'<span class="tk-k">$1</span>')
+      .replace(/\b(\d+)\b/g,'<span class="tk-n">$1</span>');
+    i=j;
+  }
+  if(com)out+='<span class="tk-c">'+esc2(com)+'</span>';
+  return out;
+}
+function renderCode(i){
+  $('#codeview').innerHTML=FILES[i].split('\n').map((l,n)=>'<div class="cl"><span class="ln">'+(n+1)+'</span><span class="cc">'+(tintLine(l)||' ')+'</span></div>').join('');
+}
+renderCode(0);
+$('#filepick').addEventListener('click',e=>{const c=e.target.closest('.pt');if(!c||!c.dataset.f)return;$$('#filepick .pt').forEach(x=>x.classList.remove('on'));c.classList.add('on');renderCode(+c.dataset.f)});
+
+/* ================================================================ DIFF TAB */
+const DIFF=[
+{f:'harness/router.ts · +46 −3',rows:[
+ ['h','@@ -18,6 +18,12 @@ route(msg: TaskMsg) @@'],
+ ['d','-  return room.dispatch(msg);'],
+ ['a','+  const route = room.dispatch(msg);'],
+ ['a','+  this.orb.set("thinking");'],
+ ['a','+  emit("artifact:open", { tab: "diff" });'],
+ ['a','+  return route;'],
+ [' ',' }'],
+ [' ',''],
+ ['h','@@ -30,2 +36,7 @@ mentions(text) @@'],
+ ['a','+  pins.forEach(p => drawPin(project(p.pos, view), p.label));'],
+ ['a','+  emit("pin:placed", pins.length);']]},
+{f:'docs/roadmap.md · +58 −4',rows:[
+ ['h','@@ -12,4 +12,8 @@'],
+ ['d','-- [ ] Orbit camera + drag controls on canvas'],
+ ['a','+- [x] Orbit camera + drag controls on canvas'],
+ ['a','+- [x] Annotation pins projected with mesh'],
+ [' ',' - [ ] Ground shadow pass under monolith'],
+ ['a','+> Verified against session-4412 build.']]},
+{f:'ui/browserPane.ts · +13',rows:[
+ ['h','@@ -41,7 +41,16 @@ mountPane(root) @@'],
+ ['a','+  root.addEventListener("artifact:open", e => {'],
+ ['a','+    openBrowser(e.detail.tab);'],
+ ['a','+  });'],
+ [' ','   wireResize(root);'],
+ [' ',' }']]}];
+$('#diffview').innerHTML='<div class="diff-sum"><span style="font-weight:600">3 files changed</span><span class="d-chip add">+383</span><span class="d-chip del">−4</span><span class="mono" style="font-size:10px;color:var(--mut);margin-left:auto">bf/feat-ui → main</span></div>'+
+DIFF.map(d=>'<div class="diff-file"><div class="df-head"><span class="dfn">'+d.f+'</span></div><div class="df-body">'+d.rows.map((r,i)=>'<div class="dl '+(r[0]===' '?'':r[0])+'"><span class="dln">'+(i+40)+'</span><span class="dlc">'+esc(r[1])+'</span></div>').join('')+'</div></div>').join('');
+
+/* ================================================================ PLAN TAB (rendered markdown + annotate) */
+const DOC=[
+ ['kicker','Mixar · Roadmap · v2 draft'],
+ ['h1','Release plan — Monolith landing'],
+ ['meta','owner: architect-pm · reviewers: verifier-bot · updated 18:44'],
+ ['p','Ship the wireframe monolith scene to the public preview before Friday\u2019s review. Scope is intentionally thin: one hero, one capture card, one plan.'],
+ ['h2','Workstream A · Scene'],
+ ['chk',[['Orbit camera + drag controls on canvas',true],['Annotation pins projected with mesh',true],['Ground shadow pass under monolith',false],['Camera presets — Iso / Front / Top',true]]],
+ ['h2','Workstream B · Copy'],
+ ['chk',[['Replace lorem hero with v2 headline',false],['Press card: 40h battery spec sync',false]]],
+ ['callout','Open question: keep the Web preview on the staged build or flip to prod once QA signs off? Flag for Friday review.'],
+ ['quote','\u201cThe browser sidebar is the studio — every artifact the room touches should be one click from the chat.\u201d — Architect PM'],
+ ['p','Verifier holds the merge gate at 24/24. Annotations left here route back into the room as steer notes for the PM.']
+];
+let annSeq=0;
+function renderDoc(){
+  const d=$('#docInner');d.innerHTML='';
+  DOC.forEach((row,i)=>{
+    const t=row[0];
+    if(t==='kicker'){d.insertAdjacentHTML('beforeend','<span class="kicker">'+row[1]+'</span>');return}
+    if(t==='h1'){d.insertAdjacentHTML('beforeend','<h1>'+row[1]+'</h1>');return}
+    if(t==='meta'){d.insertAdjacentHTML('beforeend','<div class="dmeta"><span>'+row[1]+'</span></div>');return}
+    if(t==='h2'){d.insertAdjacentHTML('beforeend','<h2 class="ann-line">'+row[1]+'<button class="ann-add" data-ln="'+i+'">+</button><span class="ann-pin"></span></h2>');return}
+    if(t==='chk'){
+      const c=document.createElement('div');c.className='checklist ann-line';
+      c.innerHTML=row[1].map(([tt,on])=>'<span class="ci"><span class="cb '+(on?'on':'')+'">'+(on?'<svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 5.4 2 2 4-4.4"/></svg>':'')+'</span>'+tt+'</span>').join('')+'<button class="ann-add" data-ln="'+i+'">+</button><span class="ann-pin"></span>';
+      d.appendChild(c);return;
+    }
+    if(t==='callout'){
+      d.insertAdjacentHTML('beforeend','<div class="callout ann-line"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.4 3.6 15a1 1 0 0 0 .9 1.6h11a1 1 0 0 0 .9-1.6z"/><path d="M10 8v3.6M10 14.2v.2"/></svg><span>'+row[1]+'</span><button class="ann-add" data-ln="'+i+'" style="right:6px">+</button><span class="ann-pin" style="right:8px"></span></div>');return;
+    }
+    if(t==='quote'){d.insertAdjacentHTML('beforeend','<div class="quote ann-line">'+row[1]+'<button class="ann-add" data-ln="'+i+'">+</button><span class="ann-pin"></span></div>');return}
+    d.insertAdjacentHTML('beforeend','<div class="ann-line"><p>'+row[1]+'</p><button class="ann-add" data-ln="'+i+'">+</button><span class="ann-pin"></span></div>');
+  });
+  $$('.ann-add',d).forEach(b=>b.onclick=e=>{e.stopPropagation();addAnnotation(b.parentElement)});
+}
+function addAnnotation(line){
+  if(line.querySelector('.ann-editor'))return;
+  if(!document.body.classList.contains('annotate')){$$('#naPill button')[1].click()}
+  const ed=document.createElement('div');ed.className='ann-editor';
+  ed.innerHTML='<input placeholder="Add a steer note…" /><button>Note</button>';
+  line.appendChild(ed);$('input',ed).focus();
+  const commit=()=>{
+    const v=$('input',ed).value.trim();ed.remove();if(!v)return;
+    annSeq++;line.classList.add('has-ann');
+    const n=document.createElement('div');n.className='ann-note';
+    n.innerHTML='<span>⌦ '+esc(v)+'</span><button class="an-x" title="Remove">×</button>';
+    $('.an-x',n).onclick=()=>{n.remove();line.classList.remove('has-ann');annSeq--;updAnn();renderAnnList()};
+    line.appendChild(n);updAnn();renderAnnList();toast('Steer note added');
+  };
+  $('button',ed).onclick=commit;
+  $('input',ed).addEventListener('keydown',e=>{if(e.key==='Enter')commit();if(e.key==='Escape')ed.remove()});
+}
+function updAnn(){
+  const c=$('#annCount');c.textContent=annSeq+' note'+(annSeq===1?'':'s');c.style.display=annSeq?'':'none';
+  $('#annDot').style.display=(annSeq||pinNotes.length)?'':'none';
+}
+renderDoc();
+
+/* ================================================================ IMAGE PINS */
+const IMG_PINS={
+ p1:{n:'1',t:'Hero headline',note:'Tracking feels tight at 30px — confirm against the 34px spec on the staging shot.'},
+ p2:{n:'2',t:'Footer slab',note:'Ground-level meta block. Confirm the 8px cap height matches the grid snap.'},
+ p3:{n:'3',t:'Wireframe monolith',note:'Stroke-weight reads 1.4px — keep parity with the canvas render.'}
+};
+const pinNotes=[];
+let pinSeq=3;
+$$('#imgFrame .pin').forEach(p=>p.onclick=e=>{
+  e.stopPropagation();
+  const c=$('#pinCard'),d=IMG_PINS[p.dataset.pin]||{n:p.textContent,t:'Pin '+p.textContent,note:'Dropped annotation pin.'};
+  if(p.classList.contains('on')){$$('#imgFrame .pin').forEach(x=>x.classList.remove('on'));c.classList.remove('on');return}
+  $$('#imgFrame .pin').forEach(x=>x.classList.remove('on'));p.classList.add('on');
+  $('#pcN').textContent=d.n;$('#pcT').textContent=d.t;$('#pcNote').textContent=d.note;
+  const fr=$('#imgFrame').getBoundingClientRect(),pr=p.getBoundingClientRect();
+  const sc=fr.width/560||1;
+  c.style.left=Math.min(Math.max((pr.left-fr.left)/sc-40,8),560-220)+'px';
+  c.style.top=((pr.top-fr.top)/sc+28)+'px';c.classList.add('on');
+});
+$('#imgFrame').addEventListener('click',e=>{
+  if(e.target.closest('.pin'))return;
+  $$('#imgFrame .pin').forEach(x=>x.classList.remove('on'));$('#pinCard').classList.remove('on');
+  if(!document.body.classList.contains('annotate'))return;
+  const r=$('#imgFrame').getBoundingClientRect();
+  const sc2=560/r.width||1;
+  const x=(e.clientX-r.left)*sc2/560*100,y=(e.clientY-r.top)*sc2/330*100;
+  pinSeq++;const p=document.createElement('button');p.className='pin';p.style.left=x+'%';p.style.top=y+'%';p.textContent=pinSeq;p.dataset.pin='u'+pinSeq;
+  p.onclick=ev=>{ev.stopPropagation();$$('#imgFrame .pin').forEach(m=>m.classList.remove('on'));p.classList.add('on')};
+  $('#imgFrame').appendChild(p);
+  pinNotes.push({n:pinSeq,x:x.toFixed(0),y:y.toFixed(0)});
+  updAnn();renderAnnList();toast('Pin '+pinSeq+' placed');
+});
+
+/* ================================================================ 3D MONOLITH (orbit + presets + shaded) */
+class Mono3D{
+  constructor(c){
+    this.c=c;this.x=c.getContext('2d');
+    this.yaw=0.6;this.pitch=-0.32;this.auto=true;this.drag=null;this.shaded=false;this.moved=0;
+    const w=1.1,h=2.9,d=1.1,gw=4.4;
+    this.v=[
+      [-w/2,0,-d/2],[w/2,0,-d/2],[w/2,0,d/2],[-w/2,0,d/2],
+      [-w/2,-h,-d/2],[w/2,-h,-d/2],[w/2,-h,d/2],[-w/2,-h,d/2],
+      [-gw/2,0,-gw/2],[gw/2,0,-gw/2],[gw/2,0,gw/2],[-gw/2,0,gw/2]
+    ];
+    this.e=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7],
+      [8,9],[9,10],[10,11],[11,8],[4,6],[5,7],[0,2]];
+    this.f=[[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7],[4,5,6,7],[0,3,2,1]];
+    this.pins=[{p:[w/2,-h,d/2],n:1,t:'Crown beacon',note:'Emits the status pulse — tied to the room state.'},
+               {p:[w/2,-h*0.5,-d/2],n:2,t:'Mid joint',note:'Load seam between telemetry and control slabs.'},
+               {p:[-w/2,0,d/2],n:3,t:'Base anchor',note:'Snaps to the plaza grid at 1-stud pitch.'}];
+    this.sel=-1;
+    c.addEventListener('pointerdown',e=>{this.drag={x:e.clientX,y:e.clientY};this.moved=0;this.auto=false});
+    addEventListener('pointermove',e=>{if(this.drag){const dx=e.clientX-this.drag.x,dy=e.clientY-this.drag.y;this.moved+=Math.abs(dx)+Math.abs(dy);this.yaw+=dx*0.008;this.pitch=Math.max(-1.35,Math.min(0.4,this.pitch-dy*0.006));this.drag={x:e.clientX,y:e.clientY}}});
+    addEventListener('pointerup',()=>{this.drag=null});
+    c.addEventListener('click',e=>{if(this.moved<6)this.hitTest(e)});
+    this.size();new ResizeObserver(()=>this.size()).observe(c.parentElement);
+    if(!reduced)this.loop();else this.draw();
+  }
+  size(){const r=this.c.parentElement.getBoundingClientRect();const d=devicePixelRatio||1;this.c.width=r.width*d;this.c.height=r.height*d;this.W=r.width;this.H=r.height;this.draw()}
+  loop(){const f=()=>{if(this.auto)this.yaw+=0.004;this.draw();this.raf=requestAnimationFrame(f)};this.raf=requestAnimationFrame(f)}
+  cam(name){this.auto=false;
+    if(name==='iso'){this.yaw=0.6;this.pitch=-0.32}
+    if(name==='front'){this.yaw=0;this.pitch=-0.06}
+    if(name==='top'){this.yaw=0.6;this.pitch=-1.25}
+    this.draw()}
+  proj(p){
+    let[x,y,z]=p;
+    let X=x*Math.cos(this.yaw)+z*Math.sin(this.yaw),Z=-x*Math.sin(this.yaw)+z*Math.cos(this.yaw);
+    let Y=y*Math.cos(this.pitch)-Z*Math.sin(this.pitch);Z=y*Math.sin(this.pitch)+Z*Math.cos(this.pitch);
+    const dist=6,f=dist/(dist+Z),s=Math.min(this.W,this.H)*0.16;
+    return [this.W/2+X*s*f,this.H*0.62+Y*s*f,f,Z];
+  }
+  draw(){
+    const x=this.x,d=devicePixelRatio||1;x.setTransform(d,0,0,d,0,0);
+    x.clearRect(0,0,this.W,this.H);
+    const pr=this.v.map(v=>this.proj(v));
+    x.lineWidth=1;x.strokeStyle='#E0E0E3';
+    for(const[a,b]of this.e.slice(12,16)){x.beginPath();x.moveTo(pr[a][0],pr[a][1]);x.lineTo(pr[b][0],pr[b][1]);x.stroke()}
+    if(this.shaded){
+      const L=[0.5,0.8,0.35];
+      const faces=this.f.map(f=>{
+        const avgZ=f.reduce((s,i)=>s+pr[i][3],0)/4;
+        return{f,avgZ};
+      }).sort((a,b)=>b.avgZ-a.avgZ);
+      for(const{f}of faces){
+        const v0=this.v[f[0]],v1=this.v[f[1]],v2=this.v[f[2]];
+        const u=[v1[0]-v0[0],v1[1]-v0[1],v1[2]-v0[2]],w=[v2[0]-v0[0],v2[1]-v0[1],v2[2]-v0[2]];
+        const n=[u[1]*w[2]-u[2]*w[1],u[2]*w[0]-u[0]*w[2],u[0]*w[1]-u[1]*w[0]];
+        const nl=Math.hypot(n[0],n[1],n[2])||1;
+        const dot=(n[0]*L[0]+n[1]*L[1]+n[2]*L[2])/nl;
+        const shade=Math.round(232+dot*20);
+        x.beginPath();x.moveTo(pr[f[0]][0],pr[f[0]][1]);
+        for(let i=1;i<4;i++)x.lineTo(pr[f[i]][0],pr[f[i]][1]);
+        x.closePath();
+        x.fillStyle='rgb('+shade+','+shade+','+Math.min(255,shade+2)+')';x.fill();
+      }
+    }
+    x.lineWidth=1.3;x.strokeStyle=this.shaded?'#26262A':'#3A3A3E';
+    for(const[a,b]of this.e.slice(0,12)){x.beginPath();x.moveTo(pr[a][0],pr[a][1]);x.lineTo(pr[b][0],pr[b][1]);x.stroke()}
+    x.lineWidth=0.8;x.strokeStyle='#A8A8A8';x.setLineDash([3,3]);
+    for(const[a,b]of this.e.slice(16)){x.beginPath();x.moveTo(pr[a][0],pr[a][1]);x.lineTo(pr[b][0],pr[b][1]);x.stroke()}
+    x.setLineDash([]);
+    this.pinPos=this.pins.map(pn=>{const[sx,sy]=this.proj(pn.p);
+      x.beginPath();x.arc(sx,sy,9,0,7);x.fillStyle=pn===this.pins[this.sel]?'#171717':'#FFFFFF';x.fill();
+      x.lineWidth=1.3;x.strokeStyle='#171717';x.stroke();
+      x.fillStyle=pn===this.pins[this.sel]?'#FFFFFF':'#171717';x.font='600 9px "JetBrains Mono",monospace';x.textAlign='center';x.textBaseline='middle';
+      x.fillText(pn.n,sx,sy+0.5);
+      return[sx,sy]});
+  }
+  hitTest(e){
+    if(!this.pinPos)return false;
+    const r=this.c.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+    let hit=-1;
+    this.pinPos.forEach((p,i)=>{if(Math.hypot(mx-p[0],my-p[1])<14)hit=i});
+    if(hit>=0){this.sel=hit;const pn=this.pins[hit],c=$('#s3card');
+      $('#s3N').textContent=pn.n;$('#s3T').textContent=pn.t;$('#s3Note').textContent=pn.note;
+      c.style.left=Math.min(this.pinPos[hit][0]+16,this.W-212)+'px';c.style.top=Math.max(this.pinPos[hit][1]-20,8)+'px';c.classList.add('on');return true}
+    this.sel=-1;$('#s3card').classList.remove('on');return false;
+  }
+  reset(){this.cam('iso');this.auto=true;this.sel=-1;$('#s3card').classList.remove('on')}
+}
+let mono=null;
+function ensureMono(){if(!mono)mono=new Mono3D($('#mono3d'))}
+new IntersectionObserver(es=>{if(es[0].isIntersecting)ensureMono()}).observe($('#mono3d'));
+$$('#p-d3 .pt[data-cam]').forEach(b=>b.onclick=()=>{
+  $$('#p-d3 .pt[data-cam]').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+  if(mono)mono.cam(b.dataset.cam)});
+$('#d3shade').onclick=function(){this.classList.toggle('on');if(mono){mono.shaded=this.classList.contains('on');mono.draw()}};
+
+/* ================================================================ WEB DEVICE TOGGLE */
+$('#devDesk').onclick=()=>{ $('#devDesk').classList.add('on');$('#devMob').classList.remove('on');$('#webwrap').classList.remove('mobile')};
+$('#devMob').onclick=()=>{ $('#devMob').classList.add('on');$('#devDesk').classList.remove('on');$('#webwrap').classList.add('mobile')};
+
+/* ================================================================ ANNOTATIONS DRAWER */
+function renderAnnList(){
+  const L=$('#anList');let h='';
+  const notes=$$('#docInner .ann-note');
+  h+='<div class="an-sec">Plan · roadmap.md</div>';
+  if(notes.length)notes.forEach((n,i)=>{
+    h+='<div class="an-row" data-j="plan"><span class="an-n">'+(i+1)+'</span><div class="an-t"><div class="l1">'+esc(n.textContent.replace('×','').trim())+'</div><div class="l2">steer note · routes to Architect PM</div></div><svg class="an-j" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 4.5 13 10l-5.5 5.5"/></svg></div>';
+  });
+  else h+='<div class="an-empty" style="padding:8px 14px;text-align:left">No plan notes yet — switch to Annotate and hover a block.</div>';
+  h+='<div class="an-sec">Image · hero-wireframe.png</div>';
+  Object.keys(IMG_PINS).forEach(k=>{const d=IMG_PINS[k];
+    h+='<div class="an-row" data-j="img"><span class="an-n">'+d.n+'</span><div class="an-t"><div class="l1">'+d.t+'</div><div class="l2">'+d.note+'</div></div><svg class="an-j" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 4.5 13 10l-5.5 5.5"/></svg></div>'});
+  pinNotes.forEach(p=>{
+    h+='<div class="an-row" data-j="img"><span class="an-n">'+p.n+'</span><div class="an-t"><div class="l1">Dropped pin '+p.n+'</div><div class="l2">'+p.x+'%, '+p.y+'% of frame</div></div><svg class="an-j" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 4.5 13 10l-5.5 5.5"/></svg></div>'});
+  h+='<div class="an-sec">3D · monolith.obj</div>';
+  [{n:1,t:'Crown beacon'},{n:2,t:'Mid joint'},{n:3,t:'Base anchor'}].forEach(p=>{
+    h+='<div class="an-row" data-j="d3"><span class="an-n">'+p.n+'</span><div class="an-t"><div class="l1">'+p.t+'</div><div class="l2">projected pin · click to inspect</div></div><svg class="an-j" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 4.5 13 10l-5.5 5.5"/></svg></div>'});
+  L.innerHTML=h;
+  const total=notes.length+3+pinNotes.length+3;
+  $('#anCnt').textContent=total;
+  $('#annBtnLbl').textContent='Notes · '+total;
+  $('#annDot').style.display=total?'':'none';
+  $$('.an-row',L).forEach(r=>r.onclick=()=>{openBrowser(r.dataset.j)});
+}
+
+/* ================================================================ INIT */
+addEventListener('keydown',e=>{if(e.ctrlKey&&e.key.toLowerCase()==='n'){e.preventDefault();ta.value='';ta.dispatchEvent(new Event('input'));toast('New session drafted')}});
+if(location.hash)openBrowser(location.hash.slice(1));
+mountOrbs();
+setMode('bots');
+setB(bW);
+setBTab('plan');
+renderAnnList();
+</script>
+</body>
+</html>

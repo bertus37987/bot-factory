@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>chatbar-03 — Factory Precision Autonomy Bar</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #ffffff;
+      --surface: #fafafa;
+      --subtle: #f5f5f5;
+      --hover: #f2f2f3;
+      --active: #eaeaeb;
+      --border: #ebebeb;
+      --border-strong: #dcdce0;
+      --card-border: #e4e4e7;
+      --ink: #171717;
+      --ink-2: #525252;
+      --muted: #8a8a8a;
+      --faint: #a8a8a8;
+      --ok-bg: #f0fdf4; --ok-ink: #166534; --ok-bd: #dcfce7;
+      --info-bg: #f2f6fa; --info-ink: #1d4ed8; --info-bd: #d7e4f0;
+      --warn-bg: #fffbeb; --warn-ink: #b45309; --warn-bd: #fde68a; --warn-strong: #d97706;
+      --err-bg: #fef2f2; --err-ink: #b91c1c; --err-bd: #fecaca;
+      --elev: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px -6px rgba(0,0,0,0.06);
+      --sans: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 13px; -webkit-font-smoothing: antialiased; }
+    button { font-family: inherit; }
+    svg { display: block; }
+
+    /* ---------- simulator strip ---------- */
+    .sim { position: sticky; top: 0; z-index: 60; background: var(--bg); border-bottom: 1px solid var(--border); padding: 10px 18px; display: flex; align-items: center; gap: 14px; }
+    .sim-mark { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+    .sim-mark .id { font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--muted); background: var(--subtle); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; }
+    .seg { display: flex; gap: 2px; background: var(--subtle); border: 1px solid var(--border); border-radius: 9px; padding: 3px; margin-left: auto; }
+    .seg button { border: 1px solid transparent; background: transparent; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 500; color: var(--ink-2); cursor: pointer; display: flex; align-items: center; gap: 6px; transition: background 120ms ease, color 120ms ease; }
+    .seg button:hover { color: var(--ink); }
+    .seg button.active { background: var(--bg); color: var(--ink); border-color: var(--border-strong); }
+    .seg .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex-shrink: 0; }
+    .seg button[data-state="thinking"].active .dot, .seg button[data-state="streaming"].active .dot { background: var(--info-ink); }
+    .seg button[data-state="diff"].active .dot { background: var(--warn-strong); }
+    .seg button[data-state="approval"].active .dot { background: var(--warn-ink); }
+
+    /* ---------- stage ---------- */
+    .stage { min-height: calc(100vh - 45px); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 48px 24px 72px; }
+    .col { width: min(640px, 100%); display: flex; flex-direction: column; gap: 14px; }
+    .stage-label { display: flex; align-items: baseline; justify-content: space-between; }
+    .stage-label h1 { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+    .stage-label p { margin: 0; font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+
+    .emblem { display: flex; justify-content: center; margin-bottom: -2px; }
+    .emblem svg { color: var(--faint); }
+    .hero { text-align: center; font-size: 17px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink-2); margin: 0 0 2px; }
+
+    /* ---------- simulated agent turn ---------- */
+    .turn { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 12px 14px; display: none; }
+    .turn.on { display: block; }
+    .turn-head { display: flex; align-items: center; gap: 9px; }
+    .turn-title { font-size: 12.5px; font-weight: 600; letter-spacing: -0.01em; }
+    .turn-sub { font-size: 11px; color: var(--muted); font-family: var(--mono); margin-left: auto; font-variant-numeric: tabular-nums; }
+    .turn-body { margin-top: 9px; font-size: 12.5px; line-height: 1.55; color: var(--ink-2); white-space: pre-wrap; }
+    .caret { display: inline-block; width: 7px; height: 14px; background: var(--ink); vertical-align: -2px; margin-left: 2px; animation: blink 0.9s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ---------- factory card ---------- */
+    .card { background: var(--bg); border: 1px solid var(--card-border); border-radius: 12px; box-shadow: var(--elev); display: flex; flex-direction: column; }
+
+    .strip { display: none; align-items: center; gap: 8px; margin: 8px 8px 0; padding: 7px 11px; border-radius: 9px; font-size: 12px; }
+    .strip.on { display: flex; }
+    .strip-approval { background: var(--warn-bg); border: 1px solid var(--warn-bd); color: var(--warn-ink); }
+    .strip-approval strong { color: var(--warn-ink); }
+    .ap-cmd { font-family: var(--mono); font-size: 11px; color: var(--ink-2); background: rgba(255,255,255,0.7); border: 1px solid var(--warn-bd); border-radius: 5px; padding: 1px 7px; }
+    .strip-right { margin-left: auto; display: flex; gap: 4px; }
+    .strip-btn { border: none; background: transparent; color: var(--ink-2); font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 6px; cursor: pointer; }
+    .strip-btn:hover { background: var(--active); }
+    .strip-btn.yes { background: var(--ink); color: #fff; }
+    .strip-btn.yes:hover { background: #2b2b2b; }
+
+    .chips { display: none; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
+    .chips.on { display: flex; }
+    .chip { display: inline-flex; align-items: center; gap: 6px; background: var(--subtle); border: 1px solid var(--border); border-radius: 7px; padding: 3px 6px 3px 8px; font-size: 12px; font-weight: 500; color: var(--ink-2); }
+    .chip .fname { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+    .chip button { border: none; background: transparent; color: var(--muted); cursor: pointer; padding: 1px; border-radius: 4px; display: flex; }
+    .chip button:hover { color: var(--err-ink); background: var(--err-bg); }
+
+    .ta-wrap { position: relative; padding: 13px 14px 6px; }
+    textarea { width: 100%; border: none; outline: none; resize: none; background: transparent; font-family: var(--sans); font-size: 13.5px; line-height: 1.5; color: var(--ink); padding: 0; max-height: 140px; overflow-y: auto; }
+    .ph { position: absolute; inset: 13px auto auto 14px; font-size: 13.5px; color: var(--faint); pointer-events: none; }
+    .ph.off { display: none; }
+
+    /* bottom bar */
+    .bar { display: flex; align-items: center; gap: 6px; padding: 4px 10px 10px; }
+    .ctl { position: relative; }
+    .icon-btn { width: 28px; height: 28px; border: none; background: transparent; color: var(--ink-2); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 120ms ease, color 120ms ease; }
+    .icon-btn:hover { background: var(--hover); color: var(--ink); }
+    .icon-btn.on { background: var(--active); color: var(--ink); }
+
+    /* stepped autonomy */
+    .auto-btn { border: none; background: transparent; color: var(--ink-2); font-size: 12.5px; font-weight: 500; padding: 5px 8px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+    .auto-btn:hover { background: var(--hover); color: var(--ink); }
+    .bars { display: flex; align-items: flex-end; gap: 2px; height: 12px; }
+    .bars i { width: 3px; border-radius: 1px; border: 1px solid var(--faint); background: transparent; transition: background 140ms ease, border-color 140ms ease; }
+    .bars i:nth-child(1) { height: 5px; }
+    .bars i:nth-child(2) { height: 8px; }
+    .bars i:nth-child(3) { height: 11px; }
+    .bars.f1 i:nth-child(1),
+    .bars.f2 i:nth-child(-n+2),
+    .bars.f3 i { background: var(--ink); border-color: var(--ink); }
+    .bars.f2 i:nth-child(-n+2), .bars.f3 i { background: var(--warn-strong); border-color: var(--warn-strong); }
+    .bars.spec i { border-style: dashed; }
+    .auto-btn .chev { color: var(--faint); }
+
+    /* split model · effort control */
+    .split { display: flex; align-items: stretch; border: 1px solid var(--border-strong); border-radius: 7px; overflow: hidden; background: var(--bg); }
+    .split button { border: none; background: transparent; font-size: 12px; font-weight: 500; color: var(--ink); padding: 5px 9px; cursor: pointer; display: flex; align-items: center; gap: 5px; }
+    .split button:hover { background: var(--hover); }
+    .split button + button { border-left: 1px solid var(--border); }
+    .split .model { font-family: var(--mono); font-size: 11.5px; }
+    .split .effort { color: var(--ink-2); }
+
+    /* square send */
+    .send { width: 30px; height: 30px; border: none; border-radius: 7px; background: #d5d5d8; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 140ms ease, transform 100ms ease; flex-shrink: 0; }
+    .send:hover { background: #c4c4c8; }
+    .send.ready { background: var(--ink); }
+    .send.ready:hover { background: #2b2b2b; }
+    .send:active { transform: scale(0.94); }
+    .send.working { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-ink); }
+    .send.working:hover { background: #fdecec; }
+
+    /* ---------- docked workspace bar ---------- */
+    .dock { display: flex; align-items: center; gap: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 5px 8px; margin-top: -2px; }
+    .dock .ctl { position: relative; }
+    .dock-btn { border: none; background: transparent; color: var(--ink-2); font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+    .dock-btn:hover { background: var(--hover); color: var(--ink); }
+    .dock-btn .hi { color: var(--ink); font-weight: 600; }
+    .dock-diff { display: none; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); background: var(--warn-bg); border: 1px solid var(--warn-bd); border-radius: 7px; padding: 4px 8px; }
+    .dock-diff.on { display: flex; }
+    .dock-diff .review { color: var(--info-ink); font-weight: 600; cursor: pointer; border: none; background: transparent; font-size: 12px; padding: 0 2px; }
+    .diff-num { font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; font-weight: 500; }
+    .diff-num.add { color: var(--ok-ink); }
+    .diff-num.del { color: var(--err-ink); }
+    .dock .spacer { flex: 1; }
+    .dock-status { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); padding-right: 4px; }
+    .dock-status .st { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; min-width: 74px; text-align: right; }
+    .dock-status .st.live { color: var(--info-ink); }
+    .dock-status .ctx { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .orb-shell { width: 22px; height: 22px; border-radius: 50%; background: #fcfcfc; border: 1px solid var(--border-strong); box-shadow: inset 0 1px 0 rgba(255,255,255,0.9); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .orb-shell canvas { width: 15px; height: 15px; }
+    .orb-shell.approval { border-color: var(--warn-bd); box-shadow: 0 0 0 2px var(--warn-bg), inset 0 1px 0 rgba(255,255,255,0.9); }
+
+    /* ---------- popovers ---------- */
+    .pop { position: absolute; bottom: calc(100% + 10px); left: 0; z-index: 80; min-width: 220px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--elev); padding: 5px; display: none; }
+    .pop.on { display: block; animation: pop-in 130ms ease; }
+    .pop.right { left: auto; right: 0; }
+    @keyframes pop-in { from { opacity: 0; transform: translateY(4px); } }
+    .pop-head { font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 7px 9px 4px; }
+    .pop-item { width: 100%; border: none; background: transparent; display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 7px; font-size: 12.5px; font-weight: 500; color: var(--ink-2); cursor: pointer; text-align: left; }
+    .pop-item:hover { background: var(--hover); color: var(--ink); }
+    .pop-item .desc { font-size: 11px; color: var(--muted); font-weight: 400; }
+    .pop-item .grow { flex: 1; }
+    .pop-item .check { color: var(--ink); opacity: 0; }
+    .pop-item.sel .check { opacity: 1; }
+    .pop-item.sel { color: var(--ink); }
+    .pop-sep { height: 1px; background: var(--border); margin: 5px 4px; }
+    .pop-note { padding: 6px 9px 8px; font-size: 11px; color: var(--muted); line-height: 1.45; }
+
+    .foot { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--muted); padding: 0 4px; }
+    .foot .mono { font-family: var(--mono); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <header class="sim">
+    <div class="sim-mark">
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="10" cy="10" r="2.4"/><path d="M10 1.8v3.4M10 14.8v3.4M1.8 10h3.4M14.8 10h3.4M4.2 4.2l2.4 2.4M13.4 13.4l2.4 2.4M15.8 4.2l-2.4 2.4M6.6 13.4l-2.4 2.4"/></svg>
+      Factory Precision Autonomy Bar <span class="id">chatbar-03</span>
+    </div>
+    <nav class="seg" id="seg">
+      <button data-state="idle" class="active"><span class="dot"></span>Idle</button>
+      <button data-state="thinking"><span class="dot"></span>Thinking</button>
+      <button data-state="streaming"><span class="dot"></span>Streaming</button>
+      <button data-state="diff"><span class="dot"></span>Diff Ready</button>
+      <button data-state="approval"><span class="dot"></span>Needs Approval</button>
+    </nav>
+  </header>
+
+  <main class="stage">
+    <div class="col">
+      <div class="stage-label">
+        <h1>Composer concept</h1>
+        <p>light-mode · monochrome-ink · gen-1</p>
+      </div>
+
+      <div class="emblem">
+        <svg width="34" height="34" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="17" cy="17" r="3.4"/><path d="M17 2.5v6.2M17 25.3v6.2M2.5 17h6.2M25.3 17h6.2M6.7 6.7l4.4 4.4M22.9 22.9l4.4 4.4M27.3 6.7l-4.4 4.4M11.1 22.9l-4.4 4.4"/></svg>
+      </div>
+      <p class="hero">What should we work on?</p>
+
+      <section class="turn" id="turn">
+        <div class="turn-head">
+          <span class="orb-shell"><canvas id="turnOrbCv" width="15" height="15"></canvas></span>
+          <span class="turn-title" id="turnTitle">Factory agent is thinking</span>
+          <span class="turn-sub" id="turnSub">autonomy: medium · 00:09</span>
+        </div>
+        <div class="turn-body"><span id="turnText"></span><span class="caret" id="turnCaret" style="display:none"></span></div>
+      </section>
+
+      <!-- factory card -->
+      <div class="card" id="card">
+        <div class="strip strip-approval" id="stripApproval">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8l5.2 2v4.1c0 3.3-2.2 5.6-5.2 6.6-3-1-5.2-3.3-5.2-6.6V3.8l5.2-2Z"/><path d="M8 5.4v3"/><circle cx="8" cy="10.8" r="0.6" fill="currentColor" stroke="none"/></svg>
+          <strong>Approval required</strong>
+          <span class="ap-cmd">git push --force-with-lease</span>
+          <span class="strip-right">
+            <button class="strip-btn" id="apDeny3">Deny</button>
+            <button class="strip-btn yes" id="apYes3">Approve</button>
+          </span>
+        </div>
+
+        <div class="chips" id="chips"></div>
+        <div class="ta-wrap">
+          <textarea id="ta" rows="1" spellcheck="false"></textarea>
+          <div class="ph" id="ph">Describe a task or ask a question</div>
+        </div>
+        <div class="bar">
+          <div class="ctl">
+            <button class="icon-btn" id="btnPlus" title="Attach">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+            </button>
+            <div class="pop" id="popPlus">
+              <div class="pop-head">Attach</div>
+              <button class="pop-item" data-attach="temple-module.glb|3D asset · 1.1 MB"><span class="grow">temple-module.glb</span><span class="desc">1.1 MB</span></button>
+              <button class="pop-item" data-attach="terrain.spec.md|Spec · 6 KB"><span class="grow">terrain.spec.md</span><span class="desc">6 KB</span></button>
+              <button class="pop-item" data-attach="wave-table.json|Data · 18 KB"><span class="grow">wave-table.json</span><span class="desc">18 KB</span></button>
+            </div>
+          </div>
+
+          <div class="ctl">
+            <button class="auto-btn" id="btnAuto" title="Cycle autonomy">
+              <span class="bars f2" id="bars"><i></i><i></i><i></i></span>
+              <span id="autoLabel">Medium Autonomy</span>
+              <svg class="chev" width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3"/></svg>
+            </button>
+            <div class="pop" id="popAuto">
+              <div class="pop-head">Autonomy level</div>
+              <button class="pop-item" data-auto="spec"><span class="grow">Spec<div class="desc">Follow a spec doc — no deviations</div></span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+              <button class="pop-item" data-auto="low"><span class="grow">Low Autonomy<div class="desc">Suggest only — you approve each step</div></span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+              <button class="pop-item sel" data-auto="medium"><span class="grow">Medium Autonomy<div class="desc">Executes, asks on destructive actions</div></span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+              <button class="pop-item" data-auto="high"><span class="grow">High Autonomy<div class="desc">Full execution — review at the end</div></span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+              <div class="pop-sep"></div>
+              <div class="pop-note">Click the bar indicator to cycle levels directly.</div>
+            </div>
+          </div>
+
+          <span style="flex:1"></span>
+
+          <div class="ctl">
+            <div class="split">
+              <button class="model" id="btnModel">deepseek-v4.1<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3"/></svg></button>
+              <button class="effort" id="btnEffort">High</button>
+            </div>
+            <div class="pop right" id="popModel">
+              <div class="pop-head">Model</div>
+              <button class="pop-item sel" data-model="deepseek-v4.1"><span class="grow">deepseek-v4.1</span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+              <button class="pop-item" data-model="deepseek-flash"><span class="grow">deepseek-flash</span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+              <button class="pop-item" data-model="swe-2-high"><span class="grow">swe-2-high</span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+              <button class="pop-item" data-model="claude-sonnet-4.6"><span class="grow">claude-sonnet-4.6</span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+            </div>
+            <div class="pop right" id="popEffort">
+              <div class="pop-head">Reasoning effort</div>
+              <button class="pop-item" data-effort="Low"><span class="grow">Low</span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+              <button class="pop-item" data-effort="Medium"><span class="grow">Medium</span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+              <button class="pop-item sel" data-effort="High"><span class="grow">High</span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+              <button class="pop-item" data-effort="Max"><span class="grow">Max</span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+            </div>
+          </div>
+
+          <button class="icon-btn" id="btnMic" title="Dictate">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="1.8" width="5" height="8" rx="2.5"/><path d="M3 8a5 5 0 0 0 10 0M8 13v1.8"/></svg>
+          </button>
+
+          <button class="send" id="btnSend" title="Send">
+            <svg id="sendArrow" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg>
+            <svg id="sendStop" width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="display:none"><rect x="1.5" y="1.5" width="9" height="9" rx="1.5"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- docked workspace bar -->
+      <div class="dock">
+        <div class="ctl">
+          <button class="dock-btn" id="btnEnv">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.5" width="12" height="8.6" rx="1.6"/><path d="M5.5 14h5M8 11.1V14"/></svg>
+            <span class="hi" id="envLabel">Local</span>
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3"/></svg>
+          </button>
+          <div class="pop" id="popEnv">
+            <div class="pop-head">Environment</div>
+            <button class="pop-item sel" data-env="Local"><span class="grow">Local<div class="desc">Run in this workspace</div></span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+            <button class="pop-item" data-env="Worktree"><span class="grow">Worktree<div class="desc">Isolated git worktree · auto-merge</div></span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+            <button class="pop-item" data-env="Cloud"><span class="grow">Cloud<div class="desc">Ephemeral cloud runner</div></span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+          </div>
+        </div>
+        <div class="ctl">
+          <button class="dock-btn" id="btnWs">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5a1 1 0 0 1 1-1h3.4l1.6 1.8H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-7.8Z"/></svg>
+            <span id="wsLabel">willy</span>
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3"/></svg>
+          </button>
+          <div class="pop" id="popWs">
+            <div class="pop-head">Folder</div>
+            <button class="pop-item sel" data-ws="willy"><span class="grow">willy<div class="desc">~/willy</div></span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+            <button class="pop-item" data-ws="Roblox_Game_Rom"><span class="grow">Roblox_Game_Rom<div class="desc">~/Documents/Roblox_Game_Rom</div></span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+            <button class="pop-item" data-ws="bot-factory"><span class="grow">bot-factory<div class="desc">~/bot-factory</div></span><svg class="check" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg></button>
+          </div>
+        </div>
+
+        <span class="dock-diff" id="dockDiff">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.6 2.1a1.77 1.77 0 0 1 2.3 2.3L5.2 13.1 2.4 13.6l.5-2.8 8.7-8.7Z"/></svg>
+          <strong style="color:var(--ink); font-weight:600">3 files</strong>
+          <span class="diff-num add">+383</span><span class="diff-num del">−4</span>
+          <button class="review" id="dockReview">Review</button>
+        </span>
+
+        <span class="spacer"></span>
+        <div class="dock-status">
+          <span class="ctx" id="ctxLabel">ctx 34%</span>
+          <span class="st" id="stLabel">idle</span>
+          <span class="orb-shell" id="dockOrb"><canvas id="dockOrbCv" width="15" height="15"></canvas></span>
+        </div>
+      </div>
+
+      <div class="foot">
+        <span>Click <span class="mono">|||</span> to cycle autonomy · <span class="mono">Enter</span> sends · square send becomes stop</span>
+        <span class="mono" id="footState">state: idle</span>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    "use strict";
+    const $ = (s) => document.querySelector(s);
+    const $$ = (s) => [...document.querySelectorAll(s)];
+    const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    /* ================= Smoke & Pearl dot-orb ================= */
+    function createOrb(canvas) {
+      const ctx = canvas.getContext("2d");
+      const DPR = Math.min(devicePixelRatio || 1, 2);
+      const size = canvas.width;
+      canvas.style.width = size + "px"; canvas.style.height = size + "px";
+      canvas.width = size * DPR; canvas.height = size * DPR;
+      const dots = [];
+      [{ n: 11, r: 0.36, w: 0.10 }, { n: 7, r: 0.22, w: 0.17 }, { n: 1, r: 0, w: 0 }].forEach((ring, ri) => {
+        for (let i = 0; i < ring.n; i++) dots.push({ ring: ri, base: ring.r, wob: ring.w, ang: i / ring.n * Math.PI * 2, ph: Math.random() * 6.28, sp: 0.5 + Math.random() * 0.7, sz: ring.n === 1 ? 0.10 : 0.052 + Math.random() * 0.02 });
+      });
+      let mode = "idle", raf = null, t = Math.random() * 100;
+      const CFG = {
+        idle:      { speed: 0,    breathe: 0.0, alpha: 0.14, color: [23,23,23]  },
+        thinking:  { speed: 0.85, breathe: 1.0, alpha: 0.85, color: [23,23,23]  },
+        streaming: { speed: 1.85, breathe: 1.4, alpha: 0.9,  color: [30,78,121] },
+        approval:  { speed: 0.45, breathe: 0.8, alpha: 0.85, color: [180,83,9]  }
+      };
+      function draw() {
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        ctx.clearRect(0, 0, size, size);
+        const c = CFG[mode] || CFG.idle;
+        const cx = size / 2, cy = size / 2, R = size / 2 - 1.5;
+        ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(23,23,23,0.12)"; ctx.lineWidth = 1; ctx.stroke();
+        const breath = 1 + Math.sin(t * 1.6) * 0.05 * c.breathe;
+        const rot = t * c.speed * 0.55;
+        for (const d of dots) {
+          const wave = Math.sin(t * d.sp * 2.2 + d.ph) * d.wob * c.breathe;
+          const r = (d.base + wave) * R * breath;
+          const a = d.ang + rot + Math.sin(t * 0.4 + d.ph) * 0.12 * c.breathe;
+          const tw = 0.5 + 0.5 * Math.sin(t * 2.6 * d.sp + d.ph);
+          const alpha = d.ring === 2 && mode === "idle" ? c.alpha * 1.7 : c.alpha * (0.35 + 0.65 * tw);
+          const rad = d.sz * size * (0.8 + 0.4 * tw * c.breathe || 1);
+          ctx.beginPath(); ctx.arc(cx + Math.cos(a) * r, cy + Math.sin(a) * r, Math.max(rad, 0.4), 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${c.color[0]},${c.color[1]},${c.color[2]},${alpha.toFixed(3)})`;
+          ctx.fill();
+        }
+      }
+      function loop() { t += 1 / 60; draw(); raf = requestAnimationFrame(loop); }
+      function setMode(m) { mode = m; if (raf) { cancelAnimationFrame(raf); raf = null; } if (REDUCED || m === "idle") { draw(); return; } raf = requestAnimationFrame(loop); }
+      setMode("idle");
+      return { setMode };
+    }
+    const dockOrb = createOrb($("#dockOrbCv"));
+    const turnOrb = createOrb($("#turnOrbCv"));
+
+    /* ================= state machine ================= */
+    let state = "idle", streamTimer = null, streamIdx = 0, ctxPct = 34;
+    const STREAM_TEXT = "Autonomy is pinned at Medium — two amber steps on the indicator. The workspace bar stays docked: Local env, willy folder, and the orb keeps breathing while context sits at 34%. Approving the push flips the send square into a stop.";
+    const els = {
+      turn: $("#turn"), turnTitle: $("#turnTitle"), turnText: $("#turnText"), turnCaret: $("#turnCaret"),
+      stripApproval: $("#stripApproval"), dockDiff: $("#dockDiff"),
+      send: $("#btnSend"), sendArrow: $("#sendArrow"), sendStop: $("#sendStop"),
+      stLabel: $("#stLabel"), ctxLabel: $("#ctxLabel"), dockOrbShell: $("#dockOrb"),
+      footState: $("#footState"), turnSub: $("#turnSub")
+    };
+
+    function setState(s) {
+      state = s;
+      $$("#seg button").forEach(b => b.classList.toggle("active", b.dataset.state === s));
+      clearTimeout(streamTimer);
+      els.stripApproval.classList.toggle("on", s === "approval");
+      els.dockDiff.classList.toggle("on", s === "diff");
+      const working = s === "thinking" || s === "streaming";
+      els.turn.classList.toggle("on", working);
+      // send ↔ stop morph
+      els.send.classList.toggle("working", working || s === "approval");
+      els.sendArrow.style.display = working || s === "approval" ? "none" : "";
+      els.sendStop.style.display = working || s === "approval" ? "" : "none";
+      els.send.title = working || s === "approval" ? "Stop" : "Send";
+      // docked orb + status
+      dockOrb.setMode(working || s === "approval" ? (s === "approval" ? "approval" : s) : "idle");
+      turnOrb.setMode(working ? s : "idle");
+      els.dockOrbShell.classList.toggle("approval", s === "approval");
+      els.stLabel.classList.toggle("live", working);
+      els.stLabel.textContent = s === "diff" ? "diff ready" : s === "approval" ? "approval" : s;
+      if (s === "thinking") {
+        els.turnTitle.textContent = "Factory agent is thinking";
+        els.turnText.textContent = ""; els.turnCaret.style.display = "none";
+        if (!REDUCED) streamTimer = setTimeout(() => { if (state === "thinking") setState("streaming"); }, 2400);
+      } else if (s === "streaming") {
+        els.turnTitle.textContent = "Factory agent is responding";
+        startTypewriter();
+      } else { els.turnCaret.style.display = "none"; }
+      els.footState.textContent = `state: ${s === "diff" ? "diff ready" : s === "approval" ? "needs approval" : s}`;
+      updateSend();
+    }
+    function startTypewriter() {
+      streamIdx = 0; els.turnText.textContent = ""; els.turnCaret.style.display = "";
+      if (REDUCED) { els.turnText.textContent = STREAM_TEXT; els.turnCaret.style.display = "none"; return; }
+      (function tick() {
+        if (state !== "streaming") return;
+        streamIdx += 2 + Math.floor(Math.random() * 3);
+        els.turnText.textContent = STREAM_TEXT.slice(0, streamIdx);
+        ctxPct = Math.min(97, ctxPct + 0.1);
+        els.ctxLabel.textContent = `ctx ${ctxPct.toFixed(0)}%`;
+        if (streamIdx < STREAM_TEXT.length) streamTimer = setTimeout(tick, 24);
+        else { els.turnCaret.style.display = "none"; streamTimer = setTimeout(() => setState("idle"), 1600); }
+      })();
+    }
+
+    /* ================= popovers ================= */
+    let openPopEl = null;
+    function togglePop(id, btn) {
+      const p = $("#" + id), was = p.classList.contains("on");
+      closePops();
+      if (!was) { p.classList.add("on"); openPopEl = p; btn && btn.classList.add("on"); }
+    }
+    function closePops() { $$(".pop").forEach(p => p.classList.remove("on")); openPopEl = null; }
+    document.addEventListener("click", (e) => { if (openPopEl && !e.target.closest(".ctl")) closePops(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePops(); });
+    $("#btnPlus").addEventListener("click", () => togglePop("popPlus", $("#btnPlus")));
+    $("#btnModel").addEventListener("click", (e) => { e.stopPropagation(); togglePop("popModel"); });
+    $("#btnEffort").addEventListener("click", (e) => { e.stopPropagation(); togglePop("popEffort"); });
+    $("#btnEnv").addEventListener("click", () => togglePop("popEnv"));
+    $("#btnWs").addEventListener("click", () => togglePop("popWs"));
+
+    /* stepped autonomy: click cycles, chevron opens popover */
+    const LEVELS = ["spec", "low", "medium", "high"];
+    const LEVEL_UI = {
+      spec:   { cls: "spec", label: "Spec" },
+      low:    { cls: "f1",   label: "Low Autonomy" },
+      medium: { cls: "f2",   label: "Medium Autonomy" },
+      high:   { cls: "f3",   label: "High Autonomy" }
+    };
+    let autoLevel = "medium";
+    function renderAuto() {
+      const ui = LEVEL_UI[autoLevel];
+      $("#bars").className = "bars " + ui.cls;
+      $("#autoLabel").textContent = ui.label;
+      $("#turnSub").textContent = `autonomy: ${autoLevel} · 00:09`;
+      $$("#popAuto [data-auto]").forEach(b => b.classList.toggle("sel", b.dataset.auto === autoLevel));
+    }
+    $("#btnAuto").addEventListener("click", (e) => {
+      if (e.target.closest(".chev")) { togglePop("popAuto"); return; }
+      autoLevel = LEVELS[(LEVELS.indexOf(autoLevel) + 1) % LEVELS.length];
+      renderAuto();
+    });
+    $$("#popAuto [data-auto]").forEach(b => b.addEventListener("click", () => { autoLevel = b.dataset.auto; renderAuto(); closePops(); }));
+
+    /* split model · effort */
+    $$("#popModel [data-model]").forEach(b => b.addEventListener("click", () => {
+      $$("#popModel .pop-item").forEach(x => x.classList.remove("sel")); b.classList.add("sel");
+      $("#btnModel").firstChild.textContent = b.dataset.model;
+      closePops();
+    }));
+    $$("#popEffort [data-effort]").forEach(b => b.addEventListener("click", () => {
+      $$("#popEffort .pop-item").forEach(x => x.classList.remove("sel")); b.classList.add("sel");
+      $("#btnEffort").textContent = b.dataset.effort;
+      closePops();
+    }));
+    $$("#popEnv [data-env]").forEach(b => b.addEventListener("click", () => {
+      $$("#popEnv .pop-item").forEach(x => x.classList.remove("sel")); b.classList.add("sel");
+      $("#envLabel").textContent = b.dataset.env; closePops();
+    }));
+    $$("#popWs [data-ws]").forEach(b => b.addEventListener("click", () => {
+      $$("#popWs .pop-item").forEach(x => x.classList.remove("sel")); b.classList.add("sel");
+      $("#wsLabel").textContent = b.dataset.ws; closePops();
+    }));
+
+    /* chips */
+    const chips = $("#chips");
+    $$("#popPlus [data-attach]").forEach(b => b.addEventListener("click", () => {
+      const [name, meta] = b.dataset.attach.split("|");
+      chips.classList.add("on");
+      const el = document.createElement("span");
+      el.className = "chip";
+      el.innerHTML = `<span class="fname">${name}</span><button title="Remove"><svg width="10" height="10" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button>`;
+      el.querySelector("button").addEventListener("click", () => { el.remove(); if (!chips.children.length) chips.classList.remove("on"); });
+      chips.appendChild(el);
+      closePops();
+    }));
+
+    /* textarea */
+    const ta = $("#ta"), ph = $("#ph");
+    function syncTa() {
+      ph.classList.toggle("off", ta.value.length > 0);
+      ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
+      updateSend();
+    }
+    ta.addEventListener("input", syncTa);
+    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+    function updateSend() {
+      els.send.classList.toggle("ready", ta.value.trim().length > 0 && state !== "thinking" && state !== "streaming");
+    }
+
+    /* send / stop */
+    els.send.addEventListener("click", () => {
+      if (state === "thinking" || state === "streaming" || state === "approval") { setState("idle"); return; }
+      send();
+    });
+    function send() { if (!ta.value.trim()) return; ta.value = ""; syncTa(); setState("thinking"); }
+
+    /* strips + dock */
+    $("#dockReview").addEventListener("click", function () {
+      this.textContent = this.textContent === "Review" ? "Queued" : "Review";
+    });
+    $("#apYes3").addEventListener("click", () => setState("thinking"));
+    $("#apDeny3").addEventListener("click", () => setState("idle"));
+    $("#btnMic").addEventListener("click", function () { this.classList.toggle("on"); });
+    $$("#seg button").forEach(b => b.addEventListener("click", () => setState(b.dataset.state)));
+
+    renderAuto();
+    syncTa();
+    setState("idle");
+  </script>
+</body>
+</html>

@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="de" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bot-Factory — Generation 2 Gallery (4 Refined Concepts)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #ffffff;
+      --surface: #fafafa;
+      --subtle: #f5f5f5;
+      --hover: #f2f2f3;
+      --border: #ebebeb;
+      --border-strong: #d8d8dc;
+      --ink: #171717;
+      --ink-2: #525252;
+      --muted: #8a8a8a;
+      --accent-orange: #d95d22;
+      --sans: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+    .shell { display: grid; grid-template-columns: 300px 1fr; height: 100vh; overflow: hidden; }
+    .rail { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+    .rail-head { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+    .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .brand-title { font-size: 14px; font-weight: 600; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
+    .sub-note { font-size: 11.5px; color: var(--ink-2); line-height: 1.45; }
+    .count-chip { font-family: var(--mono); font-size: 11px; color: var(--accent-orange); background: #fff5ef; border: 1px solid #f7d5c2; padding: 2px 6px; border-radius: 5px; font-variant-numeric: tabular-nums; }
+    .list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+    .item { border: 1px solid transparent; background: transparent; border-radius: 9px; padding: 10px 11px; cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 4px; font-family: inherit; transition: background 140ms ease, border-color 140ms ease; }
+    .item:hover { background: var(--hover); }
+    .item.active { background: var(--bg); border-color: var(--border-strong); }
+    .item-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .item-id { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .item-title { font-size: 13px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+    .item-desc { font-size: 11.5px; color: var(--ink-2); line-height: 1.45; }
+    .pill-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+    .tag { font-family: var(--mono); font-size: 10px; color: var(--ink-2); background: var(--subtle); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; }
+    .rail-foot { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--subtle); }
+    .stage-bar { height: 46px; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-shrink: 0; }
+    .stage-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; }
+    .stage-actions { display: flex; align-items: center; gap: 6px; }
+    .btn { border: 1px solid var(--border); background: var(--bg); color: var(--ink); padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; }
+    .btn:hover { background: var(--hover); border-color: var(--border-strong); }
+    .btn.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .frames { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); }
+    .frames.split { grid-template-columns: 1fr 1fr; }
+    .frame-pane { display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+    .frame-subbar { height: 32px; background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 10px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--ink-2); }
+    .frame-subbar select { font-family: inherit; font-size: 11.5px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); padding: 2px 6px; color: var(--ink); }
+    iframe { flex: 1; width: 100%; height: 100%; border: none; background: #fff; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail">
+      <div class="rail-head">
+        <div class="brand-row">
+          <div class="brand-title">
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="14" rx="3.5"/><circle cx="10" cy="10" r="2.2" fill="currentColor" stroke="none"/></svg>
+            Bot-Factory · Gen 2
+          </div>
+          <span class="count-chip">4 Konzepte</span>
+        </div>
+        <div class="sub-note">UI-01 Sidebar &amp; Bots + UI-03 Chatbar + 4-Stop Aufwand-Slider — mit 4 neuen Group-Chat- &amp; In-App-Browser-Ansätzen.</div>
+      </div>
+      <div class="list" id="variant-list"></div>
+      <div class="rail-foot">
+        <a class="btn" href="../index.html">← Gen 1 Galerie</a>
+      </div>
+    </aside>
+
+    <main class="stage">
+      <div class="stage-bar">
+        <div class="stage-title">
+          <span class="count-chip" id="active-id">gen2-01</span>
+          <span id="active-name">Arc-Light Browser + Alternating Group Chat</span>
+        </div>
+        <div class="stage-actions">
+          <button class="btn" id="split-toggle" onclick="toggleSplit()">Side-by-Side Compare</button>
+          <a class="btn primary" id="open-direct" href="gen2-01.html" target="_blank">Im Tab öffnen ↗</a>
+        </div>
+      </div>
+      <div class="frames" id="frames">
+        <div class="frame-pane">
+          <iframe id="frame-a" src="gen2-01.html"></iframe>
+        </div>
+        <div class="frame-pane" id="pane-b" style="display:none;">
+          <div class="frame-subbar">
+            <span>Vergleichs-Slot B</span>
+            <select id="select-b" onchange="setRightVariant(this.value)"></select>
+          </div>
+          <iframe id="frame-b" src="gen2-02.html"></iframe>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const VARIANTS = [
+      { id: "gen2-01", file: "gen2-01.html", name: "Arc-Light Browser + Alternating Group Chat", tags: ["Floating Bottom Dock", "Left/Right Bot Bubbles", "Aufwand-Slider"], desc: "Echter Arc-Light-Browser rechts (Omni-URL + schwebendes Bottom-Dock für 90 % Canvas-Fläche) & wechselseitiger Gruppenchat mit eigenen Bot-Porträts." },
+      { id: "gen2-02", file: "gen2-02.html", name: "Safari-Compact Omnibox + Dual-Lane Chat", tags: ["Single-Row Chrome", "Markdown Plan", "3D Camera Presets"], desc: "Ultraruhi­ge 40px Single-Row-Browser-Leiste mit zentraler Breadcrumb-Omnibox (null Tab-Überladung) & lebendiger Zwei-Seiten-Bot-Konversation." },
+      { id: "gen2-03", file: "gen2-03.html", name: "Framed Multi-Tab Browser + Halo-Orb Group Chat", tags: ["Real Browser Tabs", "Orb-Ring Avatars", "Inline Approvals"], desc: "Schwebendes gerahmtes Browser-Fenster mit echten Multi-Tabs (mehrere Dateien/3D/Web gleichzeitig offen) & Bot-Avatare mit aktivem Orb-Ring." },
+      { id: "gen2-04", file: "gen2-04.html", name: "Edge-Rail Studio Browser + Dynamic Team Chat", tags: ["36px Edge Rail", "40%/55% Width", "Inline Artifact Bubbles"], desc: "36px Surface-Rail ganz rechts am Browser-Rand + cleane Adresszeile; Bot-Bubbles auf beiden Seiten mit direkt klickbaren Code-/3D-Preview-Karten." }
+    ];
+
+    let activeId = "gen2-01";
+    let split = false;
+    const selectB = document.getElementById("select-b");
+    VARIANTS.forEach(v => {
+      const opt = document.createElement("option");
+      opt.value = v.id;
+      opt.textContent = `${v.id} — ${v.name}`;
+      if (v.id === "gen2-02") opt.selected = true;
+      selectB.appendChild(opt);
+    });
+
+    function selectVariant(id) {
+      const v = VARIANTS.find(x => x.id === id);
+      if (!v) return;
+      activeId = id;
+      document.getElementById("active-id").textContent = v.id;
+      document.getElementById("active-name").textContent = v.name;
+      document.getElementById("frame-a").src = v.file;
+      document.getElementById("open-direct").href = v.file;
+      renderList();
+    }
+
+    function setRightVariant(id) {
+      const v = VARIANTS.find(x => x.id === id);
+      if (v) document.getElementById("frame-b").src = v.file;
+    }
+
+    function toggleSplit() {
+      split = !split;
+      document.getElementById("frames").classList.toggle("split", split);
+      document.getElementById("pane-b").style.display = split ? "flex" : "none";
+      document.getElementById("split-toggle").classList.toggle("primary", split);
+    }
+
+    function renderList() {
+      const list = document.getElementById("variant-list");
+      list.innerHTML = "";
+      VARIANTS.forEach(v => {
+        const el = document.createElement("button");
+        el.className = "item" + (v.id === activeId ? " active" : "");
+        el.onclick = () => selectVariant(v.id);
+        el.innerHTML = `
+          <div class="item-top"><span class="item-id">${v.id}</span></div>
+          <div class="item-title">${v.name}</div>
+          <div class="item-desc">${v.desc}</div>
+          <div class="pill-row">${v.tags.map(t => `<span class="tag">${t}</span>`).join("")}</div>
+        `;
+        list.appendChild(el);
+      });
+    }
+
+    renderList();
+  </script>
+</body>
+</html>

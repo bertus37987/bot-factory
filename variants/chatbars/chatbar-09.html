@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>chatbar-09 · Command-Palette Hybrid Composer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#ffffff; --surface:#fafafa; --subtle:#f5f5f5; --hover:#f2f2f3; --active:#eaeaeb;
+    --bd:#ebebeb; --bd-strong:#dcdce0;
+    --ink:#171717; --ink2:#525252; --muted:#8a8a8a; --faint:#a8a8a8;
+    --ok-bg:#f0fdf4; --ok:#166534; --ok-bd:#dcfce7;
+    --info-bg:#f2f6fa; --info:#1e4e79; --info-bd:#d7e4f0;
+    --amber:#b45309; --amber-bright:#d97706; --amber-bg:#fffbeb; --amber-bd:#fde68a;
+    --red:#b91c1c; --red-bg:#fef2f2; --red-bd:#fecaca;
+    --sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,monospace;
+    --shadow-float:0 1px 2px rgba(0,0,0,.04),0 8px 24px -6px rgba(0,0,0,.06);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  button{font-family:inherit;cursor:pointer}
+  .num{font-variant-numeric:tabular-nums}
+  svg{display:block}
+
+  /* ---------- State simulator bar ---------- */
+  .simbar{height:42px;background:var(--surface);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:10px;padding:0 14px}
+  .simbar .tag{font-family:var(--mono);font-size:10.5px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+  .seg{display:flex;gap:2px;background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:2px}
+  .seg button{border:1px solid transparent;background:transparent;border-radius:6px;padding:4px 10px;font-size:11.5px;font-weight:500;color:var(--ink2);transition:all .12s ease}
+  .seg button:hover{color:var(--ink);background:var(--hover)}
+  .seg button.on{background:var(--ink);color:#fff}
+  .seg button.on.warn{background:var(--amber-bright)}
+  .simbar .spacer{flex:1}
+  .simbar .id{font-family:var(--mono);font-size:11px;color:var(--faint)}
+
+  /* ---------- Showcase canvas ---------- */
+  .canvas{height:calc(100vh - 42px);display:flex;justify-content:center;overflow:hidden;background:
+    radial-gradient(circle at 1px 1px,#f4f4f5 1px,transparent 0) 0 0/22px 22px,var(--bg)}
+  .col{width:min(760px,92vw);display:flex;flex-direction:column;padding:22px 0 26px;min-height:0}
+
+  /* ---------- Demo thread ---------- */
+  .thread{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:14px;padding:4px 4px 14px}
+  .msg{max-width:88%;display:flex;gap:9px;align-items:flex-start}
+  .msg .av{width:22px;height:22px;border-radius:6px;flex-shrink:0;display:grid;place-items:center;border:1px solid var(--bd);background:var(--surface);color:var(--ink2)}
+  .msg .body{font-size:13px;line-height:1.55;color:var(--ink)}
+  .msg.user{align-self:flex-end;flex-direction:row-reverse}
+  .msg.user .av{background:var(--ink);border-color:var(--ink);color:#fff}
+  .msg.user .body{background:var(--subtle);border:1px solid var(--bd);border-radius:10px;padding:8px 12px}
+  .msg .meta{font-family:var(--mono);font-size:10px;color:var(--faint);margin-bottom:3px}
+  .toolrow{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--ink2);background:var(--surface);border:1px solid var(--bd);border-radius:7px;padding:5px 9px;margin-top:6px;width:fit-content}
+  .toolrow .dot{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+  .toolrow.pending .dot{background:var(--amber-bright)}
+  .caret{display:inline-block;width:7px;height:13px;background:var(--ink);vertical-align:-2px;animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  /* ---------- Composer stack ---------- */
+  .composer-wrap{position:relative;flex-shrink:0}
+  .composer{background:var(--bg);border:1px solid var(--bd-strong);border-radius:16px;box-shadow:var(--shadow-float);overflow:visible}
+
+  /* diff + approval trays (flush on top) */
+  .tray{display:none;align-items:center;gap:8px;background:var(--subtle);border:1px solid var(--bd);border-bottom:none;border-radius:16px 16px 0 0;padding:8px 12px;font-size:12px;margin-bottom:-1px;position:relative;z-index:2}
+  .tray.show{display:flex}
+  .tray .fname{font-family:var(--mono);font-size:11px;color:var(--ink2)}
+  .diff-add{color:var(--ok);font-family:var(--mono);font-size:11px;font-weight:600}
+  .diff-del{color:var(--red);font-family:var(--mono);font-size:11px;font-weight:600}
+  .tray .link{border:none;background:none;color:var(--info);font-size:12px;font-weight:500;padding:2px 4px;border-radius:4px}
+  .tray .link:hover{background:var(--info-bg)}
+  .tray .x{margin-left:auto;border:none;background:none;color:var(--muted);padding:3px;border-radius:5px;display:grid;place-items:center}
+  .tray .x:hover{background:var(--hover);color:var(--ink)}
+  .tray.approval{background:var(--amber-bg);border-color:var(--amber-bd)}
+  .tray.approval .lead{color:var(--amber);font-weight:600;font-size:12px}
+  .abtn{border:1px solid var(--bd-strong);background:var(--bg);border-radius:6px;font-size:11.5px;font-weight:600;padding:4px 10px;color:var(--ink)}
+  .abtn.go{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .abtn.go:hover{background:#2b2b2b}
+  .abtn:hover{background:var(--hover)}
+
+  /* chips row */
+  .chips{display:none;flex-wrap:wrap;gap:6px;padding:10px 12px 0}
+  .chips.has{display:flex}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--subtle);border:1px solid var(--bd);border-radius:7px;padding:4px 7px;font-size:11.5px;font-weight:500;color:var(--ink)}
+  .chip .k{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  .chip.cmd{background:var(--info-bg);border-color:var(--info-bd);color:var(--info)}
+  .chip.pin{background:var(--amber-bg);border-color:var(--amber-bd);color:var(--amber)}
+  .chip .rm{border:none;background:none;color:inherit;opacity:.55;padding:0;display:grid;place-items:center;border-radius:3px}
+  .chip .rm:hover{opacity:1}
+
+  /* input */
+  .input-zone{padding:12px 14px 4px}
+  textarea{width:100%;border:none;outline:none;resize:none;background:transparent;font-family:var(--sans);font-size:14px;line-height:1.5;color:var(--ink);min-height:44px;max-height:140px}
+  textarea::placeholder{color:var(--faint)}
+  .hint{display:flex;gap:10px;padding:0 14px 8px;font-size:11px;color:var(--faint)}
+  .hint b{color:var(--muted);font-weight:600}
+  kbd{font-family:var(--mono);font-size:10px;background:var(--subtle);border:1px solid var(--bd);border-bottom-width:2px;border-radius:4px;padding:1px 4px;color:var(--ink2)}
+
+  /* toolbar */
+  .toolbar{display:flex;align-items:center;gap:6px;padding:8px 10px;border-top:1px solid var(--bd);flex-wrap:wrap}
+  .toolbar .spacer{flex:1}
+  .tbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid transparent;background:transparent;border-radius:7px;padding:5px 8px;font-size:12px;font-weight:500;color:var(--ink2);transition:all .12s}
+  .tbtn:hover{background:var(--hover);color:var(--ink)}
+  .tbtn.boxed{border-color:var(--bd);background:var(--bg)}
+  .tbtn.boxed:hover{border-color:var(--bd-strong)}
+
+  .orb-badge{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--bd);border-radius:999px;padding:3px 10px 3px 4px;background:var(--surface)}
+  .orb-badge .lbl{font-size:11px;font-weight:500;color:var(--ink2);min-width:52px;text-align:left}
+  .orb-badge.thinking .lbl{color:var(--ink)}
+  .orb-badge.approval .lbl{color:var(--amber)}
+
+  .effort{display:flex;gap:1px;background:var(--subtle);border:1px solid var(--bd);border-radius:7px;padding:2px}
+  .effort button{border:none;background:transparent;border-radius:5px;padding:3px 8px;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+  .effort button:hover{color:var(--ink)}
+  .effort button.on{background:var(--bg);color:var(--ink);box-shadow:0 0 0 1px var(--bd-strong);font-weight:600}
+
+  /* context ring */
+  .ring-wrap{position:relative;width:26px;height:26px;display:grid;place-items:center}
+  .ring-wrap .pct{position:absolute;font-family:var(--mono);font-size:6.5px;color:var(--amber);font-weight:600}
+
+  .send{width:30px;height:30px;border-radius:50%;border:none;display:grid;place-items:center;background:var(--active);color:var(--muted);transition:all .14s}
+  .send.ready{background:var(--ink);color:#fff}
+  .send.ready:hover{background:#2b2b2b}
+  .send.stop{background:var(--red-bg);color:var(--red);border:1px solid var(--red-bd)}
+  .send.stop:hover{background:var(--red-bd)}
+
+  .mic.on{color:var(--red);background:var(--red-bg);border-color:var(--red-bd)}
+
+  /* ---------- Popover sheets ---------- */
+  .popover{position:absolute;left:10px;right:auto;bottom:calc(100% + 8px);min-width:300px;max-width:360px;background:var(--bg);border:1px solid var(--bd);border-radius:12px;box-shadow:var(--shadow-float);z-index:20;display:none;overflow:hidden}
+  .popover.show{display:block}
+  .pop-head{display:flex;align-items:center;gap:7px;padding:9px 12px;border-bottom:1px solid var(--bd);font-family:var(--mono);font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .pop-head .q{margin-left:auto;color:var(--ink);background:var(--subtle);border:1px solid var(--bd);border-radius:4px;padding:1px 6px;text-transform:none;letter-spacing:0}
+  .pop-list{max-height:224px;overflow-y:auto;padding:5px}
+  .pop-item{display:flex;align-items:center;gap:9px;width:100%;border:none;background:transparent;border-radius:8px;padding:7px 9px;text-align:left}
+  .pop-item .ic{width:24px;height:24px;border-radius:6px;border:1px solid var(--bd);background:var(--surface);display:grid;place-items:center;color:var(--ink2);flex-shrink:0}
+  .pop-item .t{font-size:12.5px;font-weight:600;color:var(--ink)}
+  .pop-item .t .mono{font-family:var(--mono);font-weight:500}
+  .pop-item .d{font-size:11px;color:var(--muted);margin-top:1px}
+  .pop-item .r{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .pop-item.sel{background:var(--hover)}
+  .pop-item.sel .ic{border-color:var(--bd-strong);color:var(--ink)}
+  .pop-empty{padding:14px 12px;font-size:12px;color:var(--muted);text-align:center}
+  .pop-foot{padding:6px 12px;border-top:1px solid var(--bd);font-family:var(--mono);font-size:10px;color:var(--faint);display:flex;gap:10px}
+
+  /* dropdown variant */
+  .popover.menu{min-width:210px}
+  .pop-item .check{margin-left:auto;color:var(--ink);opacity:0}
+  .pop-item.picked .check{opacity:1}
+  .pop-item.picked .r{display:none}
+
+  @media (prefers-reduced-motion:reduce){.caret{animation:none}}
+</style>
+</head>
+<body>
+
+<header class="simbar">
+  <span class="tag">State</span>
+  <div class="seg" id="simseg">
+    <button data-s="idle" class="on">Idle</button>
+    <button data-s="thinking">Thinking</button>
+    <button data-s="streaming">Streaming</button>
+    <button data-s="diff">Diff Ready</button>
+    <button data-s="approval">Needs Approval</button>
+  </div>
+  <span class="spacer"></span>
+  <span class="id">chatbar-09 · Command-Palette Hybrid</span>
+</header>
+
+<div class="canvas">
+  <div class="col">
+    <div class="thread" id="thread">
+      <div class="msg user">
+        <div class="av"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="5" r="3"/><path d="M2.5 14c.7-2.8 2.9-4.3 5.5-4.3s4.8 1.5 5.5 4.3"/></svg></div>
+        <div class="body"><div class="meta">you · 18:02</div>Refactor the composer so slash, mention and pin pickers share one popover controller.</div>
+      </div>
+      <div class="msg agent">
+        <div class="av"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="3"/><circle cx="8" cy="8" r="1.8" fill="currentColor" stroke="none"/></svg></div>
+        <div class="body"><div class="meta">orchestrator · swe-2 high · effort high</div>
+          Done. All three pickers now route through <span style="font-family:var(--mono);font-size:12px">PopoverController</span> with shared keyboard nav and trigger detection.
+          <div class="toolrow"><span class="dot"></span>edit composer.tsx · 2 files · 41s</div>
+          <div class="toolrow pending"><span class="dot"></span>verify · awaiting next run</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer-wrap">
+      <!-- floating picker sheet -->
+      <div class="popover" id="picker">
+        <div class="pop-head"><span id="picker-title">Slash commands</span><span class="q" id="picker-q"></span></div>
+        <div class="pop-list" id="picker-list"></div>
+        <div class="pop-foot"><span><kbd>↑↓</kbd> navigate</span><span><kbd>↵</kbd> insert</span><span><kbd>esc</kbd> close</span></div>
+      </div>
+      <!-- generic dropdown -->
+      <div class="popover menu" id="menu">
+        <div class="pop-list" id="menu-list"></div>
+      </div>
+
+      <!-- diff tray -->
+      <div class="tray" id="tray-diff">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--ink2)"><path d="M11.5 2.5l2 2L5 13H3v-2l8.5-8.5z"/><path d="M10 4l2 2"/></svg>
+        <span class="fname">3 files changed</span>
+        <span class="diff-add num">+383</span><span class="diff-del num">−4</span>
+        <button class="link">Quick review</button>
+        <button class="link" style="color:var(--ink);font-weight:600">View changes</button>
+        <button class="x" id="tray-diff-x" title="Dismiss"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></button>
+      </div>
+
+      <!-- approval tray -->
+      <div class="tray approval" id="tray-approval">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--amber)"><path d="M8 2l5.5 9.5h-11L8 2z"/><path d="M8 6.5v3"/><circle cx="8" cy="11" r=".4" fill="currentColor"/></svg>
+        <span class="lead">Approval required</span>
+        <span style="color:var(--ink2)">Run <span style="font-family:var(--mono);font-size:11px">npm run build && deploy --preview</span>?</span>
+        <span style="flex:1"></span>
+        <button class="abtn" id="rej">Reject</button>
+        <button class="abtn go" id="app">Approve</button>
+      </div>
+
+      <!-- composer card -->
+      <div class="composer" id="composer">
+        <div class="chips" id="chips"></div>
+        <div class="input-zone">
+          <textarea id="input" rows="1" placeholder="Message the orchestrator — / commands, @ files &amp; bots, # pins" spellcheck="false"></textarea>
+        </div>
+        <div class="hint" id="hint"><span><b>/</b> command</span><span><b>@</b> file or bot</span><span><b>#</b> preview pin</span><span style="margin-left:auto"><kbd>↵</kbd> send · <kbd>⇧↵</kbd> newline</span></div>
+        <div class="toolbar">
+          <span class="orb-badge" id="orbbadge" title="Agent state">
+            <canvas id="orb" width="22" height="22"></canvas>
+            <span class="lbl" id="orblbl">Idle</span>
+          </span>
+          <span class="effort" id="effort" title="Reasoning effort">
+            <button data-e="off">Off</button><button data-e="low">Low</button><button data-e="high" class="on">High</button><button data-e="max">Max</button>
+          </span>
+          <button class="tbtn boxed" id="autonomy-btn" title="Autonomy level">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8l5 2v4c0 3.2-2.1 5.4-5 6.4-2.9-1-5-3.2-5-6.4v-4l5-2z"/><path d="M5.8 8l1.6 1.6 3-3.2"/></svg>
+            <span id="autonomy-lbl">Scoped</span>
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 3.8L5 6.3l2.5-2.5"/></svg>
+          </button>
+          <button class="tbtn boxed" id="project-btn" title="Project / folder">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A1.5 1.5 0 013.5 3h3l1.5 2h5A1.5 1.5 0 0114.5 6.5v5A1.5 1.5 0 0113 13H3.5A1.5 1.5 0 012 11.5v-7z"/></svg>
+            <span id="project-lbl">bot-factory</span>
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 3.8L5 6.3l2.5-2.5"/></svg>
+          </button>
+          <span class="spacer"></span>
+          <span class="ring-wrap" id="ring" title="Context used">
+            <svg width="26" height="26" viewBox="0 0 26 26"><circle cx="13" cy="13" r="10" fill="none" stroke="#f0e7d8" stroke-width="2.5"/><circle id="ringarc" cx="13" cy="13" r="10" fill="none" stroke="#d97706" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="62.83" stroke-dashoffset="62.83" transform="rotate(-90 13 13)"/></svg>
+            <span class="pct num" id="ringpct">0</span>
+          </span>
+          <button class="tbtn boxed mic" id="mic" title="Voice input">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="1.8" width="5" height="8" rx="2.5"/><path d="M3 8a5 5 0 0010 0"/><path d="M8 13v1.5"/></svg>
+          </button>
+          <button class="send" id="send" title="Send" disabled>
+            <svg id="send-ic-up" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3.5"/><path d="M3.8 7.5L8 3.3l4.2 4.2"/></svg>
+            <svg id="send-ic-stop" width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="display:none"><rect x="2" y="2" width="8" height="8" rx="1.5"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const input = $("#input"), chips = $("#chips"), thread = $("#thread");
+const picker = $("#picker"), pTitle = $("#picker-title"), pQ = $("#picker-q"), pList = $("#picker-list");
+const menu = $("#menu"), mList = $("#menu-list");
+const sendBtn = $("#send"), icUp = $("#send-ic-up"), icStop = $("#send-ic-stop");
+const orbBadge = $("#orbbadge"), orbLbl = $("#orblbl");
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ============================== Thinking Orb ============================== */
+const orb = $("#orb"), octx = orb.getContext("2d");
+const DPR = Math.min(devicePixelRatio || 1, 2);
+orb.width = 22 * DPR; orb.height = 22 * DPR; octx.scale(DPR, DPR);
+let orbState = "idle", orbT = 0;
+const DOTS = Array.from({length: 26}, (_, i) => ({
+  ring: i % 3, a: (i / 26) * Math.PI * 2 + (i % 3) * 0.8,
+  r: 3.2 + (i % 3) * 2.4, s: 0.6 + ((i * 7) % 5) * 0.22, sz: 0.7 + ((i * 13) % 4) * 0.28
+}));
+function orbColor(){
+  if (orbState === "approval") return "#b45309";
+  if (orbState === "diff") return "#166534";
+  return "#171717";
+}
+function drawOrb(){
+  orbT += reduced ? 0 : 1;
+  octx.clearRect(0, 0, 22, 22);
+  const cx = 11, cy = 11;
+  const cfg = {idle:{sp:.006,br:.15,al:.45},thinking:{sp:.035,br:.55,al:.9},streaming:{sp:.05,br:.4,al:.85},diff:{sp:.012,br:.2,al:.7},approval:{sp:.02,br:.35,al:.85}}[orbState];
+  const breathe = 1 + Math.sin(orbT * .05) * cfg.br * .18;
+  // whisper-thin pearl ring
+  octx.beginPath(); octx.arc(cx, cy, 10, 0, Math.PI*2);
+  octx.strokeStyle = "rgba(23,23,23,.10)"; octx.lineWidth = .75; octx.stroke();
+  const col = orbColor();
+  DOTS.forEach(d => {
+    const dir = d.ring === 1 ? -1 : 1;
+    const a = d.a + orbT * cfg.sp * d.s * dir;
+    const rr = d.r * breathe + Math.sin(orbT * .04 + d.a * 3) * .5;
+    const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+    const tw = .55 + .45 * Math.sin(orbT * .07 + d.a * 5);
+    octx.globalAlpha = cfg.al * tw;
+    octx.fillStyle = col;
+    octx.beginPath(); octx.arc(x, y, d.sz, 0, Math.PI*2); octx.fill();
+  });
+  octx.globalAlpha = 1;
+  requestAnimationFrame(drawOrb);
+}
+drawOrb();
+
+/* ============================== Data ============================== */
+const SLASH = [
+  {id:"/plan",       t:"/plan",       d:"Draft a step-by-step execution plan", tag:"cmd"},
+  {id:"/verify",     t:"/verify",     d:"Run the verification & lint pass",    tag:"cmd"},
+  {id:"/preview-3d", t:"/preview-3d", d:"Open the 3D preview pane",            tag:"cmd"},
+  {id:"/spawn-bot",  t:"/spawn-bot",  d:"Delegate this task to a sub-bot",     tag:"cmd"},
+  {id:"/diff",       t:"/diff",       d:"Show pending diff in the tray",       tag:"cmd"},
+];
+const MENTIONS = [
+  {id:"composer.tsx", t:"composer.tsx",  d:"src/ui · 412 lines",     tag:"file"},
+  {id:"state.ts",     t:"state.ts",      d:"src/harness · 188 lines",tag:"file"},
+  {id:"chat.css",     t:"chat.css",      d:"src/styles · 96 lines",  tag:"file"},
+  {id:"README.md",    t:"README.md",     d:"repo root",              tag:"file"},
+  {id:"architect",    t:"Architect Bot", d:"bot · planning & layout",tag:"bot"},
+  {id:"verifier",     t:"Verifier Bot",  d:"bot · checks & tests",   tag:"bot"},
+  {id:"pm",           t:"PM Bot",        d:"bot · steering & scope", tag:"bot"},
+];
+const PINS = [
+  {id:"orb-badge",   t:"orb-badge",        d:"3D pin · toolbar left",  tag:"pin"},
+  {id:"telemetry",   t:"telemetry-ribbon", d:"3D pin · top deck",      tag:"pin"},
+  {id:"diff-tray",   t:"diff-tray",        d:"3D pin · attached tray", tag:"pin"},
+  {id:"send-orb",    t:"send-orb",         d:"3D pin · send control",  tag:"pin"},
+];
+const AUTONOMY = ["Ask","Scoped","Medium","Auto-High"];
+const PROJECTS = ["bot-factory","harness/variants","Roblox_Game_Rom","mixar-tests-01"];
+
+/* ============================== Picker engine ============================== */
+let pk = {open:false, kind:null, items:[], sel:0, start:-1};
+
+function detectTrigger(){
+  const pos = input.selectionStart, val = input.value.slice(0, pos);
+  const m = val.match(/(^|\s)([/@#])([\w-]*)$/);
+  if (!m) return null;
+  return {ch:m[2], q:m[3], start:pos - m[3].length - 1};
+}
+function refreshPicker(){
+  const tr = detectTrigger();
+  if (!tr){ closePicker(); return; }
+  const kind = tr.ch === "/" ? "slash" : tr.ch === "@" ? "mention" : "pin";
+  const src = kind === "slash" ? SLASH : kind === "mention" ? MENTIONS : PINS;
+  const q = tr.q.toLowerCase();
+  const items = src.filter(i => i.t.toLowerCase().includes(q) || i.d.toLowerCase().includes(q));
+  pk = {open:true, kind, items, sel:0, start:tr.start, q:tr.q};
+  pTitle.textContent = kind === "slash" ? "Slash commands" : kind === "mention" ? "Files & bots" : "Preview pins";
+  pQ.textContent = tr.ch + tr.q;
+  renderPicker(); picker.classList.add("show"); closeMenu();
+}
+function iconFor(tag){
+  const s = 'width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
+  if (tag === "cmd")  return `<svg ${s}><path d="M4.5 5.5L7 8l-2.5 2.5"/><path d="M8.5 11h3"/></svg>`;
+  if (tag === "file") return `<svg ${s}><path d="M4 1.8h5l3 3V14a.8.8 0 01-.8.8H4a.8.8 0 01-.8-.8V2.6a.8.8 0 01.8-.8z"/><path d="M9 1.8V5h3.2"/></svg>`;
+  if (tag === "bot")  return `<svg ${s}><rect x="3" y="5" width="10" height="8" rx="2.5"/><path d="M8 5V2.8"/><circle cx="8" cy="2" r=".8" fill="currentColor" stroke="none"/><circle cx="6" cy="9" r=".7" fill="currentColor" stroke="none"/><circle cx="10" cy="9" r=".7" fill="currentColor" stroke="none"/></svg>`;
+  return `<svg ${s}><path d="M8 14s5-4.4 5-8a5 5 0 10-10 0c0 3.6 5 8 5 8z"/><circle cx="8" cy="6" r="1.6"/></svg>`;
+}
+function renderPicker(){
+  if (!pk.items.length){ pList.innerHTML = `<div class="pop-empty">No matches</div>`; return; }
+  pList.innerHTML = pk.items.map((i,n) => `
+    <button class="pop-item ${n===pk.sel?"sel":""}" data-n="${n}">
+      <span class="ic">${iconFor(i.tag)}</span>
+      <span><div class="t"><span class="mono">${i.t}</span></div><div class="d">${i.d}</div></span>
+      <span class="r">${i.tag}</span>
+    </button>`).join("");
+  pList.querySelectorAll(".pop-item").forEach(el => {
+    el.addEventListener("mouseenter", () => { pk.sel = +el.dataset.n; renderPicker(); });
+    el.addEventListener("click", () => pickItem(+el.dataset.n));
+  });
+}
+function pickItem(n){
+  const it = pk.items[n]; if (!it) return;
+  const pos = input.selectionStart;
+  input.value = input.value.slice(0, pk.start) + input.value.slice(pos);
+  input.selectionStart = input.selectionEnd = pk.start;
+  addChip(it); closePicker(); autosize(); syncSend(); input.focus();
+}
+function closePicker(){ pk.open = false; picker.classList.remove("show"); }
+
+function addChip(it){
+  chips.classList.add("has");
+  const el = document.createElement("span");
+  el.className = "chip" + (it.tag === "cmd" ? " cmd" : it.tag === "pin" ? " pin" : "");
+  el.innerHTML = `${iconFor(it.tag)}<span class="k">${it.tag}</span>${it.t}
+    <button class="rm" title="Remove"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>`;
+  el.querySelector(".rm").addEventListener("click", () => { el.remove(); if (!chips.children.length) chips.classList.remove("has"); });
+  chips.appendChild(el);
+}
+
+/* ============================== Generic menu (dropdowns) ============================== */
+let menuFor = null;
+function openMenu(anchor, items, current, onPick){
+  menuFor = onPick;
+  mList.innerHTML = items.map((i,n) => `
+    <button class="pop-item ${i===current?"picked":""}" data-n="${n}">
+      <span><div class="t">${i}</div></span>
+      <span class="r"></span>
+      <svg class="check" width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.5l3 3 6-6.5"/></svg>
+    </button>`).join("");
+  mList.querySelectorAll(".pop-item").forEach(el =>
+    el.addEventListener("click", () => { onPick(items[+el.dataset.n]); closeMenu(); }));
+  const r = anchor.getBoundingClientRect(), w = $(".composer").getBoundingClientRect();
+  menu.style.left = Math.min(Math.max(8, r.left - w.left), Math.max(8, w.width - 218)) + "px";
+  menu.classList.add("show");
+}
+function closeMenu(){ menu.classList.remove("show"); menuFor = null; }
+
+$("#autonomy-btn").addEventListener("click", e => {
+  e.stopPropagation();
+  if (menu.classList.contains("show")) return closeMenu();
+  openMenu(e.currentTarget, AUTONOMY, $("#autonomy-lbl").textContent,
+    v => $("#autonomy-lbl").textContent = v);
+});
+$("#project-btn").addEventListener("click", e => {
+  e.stopPropagation();
+  if (menu.classList.contains("show")) return closeMenu();
+  openMenu(e.currentTarget, PROJECTS, $("#project-lbl").textContent,
+    v => $("#project-lbl").textContent = v);
+});
+
+/* ============================== Input & send ============================== */
+function autosize(){ input.style.height = "auto"; input.style.height = Math.min(140, input.scrollHeight) + "px"; }
+function syncSend(){
+  const has = input.value.trim().length > 0;
+  const busy = state === "thinking" || state === "streaming";
+  sendBtn.disabled = !has && !busy;
+  sendBtn.classList.toggle("ready", has && !busy);
+  sendBtn.classList.toggle("stop", busy);
+  icUp.style.display = busy ? "none" : "block";
+  icStop.style.display = busy ? "block" : "none";
+  ringUpdate();
+}
+input.addEventListener("input", () => { autosize(); refreshPicker(); syncSend(); });
+input.addEventListener("keydown", e => {
+  if (pk.open){
+    if (e.key === "ArrowDown"){ e.preventDefault(); pk.sel = (pk.sel+1) % pk.items.length; renderPicker(); }
+    else if (e.key === "ArrowUp"){ e.preventDefault(); pk.sel = (pk.sel-1+pk.items.length) % pk.items.length; renderPicker(); }
+    else if (e.key === "Enter"){ e.preventDefault(); pickItem(pk.sel); }
+    else if (e.key === "Escape"){ e.preventDefault(); closePicker(); }
+    return;
+  }
+  if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); doSend(); }
+});
+input.addEventListener("click", refreshPicker);
+input.addEventListener("blur", () => setTimeout(() => { if (!picker.matches(":hover")) closePicker(); }, 120));
+
+function stamp(){
+  const d = new Date();
+  return String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
+}
+function appendMsg(role, html){
+  const el = document.createElement("div");
+  el.className = "msg " + role;
+  const av = role === "user"
+    ? `<div class="av"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="5" r="3"/><path d="M2.5 14c.7-2.8 2.9-4.3 5.5-4.3s4.8 1.5 5.5 4.3"/></svg></div>`
+    : `<div class="av"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="3"/><circle cx="8" cy="8" r="1.8" fill="currentColor" stroke="none"/></svg></div>`;
+  const meta = role === "user" ? `you · ${stamp()}` : `orchestrator · swe-2 high · effort ${$("#effort .on").dataset.e} · ${stamp()}`;
+  el.innerHTML = `${av}<div class="body"><div class="meta">${meta}</div><span class="txt">${html}</span></div>`;
+  thread.appendChild(el); thread.scrollTop = thread.scrollHeight;
+  return el.querySelector(".txt");
+}
+
+let timers = [];
+function clearTimers(){ timers.forEach(clearTimeout); timers = []; }
+const later = (fn, ms) => timers.push(setTimeout(fn, ms));
+
+const REPLY = "Understood. I'll route that through the shared popover controller and keep the trigger surface minimal — one sheet for /, @ and # with keyboard-first navigation.";
+function doSend(){
+  if (state === "thinking" || state === "streaming"){ clearTimers(); setState("idle"); return; }
+  const txt = input.value.trim();
+  if (!txt && !chips.children.length) return;
+  const chipTxt = chips.children.length ? " " + [...chips.children].map(c => c.textContent.trim()).join(" ") : "";
+  appendMsg("user", (txt || "Context attached") + (chipTxt ? `<span style="color:var(--muted)"> ${chipTxt}</span>` : ""));
+  input.value = ""; chips.innerHTML = ""; chips.classList.remove("has");
+  autosize(); closePicker();
+  setState("thinking");
+  const target = appendMsg("agent", "");
+  later(() => {
+    setState("streaming");
+    let i = 0;
+    const tick = () => {
+      if (state !== "streaming") return;
+      i = Math.min(REPLY.length, i + 2 + Math.floor(Math.random()*3));
+      target.innerHTML = REPLY.slice(0, i) + (i < REPLY.length ? '<span class="caret"></span>' : "");
+      thread.scrollTop = thread.scrollHeight;
+      if (i < REPLY.length) later(tick, 26); else { later(() => setState("idle"), 500); }
+    };
+    tick();
+  }, 1300);
+}
+sendBtn.addEventListener("click", doSend);
+
+/* ============================== Mic ============================== */
+$("#mic").addEventListener("click", () => {
+  const on = $("#mic").classList.toggle("on");
+  if (on){ input.placeholder = "Listening — speak now"; orbLbl.textContent = "Listening"; }
+  else { input.placeholder = "Message the orchestrator — / commands, @ files & bots, # pins"; setState(state); }
+});
+
+/* ============================== Context ring ============================== */
+const ARC = 62.83;
+function ringUpdate(){
+  const pct = Math.min(99, Math.round(input.value.length / 4 + chips.children.length * 6 + (state==="diff"?18:0) + 8));
+  $("#ringarc").style.strokeDashoffset = ARC * (1 - pct/100);
+  $("#ringpct").textContent = pct;
+  $("#ring").title = `Context used: ${pct}%`;
+}
+
+/* ============================== State machine ============================== */
+let state = "idle";
+const STATES = {idle:"Idle",thinking:"Thinking…",streaming:"Streaming",diff:"Diff ready",approval:"Needs approval"};
+function setState(s){
+  state = s; orbState = s;
+  document.querySelectorAll("#simseg button").forEach(b => {
+    b.classList.toggle("on", b.dataset.s === s);
+    b.classList.toggle("warn", b.dataset.s === s && (s === "approval" || s === "diff"));
+  });
+  orbLbl.textContent = STATES[s];
+  orbBadge.className = "orb-badge" + (s==="thinking"||s==="streaming" ? " thinking" : s==="approval" ? " approval" : "");
+  $("#tray-diff").classList.toggle("show", s === "diff");
+  $("#tray-approval").classList.toggle("show", s === "approval");
+  if (s !== "thinking" && s !== "streaming") clearTimers();
+  syncSend(); ringUpdate();
+}
+document.querySelectorAll("#simseg button").forEach(b =>
+  b.addEventListener("click", () => setState(b.dataset.s)));
+
+$("#tray-diff-x").addEventListener("click", () => setState("idle"));
+$("#app").addEventListener("click", () => { appendMsg("agent", "Approved — running the command now."); setState("thinking"); later(() => setState("idle"), 1400); });
+$("#rej").addEventListener("click", () => { appendMsg("agent", "Rejected. I won't run that command — suggest an alternative when ready."); setState("idle"); });
+
+/* effort segmented */
+$("#effort").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  $("#effort .on").classList.remove("on"); b.classList.add("on");
+});
+
+/* close sheets on outside click */
+document.addEventListener("click", e => {
+  if (!picker.contains(e.target) && e.target !== input) closePicker();
+  if (!menu.contains(e.target) && !e.target.closest("#autonomy-btn,#project-btn")) closeMenu();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape"){ closePicker(); closeMenu(); } });
+
+autosize(); syncSend(); ringUpdate();
+</script>
+</body>
+</html>

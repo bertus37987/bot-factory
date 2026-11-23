@@ -1,0 +1,27 @@
+{
+  "name": "@bot-factory/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@bot-factory/shared": "workspace:*",
+    "lucide-react": "0.511.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "thinking-orbs": "^0.3.2",
+    "three": "0.176.0",
+    "zod": "3.24.4"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.4",
+    "@types/react-dom": "19.1.5",
+    "@types/three": "0.176.0",
+    "@vitejs/plugin-react": "4.5.0",
+    "vite": "6.3.5"
+  }
+}

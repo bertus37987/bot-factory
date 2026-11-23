@@ -1,0 +1,21 @@
+{
+  "name": "bot-factory-harness",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:daemon": "bun --watch apps/daemon/src/index.ts",
+    "dev:web": "bun run --cwd apps/web dev",
+    "build:web": "bun run --cwd apps/web build",
+    "start": "bun apps/daemon/src/index.ts",
+    "typecheck": "bun x tsc --noEmit",
+    "test": "bun test tests"
+  },
+  "devDependencies": {
+    "@types/bun": "1.2.15",
+    "typescript": "5.8.3"
+  }
+}

@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>chatbar-06 — Context-Chips &amp; Multi-Bot Target Bar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#ffffff; --surface:#fafafa; --subtle:#f5f5f5; --hover:#f2f2f3; --active:#eaeaeb;
+    --border:#ebebeb; --border-strong:#dcdce0;
+    --ink:#171717; --ink2:#525252; --muted:#8a8a8a; --faint:#a8a8a8;
+    --ok-ink:#166534; --ok-bg:#f0fdf4; --ok-bd:#dcfce7;
+    --info-ink:#1d4ed8; --info-bg:#f2f6fa; --info-bd:#d7e4f0;
+    --amber-ink:#b45309; --amber:#d97706; --amber-bg:#fffbeb; --amber-bd:#fde68a;
+    --red-ink:#b91c1c; --red-bg:#fef2f2; --red-bd:#fecaca;
+    --sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,monospace;
+    --shadow-pop:0 1px 2px rgba(0,0,0,.04),0 8px 24px -6px rgba(0,0,0,.08);
+    --shadow-card:0 1px 2px rgba(0,0,0,.04),0 8px 24px -6px rgba(0,0,0,.06);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  button{font-family:inherit;cursor:pointer}
+  svg{display:block}
+
+  .simbar{height:46px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 16px;gap:12px}
+  .sim-left{display:flex;align-items:center;gap:8px;min-width:0}
+  .vbadge{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--bg);border:1px solid var(--border);padding:2px 7px;border-radius:5px;font-variant-numeric:tabular-nums}
+  .vname{font-size:13px;font-weight:600;letter-spacing:-0.01em;white-space:nowrap}
+  .sim-states{display:flex;align-items:center;gap:2px;background:var(--subtle);border:1px solid var(--border);border-radius:8px;padding:3px}
+  .sim-btn{border:1px solid transparent;background:transparent;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:500;color:var(--ink2);display:flex;align-items:center;gap:6px;transition:all 140ms ease}
+  .sim-btn:hover{color:var(--ink)}
+  .sim-btn.active{background:var(--bg);color:var(--ink);border-color:var(--border-strong);box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .sim-dot{width:6px;height:6px;border-radius:50%;background:var(--faint)}
+  .sim-btn.active .sim-dot{background:var(--ink)}
+  .sim-btn[data-state="approval"].active .sim-dot{background:var(--amber)}
+  .sim-btn[data-state="diff"].active .sim-dot{background:var(--info-ink)}
+  .sim-btn[data-state="streaming"].active .sim-dot{background:var(--ok-ink)}
+
+  .stage{min-height:calc(100vh - 46px);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:40px 24px 56px;background:
+    radial-gradient(circle at 1px 1px, #f4f4f4 1px, transparent 0) 0 0/26px 26px, var(--bg)}
+  .thread{width:720px;max-width:100%;margin-bottom:34px;display:flex;flex-direction:column;gap:14px}
+  .msg{max-width:82%;font-size:13.5px;line-height:1.55;padding:10px 14px;border-radius:14px;white-space:pre-wrap}
+  .msg.user{align-self:flex-end;background:var(--subtle);border:1px solid var(--border)}
+  .msg.bot{align-self:flex-start;background:var(--bg);border:1px solid var(--border);color:var(--ink2)}
+  .msg .route{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+  .msg .caret{display:inline-block;width:7px;height:14px;background:var(--ink);vertical-align:-2px;margin-left:2px;animation:blink 1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .thread-empty{align-self:center;font-size:12px;color:var(--faint);font-family:var(--mono)}
+
+  /* ---------- composer card ---------- */
+  .composer{width:720px;max-width:100%}
+  .tray{display:none;align-items:center;justify-content:space-between;gap:10px;padding:8px 14px;margin:0 10px;border:1px solid var(--amber-bd);border-bottom:none;background:var(--amber-bg);border-radius:18px 18px 0 0;font-size:12.5px;color:var(--amber-ink)}
+  .tray.show{display:flex}
+  .tray-left,.tray-right{display:flex;align-items:center;gap:10px;min-width:0}
+  .approve-btn{border:1px solid var(--amber-bd);background:var(--bg);color:var(--amber-ink);font-size:12px;font-weight:600;padding:4px 10px;border-radius:6px}
+  .approve-btn.solid{background:var(--amber-ink);color:#fff;border-color:var(--amber-ink)}
+  .deny-btn{border:1px solid var(--border);background:var(--bg);color:var(--ink2);font-size:12px;font-weight:500;padding:4px 10px;border-radius:6px}
+  .deny-btn:hover{color:var(--red-ink);border-color:var(--red-bd)}
+
+  .card{position:relative;z-index:2;background:var(--bg);border:1px solid var(--border-strong);border-radius:16px;box-shadow:var(--shadow-card)}
+
+  .agentline{display:none;align-items:center;gap:9px;padding:11px 14px 0;font-size:12.5px;color:var(--ink2)}
+  .agentline.show{display:flex}
+  .agentline .orb-wrap{width:22px;height:22px;flex:none}
+  .agentline .status{font-weight:500;color:var(--ink)}
+  .agentline .elapsed{font-family:var(--mono);font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .agentline .who{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+
+  /* context chips */
+  .chiprow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:12px 14px 0}
+  .chip{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ink2);background:var(--subtle);border:1px solid var(--border);border-radius:9px;padding:5px 7px 5px 9px;transition:border-color 140ms ease}
+  .chip .nm{font-weight:500;color:var(--ink);font-family:var(--mono);font-size:11.5px}
+  .chip .x{border:none;background:none;color:var(--muted);width:16px;height:16px;border-radius:4px;display:grid;place-items:center;padding:0}
+  .chip .x:hover{background:var(--hover);color:var(--ink)}
+  .chip.diff{background:var(--info-bg);border-color:var(--info-bd);color:var(--info-ink)}
+  .chip.diff .nm{color:var(--info-ink)}
+  .chip.diff.flash{animation:chipflash 1.4s ease}
+  @keyframes chipflash{0%{box-shadow:0 0 0 0 rgba(29,78,216,.25)}100%{box-shadow:0 0 0 8px rgba(29,78,216,0)}}
+  .chip .diffstat{font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums}
+  .chip .diffstat .add{color:var(--ok-ink)} .chip .diffstat .del{color:var(--red-ink)}
+  .chip.add{border-style:dashed;color:var(--muted)}
+  .chip.add:hover{color:var(--ink);border-color:var(--border-strong);background:var(--hover)}
+  .chip.add .pl{padding:0 2px;display:grid;place-items:center}
+
+  textarea{display:block;width:100%;border:none;outline:none;resize:none;background:transparent;font-family:var(--sans);font-size:14px;line-height:1.55;color:var(--ink);padding:12px 14px 6px;min-height:52px;max-height:160px}
+  textarea::placeholder{color:var(--faint)}
+
+  .bar{display:flex;align-items:center;gap:6px;padding:8px 10px 10px}
+  .spacer{flex:1}
+  .icbtn{width:30px;height:30px;border-radius:8px;border:1px solid transparent;background:transparent;color:var(--ink2);display:grid;place-items:center;transition:all 140ms ease}
+  .icbtn:hover{background:var(--hover);color:var(--ink)}
+
+  /* target routing pill — the signature control */
+  .route-pill{display:flex;align-items:center;gap:8px;border:1px solid var(--border-strong);background:var(--bg);border-radius:10px;padding:5px 10px 5px 7px;font-size:12.5px;font-weight:600;color:var(--ink);transition:all 140ms ease;white-space:nowrap}
+  .route-pill:hover{background:var(--hover)}
+  .route-pill .rmark{width:22px;height:22px;border-radius:6px;background:var(--subtle);border:1px solid var(--border);display:grid;place-items:center;color:var(--ink);flex:none}
+  .route-pill.group .rmark{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .route-pill .chev{color:var(--faint)}
+  .route-pill .members{display:flex;margin-left:2px}
+  .route-pill .members i{width:16px;height:16px;border-radius:50%;background:var(--bg);border:1.5px solid var(--border-strong);margin-left:-5px;display:grid;place-items:center;font-style:normal;font-size:8px;font-weight:600;color:var(--ink2)}
+
+  .pill{display:flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--bg);color:var(--ink2);border-radius:8px;padding:5px 9px;font-size:12px;font-weight:500;transition:all 140ms ease;white-space:nowrap}
+  .pill:hover{background:var(--hover);border-color:var(--border-strong);color:var(--ink)}
+  .pill .chev{color:var(--faint)}
+  .pill.hot{color:var(--amber-ink);border-color:var(--amber-bd);background:var(--amber-bg)}
+  .pill .sep{width:3px;height:3px;border-radius:50%;background:var(--faint)}
+
+  /* 4-dot segmented reasoning control */
+  .effort{display:flex;align-items:center;gap:8px;border:1px solid var(--border);background:var(--bg);border-radius:8px;padding:5px 10px}
+  .effort .dots{display:flex;align-items:center;gap:0;position:relative}
+  .effort .dots::before{content:"";position:absolute;left:5px;right:5px;top:50%;height:1.5px;background:var(--border);transform:translateY(-50%)}
+  .edot{position:relative;z-index:1;width:11px;height:11px;border-radius:50%;border:1.5px solid var(--border-strong);background:var(--bg);padding:0;margin:0 4px;transition:all 150ms ease}
+  .edot:hover{border-color:var(--ink)}
+  .edot.fill{background:var(--ink);border-color:var(--ink)}
+  .edot:first-child{margin-left:0}.edot:last-child{margin-right:0}
+  .effort .elabel{font-size:11.5px;font-weight:600;color:var(--ink);min-width:26px;font-variant-numeric:tabular-nums}
+  .effort .etitle{font-size:10px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+
+  .send{width:32px;height:32px;border-radius:50%;border:none;background:var(--faint);color:#fff;display:grid;place-items:center;transition:all 160ms ease}
+  .send.ready{background:var(--ink)}
+  .send.ready:hover{background:#2b2b2b}
+  .send.stop{background:var(--ink)}
+  .send.stop:hover{background:var(--red-ink)}
+
+  .caption{width:720px;max-width:100%;margin-top:14px;text-align:center;font-size:11.5px;color:var(--faint)}
+
+  /* popovers + slash */
+  .pop{position:fixed;z-index:50;min-width:220px;background:var(--bg);border:1px solid var(--border-strong);border-radius:12px;box-shadow:var(--shadow-pop);padding:5px;display:none;animation:popin 140ms ease}
+  .pop.show{display:block}
+  @keyframes popin{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .pop-head{font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:7px 9px 4px}
+  .pop-item{display:flex;align-items:center;gap:9px;width:100%;border:none;background:none;text-align:left;padding:7px 9px;border-radius:8px;font-size:13px;color:var(--ink)}
+  .pop-item:hover{background:var(--hover)}
+  .pop-item .sub{margin-left:auto;font-size:11px;color:var(--muted);font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .pop-item .desc{display:block;font-size:11px;color:var(--muted);margin-top:1px}
+  .pop-item.sel{background:var(--subtle)}
+  .pop-item .tick{margin-left:auto;color:transparent}
+  .pop-item.sel .tick{color:var(--ink)}
+  .pop-item .rmark{width:24px;height:24px;border-radius:7px;background:var(--subtle);border:1px solid var(--border);display:grid;place-items:center;color:var(--ink);flex:none}
+  .pop-item.sel .rmark{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .pop-div{height:1px;background:var(--border);margin:5px 4px}
+  .seg{display:flex;gap:2px;background:var(--subtle);border:1px solid var(--border);border-radius:8px;padding:2px;margin:4px 9px 7px}
+  .seg button{flex:1;border:1px solid transparent;background:transparent;border-radius:6px;padding:4px 0;font-size:11.5px;font-weight:500;color:var(--ink2)}
+  .seg button.active{background:var(--bg);color:var(--ink);border-color:var(--border-strong)}
+
+  .slash{position:fixed;z-index:60;min-width:250px;background:var(--bg);border:1px solid var(--border-strong);border-radius:12px;box-shadow:var(--shadow-pop);padding:5px;display:none}
+  .slash.show{display:block}
+  .slash-item{display:flex;align-items:center;gap:10px;width:100%;border:none;background:none;text-align:left;padding:8px 9px;border-radius:8px;font-size:13px;color:var(--ink)}
+  .slash-item.active,.slash-item:hover{background:var(--hover)}
+  .slash-item .cmd{font-family:var(--mono);font-size:12px;color:var(--ink);min-width:76px}
+  .slash-item .hint{font-size:11.5px;color:var(--muted)}
+
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(8px);background:var(--ink);color:#fff;font-size:12.5px;font-weight:500;padding:8px 14px;border-radius:8px;opacity:0;pointer-events:none;transition:all 200ms ease;z-index:100;box-shadow:var(--shadow-pop)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<header class="simbar">
+  <div class="sim-left">
+    <span class="vbadge">chatbar-06</span>
+    <span class="vname">Context-Chips &amp; Multi-Bot Target Bar</span>
+  </div>
+  <div class="sim-states" id="simStates">
+    <button class="sim-btn active" data-state="idle"><span class="sim-dot"></span>Idle</button>
+    <button class="sim-btn" data-state="thinking"><span class="sim-dot"></span>Thinking</button>
+    <button class="sim-btn" data-state="streaming"><span class="sim-dot"></span>Streaming</button>
+    <button class="sim-btn" data-state="diff"><span class="sim-dot"></span>Diff Ready</button>
+    <button class="sim-btn" data-state="approval"><span class="sim-dot"></span>Needs Approval</button>
+  </div>
+</header>
+
+<main class="stage">
+  <div class="thread" id="thread">
+    <div class="thread-empty">Route the prompt to a bot, a teammate, or the whole Core Team</div>
+  </div>
+
+  <div class="composer">
+    <div class="tray" id="trayApproval">
+      <div class="tray-left">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 13 3.6v3.9c0 3.1-2.1 5.4-5 6.7-2.9-1.3-5-3.6-5-6.7V3.6L8 1.8Z"/><path d="M8 5.4v3"/></svg>
+        <span><b style="font-weight:600">PM Bot</b> requests <b style="font-weight:600">deploy: staging</b> — approve?</span>
+      </div>
+      <div class="tray-right">
+        <button class="deny-btn" id="btnDeny">Deny</button>
+        <button class="approve-btn solid" id="btnApprove">Approve</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="agentline" id="agentLine">
+        <span class="orb-wrap"><canvas id="orbCanvas" width="44" height="44" style="width:22px;height:22px"></canvas></span>
+        <span class="status" id="agentStatus">Thinking…</span>
+        <span class="elapsed" id="elapsed">0:00</span>
+        <span class="who" id="agentWho"></span>
+      </div>
+
+      <div class="chiprow" id="chipRow">
+        <span class="chip" data-chip="plans/roadmap.md">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.8h5.5L13 5.3v8.2a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5V3.3a1.5 1.5 0 0 1 1-1.5Z"/><path d="M9.5 1.8V5H13"/></svg>
+          <span class="nm">plans/roadmap.md</span>
+          <button class="x" title="Remove"><svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></button>
+        </span>
+        <span class="chip" data-chip="artifacts/hero-monolith.glb">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 14 5v6l-6 3.2L2 11V5l6-3.2Z"/><path d="M2 5l6 3.2L14 5M8 8.2V14"/></svg>
+          <span class="nm">artifacts/hero-monolith.glb</span>
+          <button class="x" title="Remove"><svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></button>
+        </span>
+        <button class="chip diff" id="diffChip" data-chip="diff">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.3 2.1a1.6 1.6 0 0 1 2.6 2.6L5.2 13.4 2 14l.6-3.2 8.7-8.7Z"/></svg>
+          <span class="nm">3 files</span>
+          <span class="diffstat"><span class="add">+383</span> <span class="del">-4</span></span>
+        </button>
+        <button class="chip add" id="btnAddCtx">
+          <span class="pl"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></span>
+          Add context
+        </button>
+      </div>
+
+      <textarea id="ta" rows="2" placeholder="Direct the swarm — pick a target, set effort, / for actions" spellcheck="false"></textarea>
+
+      <div class="bar">
+        <button class="route-pill" id="btnRoute">
+          <span class="rmark" id="routeMark">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.4"/><circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none"/></svg>
+          </span>
+          <span id="routeLabel">Meta-Orchestrator</span>
+          <span class="members" id="routeMembers" style="display:none"></span>
+          <svg class="chev" width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5 6 7l2.5-2.5"/></svg>
+        </button>
+        <button class="pill" id="btnAutonomy">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 13 3.6v3.9c0 3.1-2.1 5.4-5 6.7-2.9-1.3-5-3.6-5-6.7V3.6L8 1.8Z"/></svg>
+          <span id="autonomyLabel">Scoped</span>
+          <svg class="chev" width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5 6 7l2.5-2.5"/></svg>
+        </button>
+        <span class="spacer"></span>
+        <div class="effort" id="effortCtl" title="Reasoning effort">
+          <span class="etitle">Effort</span>
+          <span class="dots">
+            <button class="edot" data-i="0" title="Off"></button>
+            <button class="edot fill" data-i="1" title="Low"></button>
+            <button class="edot fill" data-i="2" title="High"></button>
+            <button class="edot" data-i="3" title="Max"></button>
+          </span>
+          <span class="elabel" id="effortLabel">High</span>
+        </div>
+        <button class="pill" id="btnModel">
+          <span id="modelLabel">SWE-2 High</span>
+          <svg class="chev" width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5 6 7l2.5-2.5"/></svg>
+        </button>
+        <button class="send" id="btnSend" title="Send">
+          <svg id="sendArrow" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12.5v-9M4.2 7.3 8 3.5l3.8 3.8"/></svg>
+          <svg id="sendStop" width="12" height="12" viewBox="0 0 14 14" fill="currentColor" style="display:none"><rect x="2.5" y="2.5" width="9" height="9" rx="2"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="caption">Bot-Factory routing bar — chips carry live context, the 4-dot control sets reasoning depth</div>
+</main>
+
+<!-- popovers -->
+<div class="pop" id="popRoute" style="min-width:280px">
+  <div class="pop-head">Route this prompt to</div>
+  <button class="pop-item sel" data-route="Meta-Orchestrator" data-kind="solo">
+    <span class="rmark"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.4"/><circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none"/></svg></span>
+    <span><b style="font-weight:500">Meta-Orchestrator</b><span class="desc">Plans, delegates, verifies end-to-end</span></span>
+    <svg class="tick" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7.5 2.6 2.6L11 4.5"/></svg>
+  </button>
+  <button class="pop-item" data-route="Steer → PM" data-kind="steer">
+    <span class="rmark"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="8" r="3.2"/><path d="M2 8h5.4M5.4 5.6 7.8 8 5.4 10.4"/></svg></span>
+    <span><b style="font-weight:500">Steer → PM</b><span class="desc">Redirect the running PM Bot mid-task</span></span>
+    <svg class="tick" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7.5 2.6 2.6L11 4.5"/></svg>
+  </button>
+  <button class="pop-item" data-route="Group: Core Team" data-kind="group">
+    <span class="rmark"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="3.6" r="1.8"/><circle cx="4" cy="11.4" r="1.8"/><circle cx="12" cy="11.4" r="1.8"/><path d="M6.8 5 4.9 9.8M9.2 5l1.9 4.8M5.8 11.4h4.4"/></svg></span>
+    <span><b style="font-weight:500">Group: Core Team</b><span class="desc">PM + Architect + Verifier collaborate</span></span>
+    <svg class="tick" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7.5 2.6 2.6L11 4.5"/></svg>
+  </button>
+</div>
+
+<div class="pop" id="popAddCtx" style="min-width:250px">
+  <div class="pop-head">Add context</div>
+  <button class="pop-item" data-add="src/orb.js">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.8h5.5L13 5.3v8.2a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5V3.3a1.5 1.5 0 0 1 1-1.5Z"/><path d="M9.5 1.8V5H13"/></svg>
+    src/orb.js <span class="sub">4.2k tok</span>
+  </button>
+  <button class="pop-item" data-add="docs/agent-contract.md">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.8h5.5L13 5.3v8.2a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5V3.3a1.5 1.5 0 0 1 1-1.5Z"/><path d="M9.5 1.8V5H13"/></svg>
+    docs/agent-contract.md <span class="sub">2.8k tok</span>
+  </button>
+  <button class="pop-item" data-add="screenshots/lobby-v2.png">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="10" height="10" rx="1.6"/><circle cx="6" cy="6.4" r="1.1"/><path d="m4.5 12 3.2-3.4 2 2.1 1.6-1.7 1.7 1.8"/></svg>
+    screenshots/lobby-v2.png <span class="sub">1.1k tok</span>
+  </button>
+</div>
+
+<div class="pop" id="popDiff" style="min-width:290px">
+  <div class="pop-head">Uncommitted changes</div>
+  <button class="pop-item"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.8h5.5L13 5.3v8.2a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5V3.3a1.5 1.5 0 0 1 1-1.5Z"/></svg>src/orb.js<span class="sub"><span style="color:var(--ok-ink)">+212</span> <span style="color:var(--red-ink)">-3</span></span></button>
+  <button class="pop-item"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.8h5.5L13 5.3v8.2a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5V3.3a1.5 1.5 0 0 1 1-1.5Z"/></svg>src/composer.css<span class="sub"><span style="color:var(--ok-ink)">+140</span></span></button>
+  <button class="pop-item"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.8h5.5L13 5.3v8.2a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5V3.3a1.5 1.5 0 0 1 1-1.5Z"/></svg>index.html<span class="sub"><span style="color:var(--ok-ink)">+31</span> <span style="color:var(--red-ink)">-1</span></span></button>
+  <div class="pop-div"></div>
+  <button class="pop-item" id="btnRemoveDiff">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg>
+    Remove diff chip
+  </button>
+</div>
+
+<div class="pop" id="popAutonomy" style="min-width:260px">
+  <div class="pop-head">Autonomy level</div>
+  <button class="pop-item" data-autonomy="Ask permission"><span><b style="font-weight:500">Ask permission</b><span class="desc">Approve every tool call before it runs</span></span><svg class="tick" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7.5 2.6 2.6L11 4.5"/></svg></button>
+  <button class="pop-item sel" data-autonomy="Scoped"><span><b style="font-weight:500">Scoped</b><span class="desc">Auto-run reads, ask before writes</span></span><svg class="tick" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7.5 2.6 2.6L11 4.5"/></svg></button>
+  <button class="pop-item" data-autonomy="Medium"><span><b style="font-weight:500">Medium</b><span class="desc">Auto-run in project, ask outside</span></span><svg class="tick" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7.5 2.6 2.6L11 4.5"/></svg></button>
+  <button class="pop-item" data-autonomy="Auto-High"><span><b style="font-weight:500">Auto-High</b><span class="desc">Full autopilot, review after the fact</span></span><svg class="tick" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7.5 2.6 2.6L11 4.5"/></svg></button>
+</div>
+
+<div class="pop" id="popModel" style="min-width:230px">
+  <div class="pop-head">Model</div>
+  <button class="pop-item sel" data-model="SWE-2 High">SWE-2 High<svg class="tick" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7.5 2.6 2.6L11 4.5"/></svg></button>
+  <button class="pop-item" data-model="DeepSeek V4.1">DeepSeek V4.1<svg class="tick" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7.5 2.6 2.6L11 4.5"/></svg></button>
+  <button class="pop-item" data-model="GPT-5.1 Codex">GPT-5.1 Codex<svg class="tick" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7.5 2.6 2.6L11 4.5"/></svg></button>
+  <button class="pop-item" data-model="GLM-5.3">GLM-5.3<svg class="tick" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7.5 2.6 2.6L11 4.5"/></svg></button>
+</div>
+
+<div class="slash" id="slashMenu">
+  <button class="slash-item" data-cmd="/plan"><span class="cmd">/plan</span><span class="hint">Draft an implementation plan</span></button>
+  <button class="slash-item" data-cmd="/delegate"><span class="cmd">/delegate</span><span class="hint">Hand task to a bot</span></button>
+  <button class="slash-item" data-cmd="/diff"><span class="cmd">/diff</span><span class="hint">Summarize current changes</span></button>
+  <button class="slash-item" data-cmd="/review"><span class="cmd">/review</span><span class="hint">Verifier Bot reviews the diff</span></button>
+  <button class="slash-item" data-cmd="/test"><span class="cmd">/test</span><span class="hint">Run project test suite</span></button>
+  <button class="slash-item" data-cmd="/broadcast"><span class="cmd">/broadcast</span><span class="hint">Message all Core Team bots</span></button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const ta=$("ta");
+let state="idle",busy=false,route="Meta-Orchestrator",routeKind="solo";
+let elapsedTimer=null,elapsedSec=0,streamTimer=null;
+
+let toastT=null;
+function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove("show"),1900);}
+
+/* ---------- orb ---------- */
+const reduced=matchMedia("(prefers-reduced-motion: reduce)").matches;
+const ORB={
+  idle:{speed:.16,breathe:.10,tight:.58,alpha:.45,trail:0,ring:.15,tint:null},
+  thinking:{speed:1.4,breathe:.26,tight:.38,alpha:.85,trail:.15,ring:.45,tint:null},
+  streaming:{speed:2.8,breathe:.14,tight:.30,alpha:.95,trail:.7,ring:.75,tint:null},
+  diff:{speed:.45,breathe:.08,tight:.52,alpha:.8,trail:0,ring:1,tint:"#1d4ed8"},
+  approval:{speed:.8,breathe:.5,tight:.42,alpha:.95,trail:0,ring:1,tint:"#b45309"},
+};
+class ThinkingOrb{
+  constructor(c){this.c=c;this.x=c.getContext("2d");this.p={...ORB.idle};this.t={...ORB.idle};this.parts=[];
+    for(let i=0;i<26;i++)this.parts.push({a:Math.random()*Math.PI*2,r:.18+Math.random()*.34,s:.7+Math.random()*1.3,ph:Math.random()*Math.PI*2,sp:.6+Math.random()*.9});
+    this.last=performance.now();requestAnimationFrame(t=>this.tick(t));}
+  set(n){this.t={...ORB[n]||ORB.idle};if(reduced)this.tick(performance.now());}
+  hexA(h,a){const n=parseInt(h.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a.toFixed(3)})`;}
+  tick(now){
+    const dt=Math.min(.05,(now-this.last)/1000);this.last=now;
+    for(const k of["speed","breathe","tight","alpha","trail","ring"])this.p[k]+=(this.t[k]-this.p[k])*Math.min(1,dt*3.2);
+    const{x,c,p}=this,W=c.width,H=c.height,cx=W/2,cy=H/2,R=W/2;
+    x.clearRect(0,0,W,H);
+    x.beginPath();x.arc(cx,cy,R-2.4,0,Math.PI*2);
+    x.strokeStyle="rgba(23,23,23,"+(0.10+p.ring*.14)+")";x.lineWidth=1.6;x.stroke();
+    const g=x.createRadialGradient(cx,cy,0,cx,cy,R-3);
+    g.addColorStop(0,"rgba(245,245,245,0)");g.addColorStop(1,"rgba(242,242,243,.85)");
+    x.fillStyle=g;x.beginPath();x.arc(cx,cy,R-3,0,Math.PI*2);x.fill();
+    const T=now/1000,col=this.t.tint||"#171717";
+    for(const pt of this.parts){
+      pt.a+=p.speed*pt.sp*dt;
+      const wob=Math.sin(T*1.6+pt.ph)*p.breathe*8;
+      const rr=(pt.r*p.tight)*(R-6)+wob;
+      const px=cx+Math.cos(pt.a)*rr,py=cy+Math.sin(pt.a)*rr*.92;
+      const a=p.alpha*(.35+.65*Math.abs(Math.sin(T*.9+pt.ph)));
+      if(p.trail>0.02){x.beginPath();x.arc(cx,cy,rr,pt.a-p.trail*.55*pt.sp,pt.a);x.strokeStyle=this.hexA(col,a*.35);x.lineWidth=pt.s*.9;x.stroke();}
+      x.beginPath();x.arc(px,py,pt.s,0,Math.PI*2);x.fillStyle=this.hexA(col,a);x.fill();
+    }
+    const core=1.6+Math.sin(T*2)*p.breathe*2.4;
+    x.beginPath();x.arc(cx,cy,Math.max(.8,core),0,Math.PI*2);
+    x.fillStyle=this.hexA(col,.55+p.ring*.3);x.fill();
+    if(!reduced)requestAnimationFrame(t=>this.tick(t));
+  }
+}
+const orb=new ThinkingOrb($("orbCanvas"));
+
+/* ---------- popovers ---------- */
+let openPop=null;
+function showPop(id,anchor,align="left"){
+  hidePops();
+  const pop=$(id),r=anchor.getBoundingClientRect();
+  pop.classList.add("show");
+  const pw=pop.offsetWidth,ph=pop.offsetHeight;
+  let left=align==="right"?r.right-pw:r.left;
+  left=Math.max(8,Math.min(left,innerWidth-pw-8));
+  let top=r.top-ph-8;if(top<52)top=r.bottom+8;
+  pop.style.left=left+"px";pop.style.top=top+"px";openPop=pop;
+}
+function hidePops(){document.querySelectorAll(".pop.show,.slash.show").forEach(p=>p.classList.remove("show"));openPop=null;}
+document.addEventListener("click",e=>{
+  if(openPop&&!openPop.contains(e.target))hidePops();
+  const sl=$("slashMenu");
+  if(sl.classList.contains("show")&&!sl.contains(e.target)&&e.target!==ta)sl.classList.remove("show");
+});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){hidePops();$("slashMenu").classList.remove("show");}});
+
+/* ---------- routing ---------- */
+const ROUTE_MARKS={
+  solo:'<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.4"/><circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none"/></svg>',
+  steer:'<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="8" r="3.2"/><path d="M2 8h5.4M5.4 5.6 7.8 8 5.4 10.4"/></svg>',
+  group:'<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="3.6" r="1.8"/><circle cx="4" cy="11.4" r="1.8"/><circle cx="12" cy="11.4" r="1.8"/><path d="M6.8 5 4.9 9.8M9.2 5l1.9 4.8M5.8 11.4h4.4"/></svg>'
+};
+$("btnRoute").onclick=e=>{e.stopPropagation();openPop===$("popRoute")?hidePops():showPop("popRoute",$("btnRoute"));};
+$("popRoute").querySelectorAll("[data-route]").forEach(b=>{
+  b.onclick=()=>{
+    $("popRoute").querySelectorAll(".pop-item").forEach(i=>i.classList.remove("sel"));
+    b.classList.add("sel");
+    route=b.dataset.route;routeKind=b.dataset.kind;
+    $("routeLabel").textContent=route;
+    $("routeMark").innerHTML=ROUTE_MARKS[routeKind];
+    $("btnRoute").classList.toggle("group",routeKind==="group");
+    const m=$("routeMembers");
+    if(routeKind==="group"){m.style.display="flex";m.innerHTML="<i>P</i><i>A</i><i>V</i>";}
+    else m.style.display="none";
+    hidePops();toast("Routing → "+route);
+  };
+});
+
+/* ---------- chips ---------- */
+$("chipRow").addEventListener("click",e=>{
+  const x=e.target.closest(".x");
+  if(x){x.closest(".chip").remove();toast("Context removed");return;}
+});
+$("diffChip").onclick=e=>{e.stopPropagation();openPop===$("popDiff")?hidePops():showPop("popDiff",$("diffChip"));};
+$("btnRemoveDiff").onclick=()=>{$("diffChip").remove();hidePops();toast("Diff chip removed");};
+$("btnAddCtx").onclick=e=>{e.stopPropagation();openPop===$("popAddCtx")?hidePops():showPop("popAddCtx",$("btnAddCtx"));};
+$("popAddCtx").querySelectorAll("[data-add]").forEach(b=>{
+  b.onclick=()=>{
+    const name=b.dataset.add;
+    if($("chipRow").querySelector(`[data-chip="${name}"]`)){toast(name+" already in context");hidePops();return;}
+    const chip=document.createElement("span");
+    chip.className="chip";chip.dataset.chip=name;
+    chip.innerHTML=`<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.8h5.5L13 5.3v8.2a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5V3.3a1.5 1.5 0 0 1 1-1.5Z"/><path d="M9.5 1.8V5H13"/></svg><span class="nm">${name}</span><button class="x" title="Remove"><svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></button>`;
+    $("chipRow").insertBefore(chip,$("btnAddCtx"));
+    hidePops();toast("Added "+name);
+  };
+});
+
+/* ---------- effort dots ---------- */
+const EFFORT=["Off","Low","High","Max"];
+$("effortCtl").querySelectorAll(".edot").forEach(d=>{
+  d.onclick=()=>{
+    const i=+d.dataset.i;
+    // progressive fill: dots 1..i light up; Off leaves all empty
+    $("effortCtl").querySelectorAll(".edot").forEach((x,j)=>x.classList.toggle("fill",i>0&&j>0&&j<=i));
+    $("effortLabel").textContent=EFFORT[i];
+    toast("Reasoning effort → "+EFFORT[i]);
+  };
+});
+
+/* ---------- autonomy / model ---------- */
+$("btnAutonomy").onclick=e=>{e.stopPropagation();openPop===$("popAutonomy")?hidePops():showPop("popAutonomy",$("btnAutonomy"));};
+$("popAutonomy").querySelectorAll("[data-autonomy]").forEach(b=>{
+  b.onclick=()=>{
+    $("popAutonomy").querySelectorAll(".pop-item").forEach(i=>i.classList.remove("sel"));
+    b.classList.add("sel");$("autonomyLabel").textContent=b.dataset.autonomy;
+    $("btnAutonomy").classList.toggle("hot",b.dataset.autonomy==="Auto-High");
+    hidePops();toast("Autonomy → "+b.dataset.autonomy);
+  };
+});
+$("btnModel").onclick=e=>{e.stopPropagation();openPop===$("popModel")?hidePops():showPop("popModel",$("btnModel"),"right");};
+$("popModel").querySelectorAll("[data-model]").forEach(b=>{
+  b.onclick=()=>{
+    $("popModel").querySelectorAll("[data-model]").forEach(i=>i.classList.remove("sel"));
+    b.classList.add("sel");$("modelLabel").textContent=b.dataset.model;
+    hidePops();toast("Model → "+b.dataset.model);
+  };
+});
+
+/* ---------- approval tray ---------- */
+$("btnApprove").onclick=()=>{$("trayApproval").classList.remove("show");setState("idle");toast("Approved — PM Bot resuming");};
+$("btnDeny").onclick=()=>{$("trayApproval").classList.remove("show");setState("idle");toast("Denied — PM Bot paused");};
+
+/* ---------- state machine ---------- */
+const STATUS={thinking:"Thinking…",streaming:"Streaming response…",diff:"Diff ready — review the chip above",approval:"Waiting for approval…"};
+function setState(s){
+  state=s;
+  document.querySelectorAll(".sim-btn").forEach(b=>b.classList.toggle("active",b.dataset.state===s));
+  orb.set(s);
+  $("trayApproval").classList.toggle("show",s==="approval");
+  const live=s==="thinking"||s==="streaming";
+  $("agentLine").classList.toggle("show",s!=="idle");
+  $("agentStatus").textContent=STATUS[s]||"";
+  $("agentWho").innerHTML=s!=="idle"?`routing: <b style="color:var(--ink);font-weight:600">${route}</b>`:"";
+  const dc=$("diffChip");
+  if(dc){dc.classList.toggle("flash",s==="diff");}
+  busy=live;
+  updateSend();
+  if(live)startElapsed();else stopElapsed();
+}
+function updateSend(){
+  const btn=$("btnSend");
+  btn.classList.toggle("stop",busy);
+  btn.classList.toggle("ready",!busy&&ta.value.trim().length>0);
+  $("sendArrow").style.display=busy?"none":"block";
+  $("sendStop").style.display=busy?"block":"none";
+}
+function startElapsed(){
+  elapsedSec=0;$("elapsed").textContent="0:00";
+  clearInterval(elapsedTimer);
+  elapsedTimer=setInterval(()=>{elapsedSec++;$("elapsed").textContent=Math.floor(elapsedSec/60)+":"+String(elapsedSec%60).padStart(2,"0");},1000);
+}
+function stopElapsed(){clearInterval(elapsedTimer);}
+document.querySelectorAll(".sim-btn").forEach(b=>{b.onclick=()=>{stopStream();setState(b.dataset.state);};});
+
+/* ---------- textarea / slash / send ---------- */
+ta.addEventListener("input",()=>{
+  ta.style.height="auto";ta.style.height=Math.min(160,ta.scrollHeight)+"px";
+  updateSend();
+  if(ta.value.startsWith("/"))openSlash(ta.value.slice(1));
+  else $("slashMenu").classList.remove("show");
+});
+ta.addEventListener("keydown",e=>{
+  const menu=$("slashMenu");
+  if(menu.classList.contains("show")){
+    const items=[...menu.querySelectorAll(".slash-item")];
+    let i=items.findIndex(x=>x.classList.contains("active"));
+    if(e.key==="ArrowDown"||e.key==="ArrowUp"){
+      e.preventDefault();
+      i=e.key==="ArrowDown"?(i+1)%items.length:(i-1+items.length)%items.length;
+      items.forEach(x=>x.classList.remove("active"));items[i].classList.add("active");
+      return;
+    }
+    if(e.key==="Enter"&&i>=0){e.preventDefault();items[i].click();return;}
+  }
+  if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();doSend();}
+});
+function openSlash(q){
+  const menu=$("slashMenu"),r=ta.getBoundingClientRect();
+  [...menu.querySelectorAll(".slash-item")].forEach(it=>{
+    it.style.display=it.dataset.cmd.includes(q)?"flex":"none";
+    it.classList.remove("active");
+  });
+  const first=[...menu.querySelectorAll(".slash-item")].find(i=>i.style.display!=="none");
+  if(first)first.classList.add("active");
+  menu.classList.add("show");
+  menu.style.left=r.left+"px";menu.style.top=Math.max(52,r.top-menu.offsetHeight-8)+"px";
+}
+$("slashMenu").querySelectorAll(".slash-item").forEach(b=>{
+  b.onclick=()=>{
+    ta.value=b.dataset.cmd+" ";$("slashMenu").classList.remove("show");
+    ta.dispatchEvent(new Event("input"));ta.focus();
+    toast("Queued "+b.dataset.cmd);
+  };
+});
+
+function doSend(){
+  if(busy){stopStream();setState("idle");toast("Stopped");return;}
+  const text=ta.value.trim();
+  if(!text)return;
+  hidePops();$("slashMenu").classList.remove("show");
+  appendMsg("user",text);
+  ta.value="";ta.dispatchEvent(new Event("input"));
+  setState("thinking");
+  streamTimer=setTimeout(()=>{
+    setState("streaming");
+    const el=appendMsg("bot","",true);
+    const reply=routeKind==="group"
+      ?"Core Team ack — PM Bot scoped the roadmap, Architect Bot is checking the monolith bounds, Verifier Bot holds the diff gate.\n\nI'll report back when all three sign off."
+      :routeKind==="steer"
+      ?"PM Bot acknowledged the steer. Reprioritizing the current task and holding the deploy step for your approval."
+      :"Understood — orchestrating across the attached context: roadmap.md and hero-monolith.glb are in scope.\n\nI'll surface a diff chip when changes are ready to review.";
+    let i=0;
+    streamTimer=setInterval(()=>{
+      i+=2+Math.floor(Math.random()*3);
+      el.innerHTML=reply.slice(0,i).replace(/\n/g,"<br>")+'<span class="caret"></span>';
+      if(i>=reply.length){
+        clearInterval(streamTimer);
+        el.innerHTML=reply.replace(/\n/g,"<br>");
+        setState("diff");
+      }
+    },26);
+  },1600);
+}
+function stopStream(){clearTimeout(streamTimer);clearInterval(streamTimer);}
+function appendMsg(role,text){
+  $("thread").querySelector(".thread-empty")?.remove();
+  const el=document.createElement("div");
+  el.className="msg "+role;
+  if(role==="bot"){
+    const tag=document.createElement("span");
+    tag.className="route";tag.textContent=route;
+    el.appendChild(tag);el.appendChild(document.createElement("br"));
+  }
+  el.appendChild(document.createTextNode(text));
+  $("thread").appendChild(el);
+  return el;
+}
+$("btnSend").onclick=doSend;
+
+updateSend();
+ta.focus();
+</script>
+</body>
+</html>

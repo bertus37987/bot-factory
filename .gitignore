@@ -1,0 +1,29 @@
+# Dependencies & Build Outputs
+node_modules/
+dist/
+apps/web/dist/
+*.tsbuildinfo
+
+# Local Runtime State & SQLite Databases
+*.db
+*.db-wal
+*.db-shm
+*.writer.lock
+.daemon-token
+logs/
+staging/
+backups/
+projects/
+
+# Secrets & Local Environment Files (NEVER commit real keys!)
+.env
+.env.*
+!.env.example
+secrets.env
+!secrets.env.example
+*.pem
+*.key
+
+# OS / Editor Noise
+.DS_Store
+Thumbs.db

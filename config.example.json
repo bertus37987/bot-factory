@@ -1,0 +1,144 @@
+{
+  "version": "1.0",
+  "hub": {
+    "rootDir": "~/bot-factory",
+    "host": "127.0.0.1",
+    "port": 4310,
+    "dbPath": "~/bot-factory/system/state.db",
+    "secretsEnvPath": "~/bot-factory/system/secrets.env",
+    "defaultProjectsDir": "~/bot-factory/projects"
+  },
+  "providers": {
+    "mistral-hosted": {
+      "runtime": "native_http",
+      "protocol": "openai_compatible",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "apiKeyEnv": "MISTRAL_API_KEY",
+      "models": {
+        "mistral-large-4": {
+          "id": "mistral-large-4",
+          "capabilities": ["reasoning", "planning", "review", "coding"],
+          "tier": "flagship"
+        },
+        "glm-5.3": {
+          "id": "glm-5.3",
+          "capabilities": ["coding", "docs", "general"],
+          "tier": "balanced"
+        },
+        "glm-5.3-flash": {
+          "id": "glm-5.3-flash",
+          "capabilities": ["fast", "sidekick", "dreaming", "search", "triage"],
+          "tier": "fast"
+        }
+      }
+    },
+    "google-antigravity": {
+      "runtime": "native_http",
+      "protocol": "google_gemini",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "models": {
+        "gemini-4-hydrogen": {
+          "id": "gemini-4-hydrogen",
+          "capabilities": ["multimodal", "vision", "review", "long_context", "coding"],
+          "tier": "flagship"
+        },
+        "gemini-4-neon": {
+          "id": "gemini-4-neon",
+          "capabilities": ["multimodal", "vision", "reasoning", "architecture", "review"],
+          "tier": "flagship"
+        }
+      }
+    },
+    "devin-acp": {
+      "runtime": "acp_stdio",
+      "command": "devin",
+      "args": ["acp"],
+      "models": {
+        "swe-2-max": {
+          "id": "swe-2-max",
+          "capabilities": ["coding_deep", "refactor", "debug", "autonomous_slice"],
+          "tier": "flagship"
+        }
+      }
+    },
+    "opencode-acp": {
+      "runtime": "acp_stdio",
+      "command": "opencode",
+      "args": ["acp"],
+      "models": {
+        "mistral-large-4": {
+          "id": "opencode/mistral-large-4",
+          "capabilities": ["reasoning", "planning", "review", "coding"],
+          "tier": "flagship"
+        },
+        "glm-5.3": {
+          "id": "opencode-go/glm-5.3",
+          "capabilities": ["coding", "docs", "general"],
+          "tier": "balanced"
+        },
+        "glm-5.3-flash": {
+          "id": "opencode-go/glm-5.3-flash",
+          "capabilities": ["fast", "sidekick", "dreaming", "search", "triage"],
+          "tier": "fast"
+        },
+        "gemini-4-hydrogen": {
+          "id": "google/gemini-4-hydrogen",
+          "capabilities": ["multimodal", "vision", "coding", "review"],
+          "tier": "flagship"
+        },
+        "gemini-4-neon": {
+          "id": "google/gemini-4-neon",
+          "capabilities": ["multimodal", "vision", "reasoning", "architecture"],
+          "tier": "flagship"
+        }
+      }
+    }
+  },
+  "routing": {
+    "policy": "task_adaptive",
+    "allowPerProjectOverride": true,
+    "allowPerTaskOverride": true,
+    "defaultsByIntent": {
+      "meta_orchestrator": { "provider": "mistral-hosted", "model": "mistral-large-4" },
+      "project_manager": { "provider": "mistral-hosted", "model": "mistral-large-4" },
+      "coding_deep": { "provider": "devin-acp", "model": "swe-2-max" },
+      "coding_parallel": { "provider": "mistral-hosted", "model": "glm-5.3" },
+      "multimodal_review": { "provider": "google-antigravity", "model": "gemini-4-neon" },
+      "vision_fix": { "provider": "google-antigravity", "model": "gemini-4-hydrogen" },
+      "sidekick": { "provider": "mistral-hosted", "model": "glm-5.3-flash" },
+      "memory_dreaming": { "provider": "mistral-hosted", "model": "glm-5.3-flash" },
+      "verifier_default": { "provider": "google-antigravity", "model": "gemini-4-hydrogen" }
+    },
+    "crossFamilyVerification": true
+  },
+  "memory": {
+    "provider": "local_sqlite_superhermes",
+    "l1Files": {
+      "globalUser": { "file": "USER.md", "maxChars": 2000 },
+      "globalMemory": { "file": "GLOBAL_MEMORY.md", "maxChars": 3000 },
+      "projectMemory": { "file": "MEMORY.md", "maxChars": 3000 }
+    },
+    "pluginPromptCaps": {
+      "maxCharsPerBlock": 4000,
+      "maxCharsTotal": 8000
+    },
+    "dreaming": {
+      "mode": "dynamic",
+      "debounceSeconds": 20,
+      "maxBatchDocs": 8,
+      "modelIntent": "memory_dreaming"
+    },
+    "graphMaxHops": 3,
+    "defaultDecaySweepIntervalMinutes": 30
+  },
+  "guardrails": {
+    "maxConcurrentBotsPerProject": 4,
+    "maxDebateRounds": 3,
+    "maxAnnotationFixRetries": 2,
+    "permissionRequestTimeoutSeconds": 120,
+    "acpWorktreeBoundaryEnforced": true,
+    "redactSecretsInLogsAndMemory": true,
+    "selfModRequiresStagingAndVerifier": true
+  }
+}
