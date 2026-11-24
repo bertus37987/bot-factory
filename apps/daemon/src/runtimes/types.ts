@@ -1,4 +1,20 @@
-import type { RouteTarget, RuntimeKind } from "@bot-factory/shared";
+import type { HubConfig, RouteTarget, RuntimeKind as SharedRuntimeKind } from "@bot-factory/shared";
+
+export type RuntimeKind = "native_http" | "acp_stdio" | "cli_stream";
+export type AutonomyLevel = "spec" | "low" | "medium" | "high";
+export type ReasoningEffort = "low" | "medium" | "high" | "max";
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parametersJsonSchema: Record<string, unknown>;
+}
+
+export type ToolCallExecutor = (call: {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}) => Promise<unknown>;
 
 export interface RuntimeSessionSpec {
   agentId: string;
@@ -8,6 +24,9 @@ export interface RuntimeSessionSpec {
   cwd: string;
   systemPrompt: string;
   mcpServers?: Array<{ name: string; command: string; args: string[]; env?: Record<string, string> }>;
+  autonomyLevel?: AutonomyLevel;
+  reasoningEffort?: ReasoningEffort;
+  mcpToken?: string;
 }
 
 export interface RuntimeSessionHandle {
@@ -23,6 +42,11 @@ export interface TurnInput {
   ephemeralContext?: string;
   history: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   imageDataUrl?: string | null;
+  reasoningEffort?: ReasoningEffort;
+  autonomyLevel?: AutonomyLevel;
+  tools?: ToolDefinition[];
+  onToolCall?: ToolCallExecutor;
+  maxToolSteps?: number;
 }
 
 export type NormalizedAgentEvent =
@@ -39,7 +63,24 @@ export type NormalizedAgentEvent =
       output?: string;
       exitCode?: number | null;
     }
+  | {
+      type: "tool_result";
+      toolCallId: string;
+      name: string;
+      output: string;
+      isError?: boolean;
+    }
   | { type: "permission_escalated"; requestId: string; reason: string }
+  | {
+      type: "permission_requested";
+      permissionId: string;
+      agentId: string;
+      sessionId: string;
+      title: string;
+      commandOrPath: string;
+      reason: string;
+      timeoutMs: number;
+    }
   | { type: "usage"; tokenIn: number; tokenOut: number }
   | { type: "done"; finalText: string }
   | { type: "error"; message: string };
@@ -50,9 +91,10 @@ export interface AgentRuntime {
   sendTurn(handle: RuntimeSessionHandle, input: TurnInput): AsyncIterable<NormalizedAgentEvent>;
   abort(handle: RuntimeSessionHandle, mode: "pause" | "hard_stop"): Promise<void>;
   closeSession(handle: RuntimeSessionHandle): Promise<void>;
+  setConfig?(newConfig: HubConfig): void;
 }
 
 export interface ResolvedRoute extends RouteTarget {
-  runtimeKind: RuntimeKind;
+  runtimeKind: RuntimeKind | SharedRuntimeKind;
   resolvedModelId: string;
 }

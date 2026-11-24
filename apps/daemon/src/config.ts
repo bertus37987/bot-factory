@@ -11,7 +11,7 @@ export function expandHome(inputPath: string): string {
   return resolve(inputPath);
 }
 
-export type ConfigSourceKind = "primary" | "system_example" | "inline_defaults";
+export type ConfigSourceKind = "primary" | "system_example" | "bundled_example" | "inline_defaults";
 export type SecretSource = "secrets_env" | "process_env" | "none";
 
 export interface SecretPresence {
@@ -74,11 +74,11 @@ function renameSyncWithRetry(src: string, dst: string, maxRetries = 4, backoffMs
   }
 }
 
-function atomicWriteEnvFile(targetPath: string, content: string): void {
+function atomicWriteFile(targetPath: string, content: string, mode = 0o600): void {
   mkdirSync(dirname(targetPath), { recursive: true });
   const tmp = join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.${Date.now()}.tmp`);
   try {
-    writeFileSync(tmp, content, { encoding: "utf8", mode: 0o600 });
+    writeFileSync(tmp, content, { encoding: "utf8", mode });
     renameSyncWithRetry(tmp, targetPath);
   } catch (err) {
     try {
@@ -88,6 +88,14 @@ function atomicWriteEnvFile(targetPath: string, content: string): void {
     }
     throw err;
   }
+}
+
+/** Validate and atomically persist a HubConfig JSON file to disk. */
+export function saveHubConfig(configPath: string, config: HubConfig): HubConfig {
+  const validated = HubConfigSchema.parse(config);
+  const absPath = expandHome(configPath);
+  atomicWriteFile(absPath, `${JSON.stringify(validated, null, 2)}\n`, 0o644);
+  return validated;
 }
 
 function formatEnvValue(value: string): string {
@@ -156,7 +164,7 @@ export function writeSecretToEnvFile(
     nextLines.push(formatted);
   }
 
-  atomicWriteEnvFile(secretsPath, `${nextLines.join("\n")}\n`);
+  atomicWriteFile(secretsPath, `${nextLines.join("\n")}\n`);
   if (loadedSecrets) {
     loadedSecrets[key] = value;
   }
@@ -187,7 +195,7 @@ export function deleteSecretFromEnvFile(
       nextLines.push(line);
     }
     if (removed) {
-      atomicWriteEnvFile(secretsPath, nextLines.length > 0 ? `${nextLines.join("\n")}\n` : "");
+      atomicWriteFile(secretsPath, nextLines.length > 0 ? `${nextLines.join("\n")}\n` : "");
     }
   }
 
@@ -302,6 +310,9 @@ function buildInlineDefaultHubConfig(
       maxConcurrentBotsPerProject: 4,
       maxDebateRounds: 3,
       maxAnnotationFixRetries: 2,
+      maxTaskAutoRetries: 2,
+      maxSubagentsPerBot: 3,
+      autoCompactThresholdTokens: 60000,
       permissionRequestTimeoutSeconds: 120,
       acpWorktreeBoundaryEnforced: true,
       redactSecretsInLogsAndMemory: true,
@@ -323,6 +334,7 @@ export function resolveHubConfigInspection(overrides?: {
   const systemDir = join(defaultRoot, "system");
   const primaryPath = overrides?.configPath ? expandHome(overrides.configPath) : join(systemDir, "config.json");
   const systemExamplePath = join(systemDir, "config.example.json");
+  const bundledExamplePath = resolve(import.meta.dir, "../../../config.example.json");
 
   let raw: unknown = {};
   let configSource: ConfigSourceKind;
@@ -335,8 +347,11 @@ export function resolveHubConfigInspection(overrides?: {
     raw = JSON.parse(readFileSync(systemExamplePath, "utf8"));
     configSource = "system_example";
     configSourcePath = systemExamplePath;
+  } else if (existsSync(bundledExamplePath)) {
+    raw = JSON.parse(readFileSync(bundledExamplePath, "utf8"));
+    configSource = "bundled_example";
+    configSourcePath = bundledExamplePath;
   } else {
-    // Phase 2 will wire bundled repo config.example.json once EXCLUSIVE_MODEL_ROSTER is unlocked.
     raw = buildInlineDefaultHubConfig(defaultRoot, systemDir, overrides);
     configSource = "inline_defaults";
     configSourcePath = null;
@@ -358,6 +373,15 @@ export function resolveHubConfigInspection(overrides?: {
   const secretsPath = explicitRoot
     ? join(resolvedSystemDir, "secrets.env")
     : expandHome(parsed.hub.secretsEnvPath);
+
+  if (explicitRoot) {
+    parsed.hub.rootDir = rootDir;
+    parsed.hub.dbPath = dbPath;
+    parsed.hub.secretsEnvPath = secretsPath;
+    parsed.hub.defaultProjectsDir = projectsDir;
+  } else if (overrides?.dbPath) {
+    parsed.hub.dbPath = dbPath;
+  }
 
   return {
     config: parsed,

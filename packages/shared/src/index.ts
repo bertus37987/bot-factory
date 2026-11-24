@@ -2,8 +2,23 @@ import { z } from "zod";
 
 // --- Hub & Provider Config ---
 
-export const RuntimeKindSchema = z.enum(["native_http", "acp_stdio", "remote"]);
+export const RuntimeKindSchema = z.enum(["native_http", "acp_stdio", "cli_stream"]);
 export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
+
+export const ProviderProtocolSchema = z.enum(["openai_compatible", "google_gemini", "anthropic"]);
+export type ProviderProtocol = z.infer<typeof ProviderProtocolSchema>;
+
+export const CliStreamAdapterSchema = z.enum(["claude", "codex"]);
+export type CliStreamAdapter = z.infer<typeof CliStreamAdapterSchema>;
+
+export const AutonomyLevelSchema = z.enum(["spec", "low", "medium", "high"]);
+export type AutonomyLevel = z.infer<typeof AutonomyLevelSchema>;
+
+export const ReasoningEffortSchema = z.enum(["low", "medium", "high", "max"]);
+export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
+
+export const SubagentModeSchema = z.enum(["readonly", "code"]);
+export type SubagentMode = z.infer<typeof SubagentModeSchema>;
 
 export const ModelEntrySchema = z.object({
   id: z.string().min(1),
@@ -14,11 +29,28 @@ export type ModelEntry = z.infer<typeof ModelEntrySchema>;
 
 export const ProviderConfigSchema = z.object({
   runtime: RuntimeKindSchema,
-  protocol: z.enum(["openai_compatible", "google_gemini"]).optional(),
-  baseUrl: z.string().url().optional(),
+  protocol: ProviderProtocolSchema.optional(),
+  adapter: CliStreamAdapterSchema.optional(),
+  baseUrl: z
+    .string()
+    .url()
+    .refine(
+      (val) => {
+        try {
+          const parsed = new URL(val);
+          return parsed.protocol === "http:" || parsed.protocol === "https:";
+        } catch {
+          return false;
+        }
+      },
+      { message: "baseUrl must use http:// or https://" },
+    )
+    .optional(),
   apiKeyEnv: z.string().optional(),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  embeddingModel: z.string().optional(),
   models: z.record(z.string(), ModelEntrySchema),
 });
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -72,11 +104,20 @@ export const HubConfigSchema = z.object({
     }),
     graphMaxHops: z.number().int().min(1).max(3).default(3),
     defaultDecaySweepIntervalMinutes: z.number().int().min(1).default(30),
+    embeddings: z
+      .object({
+        provider: z.string().min(1),
+        model: z.string().min(1),
+      })
+      .optional(),
   }),
   guardrails: z.object({
     maxConcurrentBotsPerProject: z.number().int().min(1).default(4),
     maxDebateRounds: z.number().int().min(1).max(10).default(3),
     maxAnnotationFixRetries: z.number().int().min(1).max(5).default(2),
+    maxTaskAutoRetries: z.number().int().min(0).max(5).default(2),
+    maxSubagentsPerBot: z.number().int().min(1).max(6).default(3),
+    autoCompactThresholdTokens: z.number().int().min(4000).default(60000),
     permissionRequestTimeoutSeconds: z.number().int().min(5).default(120),
     acpWorktreeBoundaryEnforced: z.boolean().default(true),
     redactSecretsInLogsAndMemory: z.boolean().default(true),
@@ -233,7 +274,9 @@ export interface AgentRecord {
   lastSummary: string | null;
   turnCounter?: number;
   depth?: number;
-  subagentMode?: "readonly" | "code" | null;
+  subagentMode?: SubagentMode | null;
+  autonomyLevel?: AutonomyLevel;
+  reasoningEffort?: ReasoningEffort;
   updatedAt: number;
 }
 
@@ -386,6 +429,48 @@ export interface SelfModProposalRecord {
   updatedAt: number;
 }
 
+export const PermissionDecisionSchema = z.enum(["allow_once", "allow_session", "deny"]);
+export type PermissionDecision = z.infer<typeof PermissionDecisionSchema>;
+
+export interface PermissionRequestRecord {
+  id: string;
+  agentId: string;
+  sessionId: string;
+  projectId?: string | null;
+  agentName?: string;
+  title: string;
+  commandOrPath: string;
+  reason: string;
+  status: "pending" | "allowed" | "denied" | "timed_out";
+  decision?: PermissionDecision | null;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface CheckpointRecord {
+  id: string;
+  scopeKey: string;
+  agentId: string;
+  cwd: string;
+  turnNum: number;
+  refName: string;
+  commitSha: string;
+  createdAt: number;
+}
+
+export const MemoryL1TargetSchema = z.enum(["user", "global", "project"]);
+export type MemoryL1Target = z.infer<typeof MemoryL1TargetSchema>;
+
+export interface MemoryL1Snapshot {
+  target: MemoryL1Target;
+  projectId?: string | null;
+  filePath: string;
+  content: string;
+  usedChars: number;
+  maxChars: number;
+  gaugeHeader: string;
+}
+
 export interface QuietStatusProjection {
   activeProjects: number;
   runningBots: number;
@@ -401,6 +486,7 @@ export interface QuietStatusProjection {
     createdAt: number;
   }>;
   pendingPermissionsCount?: number;
+  pendingPermissions?: PermissionRequestRecord[];
   inboxNotices: Array<{
     id: string;
     level: "info" | "warn" | "action";
@@ -428,8 +514,8 @@ export const RpcCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("chat.send"),
     text: z.string().min(1),
     projectId: z.string().optional(),
-    reasoningEffort: z.enum(["low", "medium", "high", "max"]).optional(),
-    autonomyLevel: z.enum(["spec", "low", "medium", "high"]).optional(),
+    reasoningEffort: ReasoningEffortSchema.optional(),
+    autonomyLevel: AutonomyLevelSchema.optional(),
   }),
   z.object({
     commandId: z.string(),
@@ -441,6 +527,12 @@ export const RpcCommandSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     commandId: z.string(),
+    type: z.literal("project.archive"),
+    projectId: z.string().min(1),
+    status: z.enum(["active", "paused", "archived"]),
+  }),
+  z.object({
+    commandId: z.string(),
     type: z.literal("bot.spawn"),
     projectId: z.string(),
     name: z.string().min(1),
@@ -449,6 +541,8 @@ export const RpcCommandSchema = z.discriminatedUnion("type", [
     model: z.string().optional(),
     taskId: z.string().optional(),
     parentAgentId: z.string().optional(),
+    autonomyLevel: AutonomyLevelSchema.optional(),
+    reasoningEffort: ReasoningEffortSchema.optional(),
   }),
   z.object({
     commandId: z.string(),
@@ -462,11 +556,22 @@ export const RpcCommandSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     commandId: z.string(),
+    type: z.literal("bot.resume"),
+    agentId: z.string().min(1),
+  }),
+  z.object({
+    commandId: z.string(),
+    type: z.literal("permission.respond"),
+    permissionId: z.string().min(1),
+    decision: PermissionDecisionSchema,
+  }),
+  z.object({
+    commandId: z.string(),
     type: z.literal("steer.submit"),
     projectId: z.string(),
     message: z.string().min(1),
-    reasoningEffort: z.enum(["low", "medium", "high", "max"]).optional(),
-    autonomyLevel: z.enum(["spec", "low", "medium", "high"]).optional(),
+    reasoningEffort: ReasoningEffortSchema.optional(),
+    autonomyLevel: AutonomyLevelSchema.optional(),
   }),
   z.object({
     commandId: z.string(),
@@ -489,6 +594,15 @@ export const RpcCommandSchema = z.discriminatedUnion("type", [
     projectId: z.string(),
     taskId: z.string(),
     checks: z.array(z.string().min(1)).max(8).optional(),
+  }),
+  z.object({
+    commandId: z.string(),
+    type: z.literal("task.merge"),
+    projectId: z.string().min(1),
+    taskId: z.string().min(1),
+    strategy: z.enum(["squash", "merge_commit"]).default("squash"),
+    commitMessage: z.string().optional(),
+    overrideReason: z.string().optional(),
   }),
   z.object({
     commandId: z.string(),
@@ -562,6 +676,48 @@ export const RpcCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("selfmod.rollback"),
     proposalId: z.string(),
     reason: z.string().max(500).optional(),
+  }),
+  z.object({
+    commandId: z.string(),
+    type: z.literal("config.update"),
+    patchJson: z.string().min(1),
+  }),
+  z.object({
+    commandId: z.string(),
+    type: z.literal("routing.set_override"),
+    projectId: z.string().min(1),
+    intent: z.string().min(1),
+    target: RouteTargetSchema.nullable(),
+  }),
+  z.object({
+    commandId: z.string(),
+    type: z.literal("memory.l1.get"),
+    target: MemoryL1TargetSchema,
+    projectId: z.string().optional(),
+  }),
+  z.object({
+    commandId: z.string(),
+    type: z.literal("memory.l1.update"),
+    target: MemoryL1TargetSchema,
+    projectId: z.string().optional(),
+    content: z.string(),
+  }),
+  z.object({
+    commandId: z.string(),
+    type: z.literal("checkpoint.list"),
+    projectId: z.string().min(1),
+    agentId: z.string().optional(),
+  }),
+  z.object({
+    commandId: z.string(),
+    type: z.literal("checkpoint.rollback"),
+    projectId: z.string().min(1),
+    checkpointId: z.string().min(1),
+  }),
+  z.object({
+    commandId: z.string(),
+    type: z.literal("inbox.dismiss"),
+    noticeId: z.string().min(1),
   }),
 ]);
 export type RpcCommand = z.infer<typeof RpcCommandSchema>;

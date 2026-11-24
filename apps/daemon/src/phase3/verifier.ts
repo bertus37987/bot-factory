@@ -13,6 +13,7 @@ import type { LoadedRuntimeConfig, SecretScrubber } from "../config";
 import type { StateDatabase } from "../db/database";
 import type { LocalSuperHermesMemory } from "../memory/memoryEngine";
 import type { AcpSubprocessRuntime } from "../runtimes/acpSubprocessRuntime";
+import type { CliStreamRuntime } from "../runtimes/cliStreamRuntime";
 import { isPathStrictlyWithinRoot } from "../runtimes/nativeHttpRuntime";
 import type { NativeHttpRuntime } from "../runtimes/nativeHttpRuntime";
 import type { ModelRouter } from "../runtimes/router";
@@ -98,6 +99,7 @@ export class IndependentVerifier {
     private readonly nativeRuntime: NativeHttpRuntime,
     private readonly acpRuntime: AcpSubprocessRuntime,
     private readonly scrubber: SecretScrubber,
+    private readonly cliRuntime?: CliStreamRuntime,
   ) {}
 
   public async verifyTask(params: {
@@ -412,7 +414,12 @@ export class IndependentVerifier {
     systemPrompt: string;
     userText: string;
   }): Promise<{ finalText: string; ok: boolean }> {
-    const runtime: AgentRuntime = params.route.runtimeKind === "acp_stdio" ? this.acpRuntime : this.nativeRuntime;
+    const runtime: AgentRuntime =
+      params.route.runtimeKind === "acp_stdio"
+        ? this.acpRuntime
+        : params.route.runtimeKind === "cli_stream" && this.cliRuntime
+          ? this.cliRuntime
+          : this.nativeRuntime;
     const spec: RuntimeSessionSpec = {
       agentId: params.verifierAgentId,
       sessionId: params.verifierSessionId,

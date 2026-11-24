@@ -1074,7 +1074,9 @@ export class StateDatabase {
       const now = Date.now();
       this.db.query("UPDATE messages SET active = 0, compacted = 1 WHERE session_id = ? AND active = 1").run(sessionId);
       this.db
-        .query("UPDATE sessions SET system_prompt = ?, system_prompt_hash = ?, generation = ?, updated_at = ? WHERE id = ?")
+        .query(
+          "UPDATE sessions SET system_prompt = ?, system_prompt_hash = ?, generation = ?, token_in = 0, token_out = 0, updated_at = ? WHERE id = ?",
+        )
         .run(newSystemPrompt, newHash, nextGen, now, sessionId);
       this.appendMessage({
         id: newId("msg"),
@@ -1089,6 +1091,32 @@ export class StateDatabase {
       });
       return nextGen;
     });
+  }
+
+  public updateSessionSystemPrompt(sessionId: string, systemPrompt: string, systemPromptHash: string): void {
+    this.assertWritable();
+    this.db
+      .query("UPDATE sessions SET system_prompt = ?, system_prompt_hash = ?, updated_at = ? WHERE id = ?")
+      .run(systemPrompt, systemPromptHash, Date.now(), sessionId);
+  }
+
+  public addSessionTokenUsage(sessionId: string, tokenInDelta: number, tokenOutDelta: number): number {
+    this.assertWritable();
+    const inDelta = Number.isFinite(tokenInDelta) ? Math.max(0, Math.trunc(tokenInDelta)) : 0;
+    const outDelta = Number.isFinite(tokenOutDelta) ? Math.max(0, Math.trunc(tokenOutDelta)) : 0;
+    const row = this.db
+      .query(
+        "UPDATE sessions SET token_in = token_in + ?, token_out = token_out + ?, updated_at = ? WHERE id = ? RETURNING token_in, token_out",
+      )
+      .get(inDelta, outDelta, Date.now(), sessionId) as { token_in: number; token_out: number } | null;
+    return row ? Number(row.token_in) + Number(row.token_out) : 0;
+  }
+
+  public getSessionTokenTotal(sessionId: string): number {
+    const row = this.db
+      .query("SELECT token_in, token_out FROM sessions WHERE id = ?")
+      .get(sessionId) as { token_in: number; token_out: number } | null;
+    return row ? Number(row.token_in) + Number(row.token_out) : 0;
   }
 
   public enqueueAdmission(sessionId: string, inputText: string, initialStatus: "queued" | "started" = "queued"): AdmissionRow {
@@ -1274,7 +1302,18 @@ export class StateDatabase {
     const rows = this.db
       .query("SELECT * FROM messages WHERE agent_id = ? ORDER BY created_at DESC, seq DESC LIMIT ?")
       .all(agentId, limit) as Array<Record<string, unknown>>;
-    return rows.reverse().map((r) => ({
+    return rows.reverse().map((r) => this.mapTimelineItem(r));
+  }
+
+  public listActiveSessionMessages(sessionId: string, limit = 100): TimelineItem[] {
+    const rows = this.db
+      .query("SELECT * FROM messages WHERE session_id = ? AND active = 1 ORDER BY seq DESC LIMIT ?")
+      .all(sessionId, limit) as Array<Record<string, unknown>>;
+    return rows.reverse().map((r) => this.mapTimelineItem(r));
+  }
+
+  private mapTimelineItem(r: Record<string, unknown>): TimelineItem {
+    return {
       id: String(r.id),
       agentId: String(r.agent_id),
       sessionId: String(r.session_id),
@@ -1290,7 +1329,7 @@ export class StateDatabase {
       diffPreview: r.diff_preview ? String(r.diff_preview) : undefined,
       checkpointRef: r.checkpoint_ref ? String(r.checkpoint_ref) : null,
       createdAt: Number(r.created_at),
-    }));
+    };
   }
 
   public searchMessages(query: string, limit = 10): Array<{ id: string; agentId: string; content: string; createdAt: number }> {
@@ -1581,41 +1620,152 @@ export class StateDatabase {
     });
   }
 
+  private buildFtsMatchQueries(rawQuery: string): string[] {
+    const rawTokens = rawQuery.match(/[\p{L}\p{N}_]+/gu) ?? [];
+    const seen = new Set<string>();
+    const tokens: string[] = [];
+    for (const tok of rawTokens) {
+      const lower = tok.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      tokens.push(tok);
+      if (tokens.length >= 16) break;
+    }
+    if (tokens.length === 0) return [];
+    const quoted = tokens.map((t) => `"${t}"`);
+    if (quoted.length === 1) return [quoted[0]!];
+    return [quoted.join(" "), quoted.join(" OR ")];
+  }
+
   public searchLiveMemoryFacts(namespace: string, query: string, limit = 8): MemoryFactRecord[] {
-    const q = query.trim();
-    if (!q) return this.listLiveMemoryFacts(namespace, { limit });
+    return this.listAllLiveFacts({ namespace, query, limit });
+  }
+
+  public listAllLiveFacts(opts?: { namespace?: string; query?: string; limit?: number }): MemoryFactRecord[] {
+    const limit = Math.max(1, Math.min(500, Math.trunc(opts?.limit ?? 100)));
+    const ns = opts?.namespace?.trim() || undefined;
+    const q = opts?.query?.trim() || undefined;
+
+    if (!q) {
+      const rows = ns
+        ? (this.db
+            .query("SELECT * FROM live_memory_facts WHERE namespace = ? ORDER BY updated_at DESC LIMIT ?")
+            .all(ns, limit) as Array<Record<string, unknown>>)
+        : (this.db
+            .query("SELECT * FROM live_memory_facts ORDER BY updated_at DESC LIMIT ?")
+            .all(limit) as Array<Record<string, unknown>>);
+      return rows.map((r) => this.mapMemoryFact(r));
+    }
+
     if (!this.ftsStale) {
-      try {
-        const cleaned = q.replace(/["'*]/g, " ").trim();
-        if (cleaned) {
-          const rows = this.db
-            .query(
-              `SELECT lf.* FROM facts_fts f
-               JOIN live_memory_facts lf ON lf.rowid = f.rowid
-               WHERE lf.namespace = ? AND facts_fts MATCH ?
-               ORDER BY bm25(facts_fts) LIMIT ?`,
-            )
-            .all(namespace, cleaned, limit) as Array<Record<string, unknown>>;
+      for (const ftsQuery of this.buildFtsMatchQueries(q)) {
+        try {
+          const rows = ns
+            ? (this.db
+                .query(
+                  `SELECT lf.* FROM facts_fts f
+                   JOIN live_memory_facts lf ON lf.rowid = f.rowid
+                   WHERE lf.namespace = ? AND facts_fts MATCH ?
+                   ORDER BY bm25(facts_fts) LIMIT ?`,
+                )
+                .all(ns, ftsQuery, limit) as Array<Record<string, unknown>>)
+            : (this.db
+                .query(
+                  `SELECT lf.* FROM facts_fts f
+                   JOIN live_memory_facts lf ON lf.rowid = f.rowid
+                   WHERE facts_fts MATCH ?
+                   ORDER BY bm25(facts_fts) LIMIT ?`,
+                )
+                .all(ftsQuery, limit) as Array<Record<string, unknown>>);
           if (rows.length > 0) return rows.map((r) => this.mapMemoryFact(r));
+        } catch {
+          // Fallback to next query / LIKE
         }
-      } catch {
-        // Fallback to LIKE
       }
     }
-    const rows = this.db
-      .query(
-        "SELECT * FROM live_memory_facts WHERE namespace = ? AND (fact_text LIKE ? OR entity LIKE ?) ORDER BY updated_at DESC LIMIT ?",
-      )
-      .all(namespace, `%${q}%`, `%${q}%`, limit) as Array<Record<string, unknown>>;
+
+    const like = `%${q}%`;
+    const rows = ns
+      ? (this.db
+          .query(
+            "SELECT * FROM live_memory_facts WHERE namespace = ? AND (fact_text LIKE ? OR entity LIKE ?) ORDER BY updated_at DESC LIMIT ?",
+          )
+          .all(ns, like, like, limit) as Array<Record<string, unknown>>)
+      : (this.db
+          .query(
+            "SELECT * FROM live_memory_facts WHERE (fact_text LIKE ? OR entity LIKE ?) ORDER BY updated_at DESC LIMIT ?",
+          )
+          .all(like, like, limit) as Array<Record<string, unknown>>);
     return rows.map((r) => this.mapMemoryFact(r));
   }
 
-  public getRelatedFacts(factId: string, maxHops = 3): MemoryFactRecord[] {
-    const hops = Math.min(Math.max(maxHops, 1), 3);
+  public forgetMemoryFact(factId: string, reason: string): boolean {
+    return this.runAtomicWrite(() => {
+      const res = this.db
+        .query("UPDATE memory_facts SET is_forgotten = 1, is_latest = 0, forget_reason = ?, updated_at = ? WHERE id = ? AND is_forgotten = 0")
+        .run(reason, Date.now(), factId);
+      return res.changes > 0;
+    });
+  }
+
+  public upsertMemoryEmbedding(factId: string, model: string, vector: number[]): void {
+    if (!factId || !model || !Array.isArray(vector) || vector.length === 0) return;
+    this.assertWritable();
+    const f32 = new Float32Array(vector);
+    const blob = new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength);
+    this.db
+      .query(
+        `INSERT INTO memory_embeddings (fact_id, model, dims, vector_blob, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(fact_id) DO UPDATE SET
+           model = excluded.model,
+           dims = excluded.dims,
+           vector_blob = excluded.vector_blob,
+           updated_at = excluded.updated_at`,
+      )
+      .run(factId, model, f32.length, blob, Date.now());
+  }
+
+  public listMemoryEmbeddingsByNamespace(
+    namespace: string,
+  ): Array<{ factId: string; model: string; dims: number; vector: Float32Array }> {
+    const rows = this.db
+      .query(
+        `SELECT me.fact_id, me.model, me.dims, me.vector_blob
+         FROM memory_embeddings me
+         JOIN live_memory_facts lf ON lf.id = me.fact_id
+         WHERE lf.namespace = ?`,
+      )
+      .all(namespace) as Array<{ fact_id: string; model: string; dims: number; vector_blob: Uint8Array | ArrayBuffer }>;
+
+    const out: Array<{ factId: string; model: string; dims: number; vector: Float32Array }> = [];
+    for (const r of rows) {
+      const rawBytes = r.vector_blob instanceof Uint8Array ? r.vector_blob : new Uint8Array(r.vector_blob);
+      const dims = Math.min(Number(r.dims), Math.floor(rawBytes.byteLength / 4));
+      if (dims <= 0) continue;
+      // Copy into a freshly allocated buffer to guarantee 4-byte Float32Array alignment.
+      const aligned = new Uint8Array(dims * 4);
+      aligned.set(rawBytes.subarray(0, dims * 4));
+      out.push({
+        factId: String(r.fact_id),
+        model: String(r.model),
+        dims,
+        vector: new Float32Array(aligned.buffer, 0, dims),
+      });
+    }
+    return out;
+  }
+
+  public getRelatedFacts(factIds: string | string[], maxHops = 3): MemoryFactRecord[] {
+    const seeds = [...new Set((Array.isArray(factIds) ? factIds : [factIds]).filter(Boolean))];
+    if (seeds.length === 0) return [];
+    const hops = Math.min(Math.max(Math.trunc(maxHops), 1), 3);
+    const valuesSql = seeds.map(() => "(?, 0)").join(", ");
+    const placeholders = seeds.map(() => "?").join(", ");
     const rows = this.db
       .query(
         `WITH RECURSIVE walk(id, depth) AS (
-           SELECT ?, 0
+           VALUES ${valuesSql}
            UNION
            SELECT CASE WHEN e.src_id = w.id THEN e.dst_id ELSE e.src_id END, w.depth + 1
            FROM walk w
@@ -1624,9 +1774,9 @@ export class StateDatabase {
          )
          SELECT DISTINCT f.* FROM walk w
          JOIN live_memory_facts f ON f.id = w.id
-         WHERE w.depth > 0`,
+         WHERE w.depth > 0 AND f.id NOT IN (${placeholders})`,
       )
-      .all(factId, hops) as Array<Record<string, unknown>>;
+      .all(...seeds, hops, ...seeds) as Array<Record<string, unknown>>;
     return rows.map((r) => this.mapMemoryFact(r));
   }
 

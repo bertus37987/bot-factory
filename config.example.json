@@ -37,6 +37,7 @@
       "protocol": "google_gemini",
       "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
       "apiKeyEnv": "GEMINI_API_KEY",
+      "embeddingModel": "text-embedding-004",
       "models": {
         "gemini-4-hydrogen": {
           "id": "gemini-4-hydrogen",
@@ -47,6 +48,56 @@
           "id": "gemini-4-neon",
           "capabilities": ["multimodal", "vision", "reasoning", "architecture", "review"],
           "tier": "flagship"
+        }
+      }
+    },
+    "openai": {
+      "runtime": "native_http",
+      "protocol": "openai_compatible",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "embeddingModel": "text-embedding-3-small",
+      "models": {
+        "gpt-5.2": {
+          "id": "gpt-5.2",
+          "capabilities": ["reasoning", "planning", "coding", "review", "multimodal"],
+          "tier": "flagship"
+        },
+        "gpt-5-mini": {
+          "id": "gpt-5-mini",
+          "capabilities": ["fast", "coding", "sidekick", "dreaming", "triage"],
+          "tier": "fast"
+        }
+      }
+    },
+    "anthropic": {
+      "runtime": "native_http",
+      "protocol": "anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "models": {
+        "claude-sonnet-4-6": {
+          "id": "claude-sonnet-4-6",
+          "capabilities": ["reasoning", "coding", "review", "multimodal", "planning"],
+          "tier": "flagship"
+        },
+        "claude-haiku-4-5": {
+          "id": "claude-haiku-4-5",
+          "capabilities": ["fast", "sidekick", "dreaming", "search", "triage"],
+          "tier": "fast"
+        }
+      }
+    },
+    "ollama-local": {
+      "runtime": "native_http",
+      "protocol": "openai_compatible",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "embeddingModel": "nomic-embed-text",
+      "models": {
+        "qwen3-coder": {
+          "id": "qwen3-coder",
+          "capabilities": ["coding", "local", "refactor"],
+          "tier": "balanced"
         }
       }
     },
@@ -93,6 +144,37 @@
           "tier": "flagship"
         }
       }
+    },
+    "claude-cli": {
+      "runtime": "cli_stream",
+      "adapter": "claude",
+      "command": "claude",
+      "args": [],
+      "models": {
+        "claude-sonnet-4-6": {
+          "id": "claude-sonnet-4-6",
+          "capabilities": ["coding_deep", "reasoning", "review", "refactor"],
+          "tier": "flagship"
+        },
+        "claude-opus-4-6": {
+          "id": "claude-opus-4-6",
+          "capabilities": ["coding_deep", "architecture", "reasoning", "review"],
+          "tier": "flagship"
+        }
+      }
+    },
+    "codex-cli": {
+      "runtime": "cli_stream",
+      "adapter": "codex",
+      "command": "codex",
+      "args": [],
+      "models": {
+        "gpt-5-codex": {
+          "id": "gpt-5-codex",
+          "capabilities": ["coding_deep", "debug", "refactor", "autonomous_slice"],
+          "tier": "flagship"
+        }
+      }
     }
   },
   "routing": {
@@ -130,12 +212,19 @@
       "modelIntent": "memory_dreaming"
     },
     "graphMaxHops": 3,
-    "defaultDecaySweepIntervalMinutes": 30
+    "defaultDecaySweepIntervalMinutes": 30,
+    "embeddings": {
+      "provider": "google-antigravity",
+      "model": "text-embedding-004"
+    }
   },
   "guardrails": {
     "maxConcurrentBotsPerProject": 4,
     "maxDebateRounds": 3,
     "maxAnnotationFixRetries": 2,
+    "maxTaskAutoRetries": 2,
+    "maxSubagentsPerBot": 3,
+    "autoCompactThresholdTokens": 60000,
     "permissionRequestTimeoutSeconds": 120,
     "acpWorktreeBoundaryEnforced": true,
     "redactSecretsInLogsAndMemory": true,

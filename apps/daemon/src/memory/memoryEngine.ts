@@ -37,6 +37,59 @@ export type DreamExtractor = (input: {
   existingFacts: MemoryFactRecord[];
 }) => Promise<DreamOpBatch>;
 
+export type EmbedderFn = (text: string) => Promise<{ model: string; vector: number[] } | null>;
+
+export type L1TargetName = "user" | "global" | "project";
+
+export interface L1TargetSnapshot {
+  target: L1TargetName;
+  filePath: string;
+  content: string;
+  usedChars: number;
+  maxChars: number;
+  gaugeHeader: string;
+}
+
+export interface HybridSearchResult {
+  facts: MemoryFactRecord[];
+  relatedFacts: MemoryFactRecord[];
+  messages: Array<{ id: string; agentId: string; content: string; createdAt: number }>;
+  usedEmbeddings: boolean;
+}
+
+const VALID_MEMORY_KINDS = new Set<MemoryKind>(["fact", "preference", "decision", "episode"]);
+
+function normalizeMemoryKind(kind: unknown, fallback: MemoryKind = "fact"): MemoryKind {
+  return typeof kind === "string" && VALID_MEMORY_KINDS.has(kind as MemoryKind) ? (kind as MemoryKind) : fallback;
+}
+
+export function l2Normalize(vector: number[]): number[] {
+  let sumSq = 0;
+  for (let i = 0; i < vector.length; i += 1) {
+    const v = vector[i]!;
+    if (Number.isFinite(v)) sumSq += v * v;
+  }
+  const norm = Math.sqrt(sumSq);
+  if (!Number.isFinite(norm) || norm <= 0) return vector.slice();
+  return vector.map((v) => (Number.isFinite(v) ? v / norm : 0));
+}
+
+export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
+  if (a.length === 0 || a.length !== b.length) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const va = a[i]!;
+    const vb = b[i]!;
+    dot += va * vb;
+    normA += va * va;
+    normB += vb * vb;
+  }
+  if (normA <= 0 || normB <= 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
 export interface MemoryProvider {
   isAvailable(): boolean;
   buildFrozenSystemPrompt(input: FrozenPromptInput): { systemPrompt: string; hash: string };
@@ -79,17 +132,26 @@ export function chunkTextSemantically(text: string, maxChunkChars = 900, overlap
 export class LocalSuperHermesMemory implements MemoryProvider {
   private readonly prefetchCache = new Map<string, string>();
   private readonly pendingDreamNamespaces = new Set<string>();
+  private readonly dreamInFlight = new Set<string>();
+  private readonly dreamPendingRescan = new Set<string>();
+  private readonly dreamPendingInstant = new Set<string>();
   private dreamTimer: ReturnType<typeof setTimeout> | null = null;
   private decayTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly db: StateDatabase,
-    private readonly config: HubConfig,
+    private config: HubConfig,
     private readonly memoryDir: string,
     private readonly scrubber: SecretScrubber,
     private readonly dreamExtractor?: DreamExtractor,
+    private readonly embedder?: EmbedderFn,
   ) {
     mkdirSync(memoryDir, { recursive: true });
+    this.ensureStarterL1Files();
+  }
+
+  public setConfig(newConfig: HubConfig): void {
+    this.config = newConfig;
     this.ensureStarterL1Files();
   }
 
@@ -207,18 +269,9 @@ export class LocalSuperHermesMemory implements MemoryProvider {
 
   public queuePrefetch(namespace: string, queryHint: string): void {
     queueMicrotask(() => {
-      try {
-        const cleanQuery = this.scrubber.scrub(queryHint);
-        const hits = this.db.searchLiveMemoryFacts(namespace, cleanQuery, 6);
-        if (hits.length === 0) {
-          this.prefetchCache.delete(namespace);
-          return;
-        }
-        const block = hits.map((f) => `- (${f.kind}, v${f.version}) ${f.factText}`).join("\n");
-        this.prefetchCache.set(namespace, `<ephemeral_memory_recall namespace="${namespace}">\n${block}\n</ephemeral_memory_recall>`);
-      } catch {
+      void this.recallForTurn(namespace, queryHint, 6).catch(() => {
         // Fail-open invariant: memory prefetch must never break a turn
-      }
+      });
     });
   }
 
@@ -260,6 +313,9 @@ export class LocalSuperHermesMemory implements MemoryProvider {
     });
 
     if (params.instant || this.config.memory.dreaming.mode === "instant") {
+      if (this.dreamInFlight.has(params.namespace)) {
+        this.dreamPendingInstant.add(params.namespace);
+      }
       await this.runDreamBatch(params.namespace);
     } else {
       this.scheduleDream(params.namespace);
@@ -279,76 +335,111 @@ export class LocalSuperHermesMemory implements MemoryProvider {
     }, this.config.memory.dreaming.debounceSeconds * 1000);
   }
 
+  private async embedFacts(facts: MemoryFactRecord[]): Promise<void> {
+    if (!this.embedder || facts.length === 0) return;
+    for (const fact of facts) {
+      try {
+        const res = await this.embedder(fact.factText);
+        if (!res || !Array.isArray(res.vector) || res.vector.length === 0) continue;
+        const normalized = l2Normalize(res.vector);
+        this.db.upsertMemoryEmbedding(fact.id, res.model, normalized);
+      } catch {
+        // Fail-open invariant: embedding failure must never abort dreaming or writes
+      }
+    }
+  }
+
   public async runDreamBatch(namespace: string): Promise<number> {
-    const pendingDocs = this.db.db
-      .query("SELECT id FROM documents WHERE namespace = ? AND dream_status = 'pending' ORDER BY updated_at ASC LIMIT ?")
-      .all(namespace, this.config.memory.dreaming.maxBatchDocs) as Array<{ id: string }>;
-
-    if (pendingDocs.length === 0) return 0;
-
-    const docIds = pendingDocs.map((d) => d.id);
-    const chunks: string[] = [];
-    for (const id of docIds) {
-      const rows = this.db.db
-        .query("SELECT text FROM chunks WHERE doc_id = ? ORDER BY position ASC")
-        .all(id) as Array<{ text: string }>;
-      for (const r of rows) chunks.push(r.text);
+    if (this.dreamInFlight.has(namespace)) {
+      this.dreamPendingRescan.add(namespace);
+      return 0;
     }
 
-    const existingFacts = this.db.listLiveMemoryFacts(namespace, { limit: 30 });
-    const extractor = this.dreamExtractor ?? defaultHeuristicDreamExtractor;
-
+    this.dreamInFlight.add(namespace);
     try {
+      const pendingDocs = this.db.db
+        .query("SELECT id FROM documents WHERE namespace = ? AND dream_status = 'pending' ORDER BY updated_at ASC LIMIT ?")
+        .all(namespace, this.config.memory.dreaming.maxBatchDocs) as Array<{ id: string }>;
+
+      if (pendingDocs.length === 0) return 0;
+
+      const docIds = pendingDocs.map((d) => d.id);
+      const chunks: string[] = [];
+      for (const id of docIds) {
+        const rows = this.db.db
+          .query("SELECT text FROM chunks WHERE doc_id = ? ORDER BY position ASC")
+          .all(id) as Array<{ text: string }>;
+        for (const r of rows) chunks.push(r.text);
+      }
+
+      const existingFacts = this.db.listLiveMemoryFacts(namespace, { limit: 30 });
+      const extractor = this.dreamExtractor ?? defaultHeuristicDreamExtractor;
       const ops = await extractor({ namespace, chunks, existingFacts });
       let applied = 0;
       const primaryDocId = docIds[0] ?? null;
+      const insertedFacts: MemoryFactRecord[] = [];
 
       this.db.runAtomicWrite(() => {
         for (const f of ops.newFacts ?? []) {
-          this.db.insertMemoryFact({
+          const cleanText = this.scrubber.scrub(String(f.factText ?? "")).trim();
+          if (!cleanText) continue;
+          const kind = normalizeMemoryKind(f.kind, "fact");
+          const inserted = this.db.insertMemoryFact({
             namespace,
             docId: primaryDocId,
-            entity: f.entity ?? "general",
-            factText: this.scrubber.scrub(f.factText),
-            kind: f.kind,
-            isStatic: f.isStatic ?? f.kind === "preference",
+            entity: this.scrubber.scrub(String(f.entity ?? "general")).trim() || "general",
+            factText: cleanText,
+            kind,
+            isStatic: f.isStatic ?? kind === "preference",
             forgetAfter: f.forgetAfter ?? null,
           });
+          insertedFacts.push(inserted);
           applied += 1;
         }
         for (const u of ops.updates ?? []) {
-          this.db.insertMemoryFact({
+          const cleanText = this.scrubber.scrub(String(u.factText ?? "")).trim();
+          if (!cleanText) continue;
+          const inserted = this.db.insertMemoryFact({
             namespace,
             docId: primaryDocId,
-            entity: u.entity ?? "general",
-            factText: this.scrubber.scrub(u.factText),
-            kind: u.kind ?? "fact",
+            entity: this.scrubber.scrub(String(u.entity ?? "general")).trim() || "general",
+            factText: cleanText,
+            kind: normalizeMemoryKind(u.kind, "fact"),
             supersedesFactId: u.oldId,
           });
+          insertedFacts.push(inserted);
           applied += 1;
         }
         for (const e of ops.extends ?? []) {
-          this.db.insertMemoryFact({
+          const cleanText = this.scrubber.scrub(String(e.factText ?? "")).trim();
+          if (!cleanText) continue;
+          const targetExists = Boolean(e.targetId && this.db.getMemoryFact(e.targetId));
+          const inserted = this.db.insertMemoryFact({
             namespace,
             docId: primaryDocId,
-            entity: e.entity ?? "general",
-            factText: this.scrubber.scrub(e.factText),
-            kind: e.kind ?? "fact",
-            extendsFactId: e.targetId,
+            entity: this.scrubber.scrub(String(e.entity ?? "general")).trim() || "general",
+            factText: cleanText,
+            kind: normalizeMemoryKind(e.kind, "fact"),
+            extendsFactId: targetExists ? e.targetId : undefined,
           });
+          insertedFacts.push(inserted);
           applied += 1;
         }
         for (const d of ops.derives ?? []) {
-          this.db.insertMemoryFact({
+          const cleanText = this.scrubber.scrub(String(d.factText ?? "")).trim();
+          if (!cleanText) continue;
+          const validSources = (d.sourceIds ?? []).filter((sid) => Boolean(sid && this.db.getMemoryFact(sid)));
+          const inserted = this.db.insertMemoryFact({
             namespace,
             docId: primaryDocId,
-            entity: d.entity ?? "general",
-            factText: this.scrubber.scrub(d.factText),
+            entity: this.scrubber.scrub(String(d.entity ?? "general")).trim() || "general",
+            factText: cleanText,
             kind: "fact",
             isInference: true,
             confidence: 0.7,
-            derivedFromFactIds: d.sourceIds,
+            derivedFromFactIds: validSources,
           });
+          insertedFacts.push(inserted);
           applied += 1;
         }
         for (const id of docIds) {
@@ -356,10 +447,34 @@ export class LocalSuperHermesMemory implements MemoryProvider {
         }
       });
 
+      if (this.embedder && insertedFacts.length > 0) {
+        await this.embedFacts(insertedFacts);
+      }
+
       return applied;
     } catch {
       // Fail-open on dreaming errors
       return 0;
+    } finally {
+      this.dreamInFlight.delete(namespace);
+      const shouldRescan = this.dreamPendingRescan.delete(namespace);
+      const wasInstant = this.dreamPendingInstant.delete(namespace);
+      if (shouldRescan) {
+        try {
+          const hasMore = this.db.db
+            .query("SELECT 1 FROM documents WHERE namespace = ? AND dream_status = 'pending' LIMIT 1")
+            .get(namespace);
+          if (hasMore) {
+            if (wasInstant) {
+              void this.runDreamBatch(namespace);
+            } else {
+              this.scheduleDream(namespace);
+            }
+          }
+        } catch {
+          // ignore DB closed during shutdown
+        }
+      }
     }
   }
 
@@ -369,6 +484,214 @@ export class LocalSuperHermesMemory implements MemoryProvider {
       facts: this.db.searchLiveMemoryFacts(namespace, clean, limit),
       messages: this.db.searchMessages(clean, limit),
     };
+  }
+
+  public async hybridSearch(namespace: string, query: string, limit = 8): Promise<HybridSearchResult> {
+    const safeLimit = Math.max(1, Math.min(50, Math.trunc(limit)));
+    const clean = this.scrubber.scrub(query).trim();
+    const messages = clean ? this.db.searchMessages(clean, safeLimit) : [];
+
+    if (!clean) {
+      return {
+        facts: this.db.listLiveMemoryFacts(namespace, { limit: safeLimit }),
+        relatedFacts: [],
+        messages,
+        usedEmbeddings: false,
+      };
+    }
+
+    const ftsHits = this.db.searchLiveMemoryFacts(namespace, clean, safeLimit * 2);
+    let vecHits: Array<{ factId: string; sim: number }> = [];
+    let usedEmbeddings = false;
+
+    if (this.embedder) {
+      try {
+        const qEmb = await this.embedder(clean);
+        if (qEmb && Array.isArray(qEmb.vector) && qEmb.vector.length > 0) {
+          const normQuery = l2Normalize(qEmb.vector);
+          const stored = this.db.listMemoryEmbeddingsByNamespace(namespace);
+          vecHits = stored
+            .filter((row) => row.vector.length === normQuery.length)
+            .map((row) => ({ factId: row.factId, sim: cosineSimilarity(normQuery, row.vector) }))
+            .filter((row) => row.sim > 0)
+            .sort((a, b) => b.sim - a.sim)
+            .slice(0, safeLimit * 2);
+          usedEmbeddings = true;
+        }
+      } catch {
+        // Gracefully fall back to FTS5-only when embedder fails or is offline
+      }
+    }
+
+    const RRF_K = 60;
+    const fusedMap = new Map<string, { score: number; vecSim: number; fact?: MemoryFactRecord }>();
+
+    for (let i = 0; i < ftsHits.length; i += 1) {
+      const fact = ftsHits[i]!;
+      const prev = fusedMap.get(fact.id);
+      const rrf = 1 / (RRF_K + i + 1);
+      if (prev) {
+        prev.score += rrf;
+        prev.fact = fact;
+      } else {
+        fusedMap.set(fact.id, { score: rrf, vecSim: 0, fact });
+      }
+    }
+
+    for (let i = 0; i < vecHits.length; i += 1) {
+      const hit = vecHits[i]!;
+      const prev = fusedMap.get(hit.factId);
+      const rrf = 1 / (RRF_K + i + 1);
+      if (prev) {
+        prev.score += rrf;
+        prev.vecSim = hit.sim;
+      } else {
+        fusedMap.set(hit.factId, { score: rrf, vecSim: hit.sim });
+      }
+    }
+
+    const rankedEntries: Array<{ fact: MemoryFactRecord; score: number; vecSim: number }> = [];
+    for (const [factId, entry] of fusedMap.entries()) {
+      const fact = entry.fact ?? this.db.getMemoryFact(factId);
+      if (!fact || fact.namespace !== namespace || !fact.isLatest || fact.isForgotten) continue;
+      if (fact.forgetAfter !== null && fact.forgetAfter <= Date.now()) continue;
+      rankedEntries.push({ fact, score: entry.score, vecSim: entry.vecSim });
+    }
+
+    rankedEntries.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.vecSim !== a.vecSim) return b.vecSim - a.vecSim;
+      return b.fact.updatedAt - a.fact.updatedAt;
+    });
+
+    const primaryFacts = rankedEntries.slice(0, safeLimit).map((e) => e.fact);
+    const primaryIds = new Set(primaryFacts.map((f) => f.id));
+    const seedIds = primaryFacts.slice(0, Math.min(4, primaryFacts.length)).map((f) => f.id);
+
+    const relatedFacts =
+      seedIds.length > 0
+        ? this.db
+            .getRelatedFacts(seedIds, this.config.memory.graphMaxHops)
+            .filter((f) => f.namespace === namespace && !primaryIds.has(f.id))
+            .slice(0, safeLimit)
+        : [];
+
+    const facts = primaryFacts.slice();
+    for (const rel of relatedFacts) {
+      if (facts.length >= safeLimit) break;
+      facts.push(rel);
+    }
+
+    return { facts, relatedFacts, messages, usedEmbeddings };
+  }
+
+  public async recallForTurn(namespace: string, query: string, limit = 6): Promise<string> {
+    try {
+      const cleanQuery = this.scrubber.scrub(query).trim();
+      if (!cleanQuery) {
+        this.prefetchCache.delete(namespace);
+        return "";
+      }
+      const res = await this.hybridSearch(namespace, cleanQuery, limit);
+      const seen = new Set<string>();
+      const lines: string[] = [];
+
+      for (const f of res.facts) {
+        if (seen.has(f.id)) continue;
+        seen.add(f.id);
+        lines.push(`- (${f.kind}, v${f.version}) ${f.factText}`);
+      }
+      for (const rf of res.relatedFacts.slice(0, 4)) {
+        if (seen.has(rf.id)) continue;
+        seen.add(rf.id);
+        lines.push(`- (related ${rf.kind}, v${rf.version}) ${rf.factText}`);
+      }
+
+      if (lines.length === 0) {
+        this.prefetchCache.delete(namespace);
+        return "";
+      }
+
+      const block = this.scrubber.scrub(
+        `<ephemeral_memory_recall namespace="${namespace}">\n${lines.join("\n")}\n</ephemeral_memory_recall>`,
+      );
+      this.prefetchCache.set(namespace, block);
+      return block;
+    } catch {
+      return "";
+    }
+  }
+
+  public rememberFact(params: {
+    namespace: string;
+    factText: string;
+    kind: MemoryKind;
+    entity?: string;
+    isStatic?: boolean;
+    forgetAfter?: number | null;
+  }): MemoryFactRecord {
+    const cleanText = this.scrubber.scrub(params.factText).trim();
+    if (!cleanText) {
+      throw new Error("empty_memory_fact");
+    }
+    const cleanEntity = this.scrubber.scrub(params.entity ?? "general").trim() || "general";
+    const kind = normalizeMemoryKind(params.kind, "fact");
+
+    const fact = this.db.runAtomicWrite(() =>
+      this.db.insertMemoryFact({
+        namespace: params.namespace,
+        entity: cleanEntity,
+        factText: cleanText,
+        kind,
+        isStatic: params.isStatic ?? kind === "preference",
+        forgetAfter: params.forgetAfter ?? null,
+      }),
+    );
+
+    if (this.embedder) {
+      void this.embedFacts([fact]);
+    }
+    return fact;
+  }
+
+  public forgetFact(factId: string, reason: string): boolean {
+    const cleanReason = this.scrubber.scrub(reason || "forgotten_by_user").trim() || "forgotten_by_user";
+    return this.db.forgetMemoryFact(factId, cleanReason);
+  }
+
+  private resolveL1Spec(target: L1TargetName, projectRoot?: string): { filePath: string; maxChars: number } {
+    if (target === "user") {
+      const spec = this.config.memory.l1Files.globalUser;
+      return { filePath: join(this.memoryDir, spec.file), maxChars: spec.maxChars };
+    }
+    if (target === "global") {
+      const spec = this.config.memory.l1Files.globalMemory;
+      return { filePath: join(this.memoryDir, spec.file), maxChars: spec.maxChars };
+    }
+    if (!projectRoot) {
+      throw new Error("project_root_required_for_project_l1");
+    }
+    const spec = this.config.memory.l1Files.projectMemory;
+    return { filePath: join(projectRoot, spec.file), maxChars: spec.maxChars };
+  }
+
+  public getL1Target(target: L1TargetName, projectRoot?: string): L1TargetSnapshot {
+    const { filePath, maxChars } = this.resolveL1Spec(target, projectRoot);
+    const read = this.readL1File(filePath, maxChars);
+    return {
+      target,
+      filePath,
+      content: this.scrubber.scrub(read.content),
+      usedChars: read.usedChars,
+      maxChars: read.maxChars,
+      gaugeHeader: read.gaugeHeader,
+    };
+  }
+
+  public updateL1Target(target: L1TargetName, content: string, projectRoot?: string): L1TargetSnapshot {
+    const { filePath, maxChars } = this.resolveL1Spec(target, projectRoot);
+    this.writeL1File(filePath, content, maxChars);
+    return this.getL1Target(target, projectRoot);
   }
 
   public sweepExpired(): number {
@@ -395,7 +718,7 @@ export class LocalSuperHermesMemory implements MemoryProvider {
   }
 }
 
-async function defaultHeuristicDreamExtractor(input: {
+export async function defaultHeuristicDreamExtractor(input: {
   namespace: string;
   chunks: string[];
   existingFacts: MemoryFactRecord[];

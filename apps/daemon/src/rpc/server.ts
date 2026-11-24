@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
-import { extname, isAbsolute, relative, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Server, ServerWebSocket } from "bun";
 import {
   RpcCommandSchema,
@@ -9,10 +9,17 @@ import {
   type WsClientMessage,
   type WsServerMessage,
 } from "@bot-factory/shared";
-import { SecretScrubber, type LoadedRuntimeConfig } from "../config";
+import {
+  deleteSecretFromEnvFile,
+  listSecretPresence,
+  SecretScrubber,
+  writeSecretToEnvFile,
+  type LoadedRuntimeConfig,
+} from "../config";
 import type { CommandCore } from "../core/commandCore";
 import type { StateDatabase } from "../db/database";
 import { computeWorkspaceGitDiff, listSafeRepoFiles, readSafeRepoFile } from "../git/worktrees";
+import type { L1TargetName, L1TargetSnapshot, LocalSuperHermesMemory } from "../memory/memoryEngine";
 import type { OrchestrationEngine } from "../orchestration/engine";
 import { isPathStrictlyWithinRoot } from "../runtimes/nativeHttpRuntime";
 
@@ -40,6 +47,7 @@ const CONTENT_TYPES: Record<string, string> = {
 const ALLOWED_ARTIFACT_TOP_DIRS = new Set(["plans", "artifacts", "handoffs"]);
 const SESSION_COOKIE_NAME = "bf_session";
 const SESSION_COOKIE_CONTEXT = "bot-factory-session-v1";
+const SECRET_KEY_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
 
 function timingSafeStringEqual(a: string, b: string): boolean {
   if (!a || !b) return false;
@@ -136,9 +144,11 @@ export class DaemonServer {
     private readonly db: StateDatabase,
     private readonly core: CommandCore,
     private readonly engine: OrchestrationEngine,
+    private readonly memory?: LocalSuperHermesMemory,
+    sharedScrubber?: SecretScrubber,
   ) {
     this.webDistDir = resolve(import.meta.dir, "../../../web/dist");
-    this.scrubber = new SecretScrubber(runtimeCfg.secrets);
+    this.scrubber = sharedScrubber ?? new SecretScrubber(runtimeCfg.secrets);
   }
 
   private isAuthenticated(req: Request): boolean {
@@ -342,6 +352,125 @@ export class DaemonServer {
           }
         }
 
+        if (url.pathname === "/api/config" && req.method === "GET") {
+          return Response.json({ config: this.runtimeCfg.config });
+        }
+
+        if (url.pathname === "/api/secrets" && req.method === "GET") {
+          const keys = listSecretPresence(this.runtimeCfg.secretsPath, this.runtimeCfg.config).filter(
+            (entry) => entry.key !== "BOT_FACTORY_TOKEN",
+          );
+          return Response.json({ keys });
+        }
+
+        if (url.pathname === "/api/secrets" && req.method === "POST") {
+          let body: { key?: unknown; value?: unknown };
+          try {
+            const raw = await req.json();
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+              return Response.json({ ok: false, error: "invalid_secret_body" }, { status: 400 });
+            }
+            body = raw as { key?: unknown; value?: unknown };
+          } catch {
+            return Response.json({ ok: false, error: "invalid_secret_json" }, { status: 400 });
+          }
+          const key = typeof body.key === "string" ? body.key.trim() : "";
+          if (!SECRET_KEY_RE.test(key) || key === "BOT_FACTORY_TOKEN") {
+            return Response.json({ ok: false, error: "invalid_secret_key" }, { status: 400 });
+          }
+          if (typeof body.value !== "string" || /[\r\n\0]/.test(body.value) || body.value.trim().length === 0) {
+            return Response.json({ ok: false, error: "invalid_secret_value" }, { status: 400 });
+          }
+          try {
+            writeSecretToEnvFile(this.runtimeCfg.secretsPath, key, body.value, this.runtimeCfg.secrets);
+            this.scrubber.updateSecrets(this.runtimeCfg.secrets);
+            (this.engine as unknown as { reloadSecrets?: () => void }).reloadSecrets?.();
+            return Response.json({ ok: true, key, present: true });
+          } catch (err) {
+            return Response.json(
+              { ok: false, error: this.scrubber.scrub(err instanceof Error ? err.message : String(err)) },
+              { status: 400 },
+            );
+          }
+        }
+
+        if (url.pathname === "/api/secrets/test" && req.method === "POST") {
+          let body: { provider?: unknown };
+          try {
+            const raw = await req.json();
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+              return Response.json({ ok: false, detail: "invalid_test_body" }, { status: 400 });
+            }
+            body = raw as { provider?: unknown };
+          } catch {
+            return Response.json({ ok: false, detail: "invalid_test_json" }, { status: 400 });
+          }
+          const provider = typeof body.provider === "string" ? body.provider.trim() : "";
+          if (!provider) {
+            return Response.json({ ok: false, detail: "missing_provider" }, { status: 400 });
+          }
+          if (!this.runtimeCfg.config.providers[provider]) {
+            return Response.json({ ok: false, detail: `Unknown provider: ${provider}` }, { status: 404 });
+          }
+          const result = await this.testProviderConnectivity(provider);
+          return Response.json(result);
+        }
+
+        const secretDeleteMatch = /^\/api\/secrets\/([^/]+)$/.exec(url.pathname);
+        if (secretDeleteMatch && req.method === "DELETE") {
+          const key = safeDecodeParam(secretDeleteMatch[1]!);
+          if (key === null || !SECRET_KEY_RE.test(key) || key === "BOT_FACTORY_TOKEN") {
+            return Response.json({ ok: false, error: "invalid_secret_key" }, { status: 400 });
+          }
+          const removed = deleteSecretFromEnvFile(this.runtimeCfg.secretsPath, key, this.runtimeCfg.secrets);
+          this.scrubber.updateSecrets(this.runtimeCfg.secrets);
+          (this.engine as unknown as { reloadSecrets?: () => void }).reloadSecrets?.();
+          return Response.json({ ok: true, key, removed });
+        }
+
+        if (url.pathname === "/api/memory/l1" && req.method === "GET") {
+          const projectId = url.searchParams.get("projectId")?.trim() || undefined;
+          let project: ProjectRecord | null = null;
+          if (projectId) {
+            project = this.db.getProject(projectId);
+            if (!project) {
+              return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+            }
+          }
+          const user = this.readL1SnapshotSafe("user");
+          const global = this.readL1SnapshotSafe("global");
+          const projectSnap = project
+            ? { ...this.readL1SnapshotSafe("project", project.rootPath), projectId: project.id }
+            : null;
+          return Response.json({
+            user,
+            global,
+            project: projectSnap,
+            targets: [user, global, ...(projectSnap ? [projectSnap] : [])],
+          });
+        }
+
+        if (url.pathname === "/api/memory/facts" && req.method === "GET") {
+          let namespace = url.searchParams.get("namespace")?.trim() || undefined;
+          const projectId = url.searchParams.get("projectId")?.trim() || undefined;
+          if (!namespace && projectId) {
+            const project = this.db.getProject(projectId);
+            if (!project) {
+              return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+            }
+            namespace = `project:${project.slug}`;
+          }
+          const query = url.searchParams.get("query")?.trim() || undefined;
+          const rawLimit = Number(url.searchParams.get("limit") ?? 100);
+          const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, Math.trunc(rawLimit))) : 100;
+          const facts = this.db.listAllLiveFacts({ namespace, query, limit }).map((f) => ({
+            ...f,
+            factText: this.scrubber.scrub(f.factText),
+            forgetReason: f.forgetReason ? this.scrubber.scrub(f.forgetReason) : null,
+          }));
+          return Response.json({ facts, total: facts.length });
+        }
+
         const artifactMatch = /^\/api\/projects\/([^/]+)\/artifact$/.exec(url.pathname);
         if (artifactMatch && req.method === "GET") {
           const projectId = safeDecodeParam(artifactMatch[1]!);
@@ -452,6 +581,154 @@ export class DaemonServer {
       }
     }
     return project.repoPath;
+  }
+
+  private readL1SnapshotSafe(target: L1TargetName, projectRoot?: string): L1TargetSnapshot {
+    if (this.memory) {
+      return this.memory.getL1Target(target, projectRoot);
+    }
+    const l1 = this.runtimeCfg.config.memory.l1Files;
+    const spec = target === "user" ? l1.globalUser : target === "global" ? l1.globalMemory : l1.projectMemory;
+    const baseDir = target === "project" ? projectRoot : this.runtimeCfg.memoryDir;
+    if (!baseDir) {
+      throw new Error("project_root_required_for_project_l1");
+    }
+    const filePath = join(baseDir, spec.file);
+    const content = this.scrubber.scrub(existsSync(filePath) ? readFileSync(filePath, "utf8") : "");
+    const usedChars = content.length;
+    const pct = Math.min(100, Math.round((usedChars / spec.maxChars) * 100));
+    return {
+      target,
+      filePath,
+      content,
+      usedChars,
+      maxChars: spec.maxChars,
+      gaugeHeader: `[${pct}% — ${usedChars}/${spec.maxChars} chars]`,
+    };
+  }
+
+  private async testProviderConnectivity(provider: string): Promise<{ ok: boolean; detail: string }> {
+    const providerCfg = this.runtimeCfg.config.providers[provider];
+    if (!providerCfg) {
+      return { ok: false, detail: `Unknown provider: ${provider}` };
+    }
+
+    const runtime = providerCfg.runtime as string;
+    if (runtime === "acp_stdio" || runtime === "cli_stream") {
+      const command = providerCfg.command?.trim();
+      if (!command) {
+        return { ok: false, detail: `Provider '${provider}' has no command configured` };
+      }
+      const resolved = Bun.which(command);
+      if (!resolved) {
+        return { ok: false, detail: `Command '${command}' not found on PATH` };
+      }
+      return this.probeCliVersion(resolved);
+    }
+
+    const baseUrl = providerCfg.baseUrl?.replace(/\/$/, "");
+    if (!baseUrl) {
+      return { ok: false, detail: `Provider '${provider}' has no baseUrl configured` };
+    }
+    const apiKey = providerCfg.apiKeyEnv ? this.runtimeCfg.secrets[providerCfg.apiKeyEnv] : undefined;
+    if (providerCfg.apiKeyEnv && !apiKey) {
+      return { ok: false, detail: `Missing secret ${providerCfg.apiKeyEnv}` };
+    }
+
+    const isLoopback = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?:\/|$)/i.test(baseUrl);
+    if (process.env.BOT_FACTORY_OFFLINE_MOCK === "1" && !isLoopback) {
+      return { ok: true, detail: `Offline mock mode active for ${provider}` };
+    }
+
+    try {
+      const protocol = (providerCfg.protocol as string | undefined) ?? "openai_compatible";
+      let probeUrl = `${baseUrl}/models`;
+      const headers: Record<string, string> = {};
+      if (protocol === "google_gemini") {
+        probeUrl = `${baseUrl}/models?pageSize=1`;
+        if (apiKey) headers["x-goog-api-key"] = apiKey;
+      } else if (protocol === "anthropic") {
+        const prefix = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+        probeUrl = `${prefix}/models`;
+        if (apiKey) headers["x-api-key"] = apiKey;
+        headers["anthropic-version"] = "2023-06-01";
+      } else if (apiKey) {
+        headers.authorization = `Bearer ${apiKey}`;
+      }
+
+      const res = await fetch(probeUrl, {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (res.ok) {
+        return { ok: true, detail: `HTTP ${res.status} OK from ${provider}` };
+      }
+      const errBody = this.scrubber.scrub((await res.text()).slice(0, 240));
+      return { ok: false, detail: `HTTP ${res.status}: ${errBody || res.statusText}` };
+    } catch (err) {
+      const msg = this.scrubber.scrub(err instanceof Error ? err.message : String(err));
+      return { ok: false, detail: msg || "Connectivity check failed" };
+    }
+  }
+
+  private async probeCliVersion(resolvedPath: string): Promise<{ ok: boolean; detail: string }> {
+    const argv =
+      process.platform === "win32" && /\.(cmd|bat)$/i.test(resolvedPath)
+        ? ["cmd.exe", "/d", "/s", "/c", resolvedPath, "--version"]
+        : [resolvedPath, "--version"];
+
+    try {
+      const cleanEnv = { ...process.env };
+      delete cleanEnv.BOT_FACTORY_TOKEN;
+      const proc = Bun.spawn(argv, {
+        env: cleanEnv,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try {
+          proc.kill();
+        } catch {
+          // ignore
+        }
+      }, 3_000);
+
+      const [stdoutText, stderrText, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      clearTimeout(timer);
+
+      const firstLine = this.scrubber
+        .scrub(`${stdoutText}\n${stderrText}`)
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find(Boolean);
+
+      if (timedOut) {
+        return { ok: false, detail: `Found ${resolvedPath}, but --version timed out` };
+      }
+      if (exitCode === 0) {
+        return {
+          ok: true,
+          detail: firstLine ? `${resolvedPath} (${firstLine.slice(0, 120)})` : `Found ${resolvedPath}`,
+        };
+      }
+      return {
+        ok: false,
+        detail: `Found ${resolvedPath}, but --version exited ${exitCode}${firstLine ? `: ${firstLine.slice(0, 120)}` : ""}`,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        detail: this.scrubber.scrub(err instanceof Error ? err.message : String(err)),
+      };
+    }
   }
 
   private serveStaticUi(pathname: string): Response {

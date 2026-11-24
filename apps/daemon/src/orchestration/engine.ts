@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
+  HubConfigSchema,
   newId,
   RpcCommandSchema,
   slugify,
@@ -8,10 +9,15 @@ import {
   type AgentRecord,
   type AnnotationRecord,
   type ArtifactEntry,
+  type AutonomyLevel,
+  type CheckpointRecord,
   type DebateMessageRecord,
   type DebateRecord,
+  type HubConfig,
+  type PermissionRequestRecord,
   type ProjectRecord,
   type QuietStatusProjection,
+  type ReasoningEffort,
   type RpcCommand,
   type SelfModProposalRecord,
   type SubscriptionTopic,
@@ -19,22 +25,25 @@ import {
   type TimelineItem,
   type VerificationReportRecord,
 } from "@bot-factory/shared";
-import type { LoadedRuntimeConfig, SecretScrubber } from "../config";
+import { resolveHubConfigInspection, saveHubConfig, type LoadedRuntimeConfig, type SecretScrubber } from "../config";
 import type { CommandCore } from "../core/commandCore";
 import type { StateDatabase } from "../db/database";
 import {
   captureCheckpoint,
   createBotWorktree,
   listProjectArtifacts,
+  makeCheckpointScopeKey,
   provisionProjectWorkspace,
   removeBotWorktree,
+  restoreCheckpoint,
   writeTaskHandoff,
 } from "../git/worktrees";
 import type { LocalSuperHermesMemory } from "../memory/memoryEngine";
-import { SelfModManager } from "../phase3/selfMod";
+import { loadActivePluginBlocks, mergeOpenByosConfigPatch, SelfModManager } from "../phase3/selfMod";
 import { IndependentVerifier } from "../phase3/verifier";
 import { resolveSafeProjectFile } from "../rpc/server";
-import type { AcpSubprocessRuntime } from "../runtimes/acpSubprocessRuntime";
+import type { AcpSubprocessRuntime, PendingAcpPermissionRecord } from "../runtimes/acpSubprocessRuntime";
+import type { CliStreamRuntime } from "../runtimes/cliStreamRuntime";
 import type { NativeHttpRuntime } from "../runtimes/nativeHttpRuntime";
 import type { ModelRouter } from "../runtimes/router";
 import type { AgentRuntime, RuntimeSessionHandle } from "../runtimes/types";
@@ -43,6 +52,7 @@ export class OrchestrationEngine {
   public readonly metaAgentId = "agent_meta_orchestrator";
   private readonly sessionHandles = new Map<string, RuntimeSessionHandle>();
   private readonly mcpTokens = new Map<string, { projectId: string; agentId: string; sessionId: string }>();
+  private readonly agentTurnPrefs = new Map<string, { reasoningEffort?: ReasoningEffort; autonomyLevel?: AutonomyLevel }>();
   private readonly verifier: IndependentVerifier;
   private readonly selfMod: SelfModManager;
   private boundPort: number | null = null;
@@ -56,14 +66,34 @@ export class OrchestrationEngine {
     private readonly nativeRuntime: NativeHttpRuntime,
     private readonly acpRuntime: AcpSubprocessRuntime,
     private readonly scrubber: SecretScrubber,
+    private readonly cliRuntime?: CliStreamRuntime,
   ) {
-    this.verifier = new IndependentVerifier(runtimeCfg, db, memory, router, nativeRuntime, acpRuntime, scrubber);
+    this.verifier = new IndependentVerifier(runtimeCfg, db, memory, router, nativeRuntime, acpRuntime, scrubber, cliRuntime);
     this.selfMod = new SelfModManager(runtimeCfg, scrubber);
     this.acpRuntime.setOnSessionExit?.((sessionId) => {
       this.handleAcpSessionExit(sessionId);
     });
+    this.acpRuntime.setOnPermissionRequest?.((req) => {
+      this.handleAcpPermissionRequested(req);
+    });
     this.ensureMetaOrchestrator();
     this.registerOutboxHandlers();
+  }
+
+  public reloadSecrets(): void {
+    this.scrubber.updateSecrets(this.runtimeCfg.secrets);
+    this.nativeRuntime.updateSecrets(this.runtimeCfg.secrets);
+    this.cliRuntime?.updateSecrets(this.runtimeCfg.secrets);
+  }
+
+  public reloadConfig(newConfig: HubConfig): void {
+    this.runtimeCfg.config = newConfig;
+    this.router.setConfig(newConfig);
+    this.nativeRuntime.setConfig(newConfig);
+    this.acpRuntime.setConfig(newConfig);
+    this.cliRuntime?.setConfig(newConfig);
+    this.memory.setConfig(newConfig);
+    this.reloadSecrets();
   }
 
   public setBoundPort(port: number): void {
@@ -118,14 +148,65 @@ export class OrchestrationEngine {
   public shutdownSync(): void {
     this.acpRuntime.shutdownAllSync();
     this.nativeRuntime.shutdownAllSync();
+    this.cliRuntime?.shutdownAllSync();
     this.sessionHandles.clear();
     this.mcpTokens.clear();
   }
 
   public async shutdown(): Promise<void> {
-    await Promise.all([this.acpRuntime.shutdownAll(), this.nativeRuntime.shutdownAll()]);
+    await Promise.all([
+      this.acpRuntime.shutdownAll(),
+      this.nativeRuntime.shutdownAll(),
+      this.cliRuntime ? this.cliRuntime.shutdownAll() : Promise.resolve(),
+    ]);
     this.sessionHandles.clear();
     this.mcpTokens.clear();
+  }
+
+  private buildAgentSystemPrompt(agent: Pick<AgentRecord, "scope" | "name" | "projectId" | "worktreePath" | "provider" | "model">): {
+    systemPrompt: string;
+    hash: string;
+  } {
+    const pluginBlocks = loadActivePluginBlocks(this.runtimeCfg.pluginsDir);
+    const modelLabel = `${agent.provider}/${agent.model}`;
+    if (agent.scope === "global") {
+      return this.memory.buildFrozenSystemPrompt({
+        identity:
+          "You are the Bot-Factory Meta-Orchestrator (Life-Manager). You keep the human's main Chat-Tab calm, concise, and strategic while provisioning projects and steering background Project Managers.",
+        toolsBrief:
+          "You coordinate projects under ~/bot-factory/projects/<slug>/, spawn Project Managers, review high-level milestones, and record durable preferences/decisions.",
+        namespace: "global",
+        modelLabel,
+        pluginBlocks,
+      });
+    }
+
+    const project = agent.projectId ? this.db.getProject(agent.projectId) : null;
+    const slug = project?.slug ?? "unknown";
+    const projectName = project?.name ?? slug;
+    if (agent.scope === "project") {
+      return this.memory.buildFrozenSystemPrompt({
+        identity: `You are the Project Manager for '${projectName}' (${slug}). You own plans/, the Task Board, operator Steers, and Preview Annotations.`,
+        toolsBrief: "Break goals into crisp tasks, translate steers/annotations into targeted fix tasks, and coordinate peer bots cleanly.",
+        projectContext: `Project slug: ${slug}\nPlans dir: plans/\nArtifacts dir: artifacts/`,
+        worktreePath: agent.worktreePath ?? project?.repoPath,
+        namespace: `project:${slug}`,
+        projectRoot: project?.rootPath,
+        modelLabel,
+        pluginBlocks,
+      });
+    }
+
+    return this.memory.buildFrozenSystemPrompt({
+      identity: `You are autonomous ${agent.scope} bot '${agent.name}' working on project '${projectName}'.`,
+      toolsBrief: "Work cleanly inside your isolated Git worktree, produce concise handoffs, and avoid unrelated changes.",
+      projectContext: `Project: ${projectName} (${slug})`,
+      worktreePath: agent.worktreePath,
+      namespace: `project:${slug}`,
+      projectRoot: project?.rootPath,
+      modelLabel,
+      pluginBlocks,
+    });
   }
 
   private ensureMetaOrchestrator(): AgentRecord {
@@ -142,6 +223,7 @@ export class OrchestrationEngine {
         "You coordinate projects under ~/bot-factory/projects/<slug>/, spawn Project Managers, review high-level milestones, and record durable preferences/decisions.",
       namespace: "global",
       modelLabel: `${route.provider}/${route.model}`,
+      pluginBlocks: loadActivePluginBlocks(this.runtimeCfg.pluginsDir),
     });
 
     const meta: AgentRecord = {
@@ -183,7 +265,52 @@ export class OrchestrationEngine {
   }
 
   private getRuntime(kind: AgentRecord["runtimeType"]): AgentRuntime {
-    return kind === "acp_stdio" ? this.acpRuntime : this.nativeRuntime;
+    if (kind === "acp_stdio") return this.acpRuntime;
+    if (kind === "cli_stream") {
+      if (!this.cliRuntime) {
+        throw new Error("cli_stream_runtime_unavailable");
+      }
+      return this.cliRuntime;
+    }
+    return this.nativeRuntime;
+  }
+
+  private toPermissionRequestRecord(req: PendingAcpPermissionRecord): PermissionRequestRecord {
+    const agent = this.db.getAgent(req.agentId);
+    return {
+      id: req.permissionId,
+      agentId: req.agentId,
+      sessionId: req.sessionId,
+      projectId: agent?.projectId ?? null,
+      agentName: agent?.name,
+      title: req.title,
+      commandOrPath: req.commandOrPath,
+      reason: req.reason,
+      status: "pending",
+      decision: null,
+      createdAt: req.createdAt,
+      expiresAt: req.expiresAt,
+    };
+  }
+
+  private handleAcpPermissionRequested(req: PendingAcpPermissionRecord): void {
+    const record = this.toPermissionRequestRecord(req);
+    this.db.runAtomicWrite(() => {
+      const agent = this.db.getAgent(req.agentId);
+      if (agent && agent.status !== "paused" && agent.status !== "stopped") {
+        this.db.updateAgentStatus(agent.id, "requires_action", {
+          lastSummary: `Awaiting permission: ${record.title.slice(0, 60)}`,
+        });
+      }
+      this.db.addInboxNotice(
+        "action",
+        `Permission requested (${record.agentName ?? record.agentId}): ${record.title} — ${record.commandOrPath}`.slice(0, 200),
+        { projectId: record.projectId ?? undefined, agentId: record.agentId },
+      );
+    });
+    this.core.emitDirectEvent(`bot:${req.agentId}:timeline`, "permission.requested", record);
+    this.core.emitDirectEvent("global:status", "permission.requested", record);
+    this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
   }
 
   private recordTurnFailure(params: {
@@ -232,9 +359,16 @@ export class OrchestrationEngine {
       "meta.chat.turn",
       async (eff) => {
         const text = String(eff.payload.text ?? "");
+        const projectId =
+          typeof eff.payload.projectId === "string" && eff.payload.projectId ? eff.payload.projectId : undefined;
+        const reasoningEffort = eff.payload.reasoningEffort as ReasoningEffort | undefined;
+        const autonomyLevel = eff.payload.autonomyLevel as AutonomyLevel | undefined;
         const turn = await this.runAgentTurn(this.metaAgentId, text, {
           emitTopic: "chat:meta",
           namespace: "global",
+          projectId,
+          reasoningEffort,
+          autonomyLevel,
         });
         if (!turn.ok) {
           this.recordTurnFailure({
@@ -258,6 +392,8 @@ export class OrchestrationEngine {
         const projectId = String(eff.payload.projectId ?? "");
         const pmAgentId = String(eff.payload.pmAgentId ?? "");
         const message = String(eff.payload.message ?? "");
+        const reasoningEffort = eff.payload.reasoningEffort as ReasoningEffort | undefined;
+        const autonomyLevel = eff.payload.autonomyLevel as AutonomyLevel | undefined;
         const project = this.db.getProject(projectId);
         if (!project) return;
 
@@ -274,6 +410,8 @@ export class OrchestrationEngine {
           {
             emitTopic: `bot:${pmAgentId}:timeline`,
             namespace: `project:${project.slug}`,
+            reasoningEffort,
+            autonomyLevel,
           },
         );
         if (!turn.ok) {
@@ -366,6 +504,21 @@ export class OrchestrationEngine {
         concurrencyKey: (eff) => String(eff.payload.taskId ?? eff.payload.proposalId ?? eff.payload.debateId ?? eff.id),
       },
     );
+
+    this.core.registerEffectHandler(
+      "checkpoint.rollback.run",
+      async (eff) => {
+        const projectId = String(eff.payload.projectId ?? "");
+        const agentId = String(eff.payload.agentId ?? "");
+        const currentCwd = String(eff.payload.currentCwd ?? "");
+        const checkpointId = String(eff.payload.checkpointId ?? "");
+        await this.executeCheckpointRollback(projectId, agentId, currentCwd, checkpointId);
+      },
+      {
+        lane: "control",
+        concurrencyKey: (eff) => `ckpt:${String(eff.payload.agentId ?? eff.id)}`,
+      },
+    );
   }
 
   public executeCommand(cmd: RpcCommand): unknown {
@@ -380,12 +533,18 @@ export class OrchestrationEngine {
         return this.handleChatSend(cmd);
       case "project.create":
         return this.handleProjectCreate(cmd);
+      case "project.archive":
+        return this.handleProjectArchive(cmd);
       case "bot.spawn":
         return this.handleBotSpawn(cmd);
       case "bot.pause":
         return this.handleBotControl(cmd.commandId, cmd.agentId, "pause");
       case "bot.stop":
         return this.handleBotControl(cmd.commandId, cmd.agentId, "hard_stop");
+      case "bot.resume":
+        return this.handleBotResume(cmd);
+      case "permission.respond":
+        return this.handlePermissionRespond(cmd);
       case "steer.submit":
         return this.handleSteerSubmit(cmd);
       case "task.create":
@@ -394,6 +553,8 @@ export class OrchestrationEngine {
         return this.handleTaskDispatch(cmd);
       case "task.verify":
         return this.handleTaskVerify(cmd);
+      case "task.merge":
+        return this.handleTaskMerge(cmd);
       case "annotation.create":
         return this.handleAnnotationCreate(cmd);
       case "annotation.resolve":
@@ -414,6 +575,24 @@ export class OrchestrationEngine {
         return this.handleSelfModPromote(cmd);
       case "selfmod.rollback":
         return this.handleSelfModRollback(cmd);
+      case "config.update":
+        return this.handleConfigUpdate(cmd);
+      case "routing.set_override":
+        return this.handleRoutingSetOverride(cmd);
+      case "memory.l1.get":
+        return this.handleMemoryL1Get(cmd);
+      case "memory.l1.update":
+        return this.handleMemoryL1Update(cmd);
+      case "checkpoint.list":
+        return this.handleCheckpointList(cmd);
+      case "checkpoint.rollback":
+        return this.handleCheckpointRollback(cmd);
+      case "inbox.dismiss":
+        return this.handleInboxDismiss(cmd);
+      default: {
+        const _exhaustive: never = cmd;
+        throw new Error(`unsupported_command:${String((_exhaustive as { type?: unknown })?.type ?? "unknown")}`);
+      }
     }
   }
 
@@ -422,6 +601,9 @@ export class OrchestrationEngine {
     const sessionId = meta.activeSessionId!;
     const now = Date.now();
     const cleanText = this.scrubber.scrub(cmd.text);
+    if (cmd.projectId && !this.db.getProject(cmd.projectId)) {
+      throw new Error(`Project not found: ${cmd.projectId}`);
+    }
 
     const userMsg: TimelineItem = {
       id: newId("msg"),
@@ -444,7 +626,17 @@ export class OrchestrationEngine {
         { topic: "chat:meta", eventType: "chat.message", payload: userMsg },
         { topic: "global:status", eventType: "status.updated", payload: this.getQuietStatusProjection() },
       ],
-      effects: [{ effectType: "meta.chat.turn", payload: { text: cleanText } }],
+      effects: [
+        {
+          effectType: "meta.chat.turn",
+          payload: {
+            text: cleanText,
+            ...(cmd.projectId ? { projectId: cmd.projectId } : {}),
+            ...(cmd.reasoningEffort ? { reasoningEffort: cmd.reasoningEffort } : {}),
+            ...(cmd.autonomyLevel ? { autonomyLevel: cmd.autonomyLevel } : {}),
+          },
+        },
+      ],
     }));
   }
 
@@ -489,6 +681,7 @@ export class OrchestrationEngine {
       namespace: `project:${slug}`,
       projectRoot: provisioned.rootPath,
       modelLabel: `${pmRoute.provider}/${pmRoute.model}`,
+      pluginBlocks: loadActivePluginBlocks(this.runtimeCfg.pluginsDir),
     });
 
     const pmAgent: AgentRecord = {
@@ -649,7 +842,15 @@ export class OrchestrationEngine {
       namespace: `project:${project.slug}`,
       projectRoot: project.rootPath,
       modelLabel: `${route.provider}/${route.model}`,
+      pluginBlocks: loadActivePluginBlocks(this.runtimeCfg.pluginsDir),
     });
+
+    if (cmd.autonomyLevel || cmd.reasoningEffort) {
+      this.agentTurnPrefs.set(agentId, {
+        autonomyLevel: cmd.autonomyLevel,
+        reasoningEffort: cmd.reasoningEffort,
+      });
+    }
 
     const bot: AgentRecord = {
       id: agentId,
@@ -666,6 +867,8 @@ export class OrchestrationEngine {
       pid: null,
       activeSessionId: sessionId,
       lastSummary: `Worktree ready (${worktreeBranch})`,
+      autonomyLevel: cmd.autonomyLevel,
+      reasoningEffort: cmd.reasoningEffort,
       updatedAt: now,
     };
 
@@ -757,7 +960,18 @@ export class OrchestrationEngine {
         { topic: `bot:${pm.id}:timeline`, eventType: "timeline.item", payload: steerItem },
         { topic: "global:status", eventType: "status.updated", payload: this.getQuietStatusProjection() },
       ],
-      effects: [{ effectType: "pm.steer.turn", payload: { projectId: project.id, pmAgentId: pm.id, message: cleanMsg } }],
+      effects: [
+        {
+          effectType: "pm.steer.turn",
+          payload: {
+            projectId: project.id,
+            pmAgentId: pm.id,
+            message: cleanMsg,
+            ...(cmd.reasoningEffort ? { reasoningEffort: cmd.reasoningEffort } : {}),
+            ...(cmd.autonomyLevel ? { autonomyLevel: cmd.autonomyLevel } : {}),
+          },
+        },
+      ],
     }));
   }
 
@@ -1243,57 +1457,74 @@ export class OrchestrationEngine {
   private async runAgentTurn(
     agentId: string,
     userText: string,
-    opts: { emitTopic: SubscriptionTopic; namespace: string; imageDataUrl?: string | null },
+    opts: {
+      emitTopic: SubscriptionTopic;
+      namespace: string;
+      imageDataUrl?: string | null;
+      projectId?: string;
+      reasoningEffort?: ReasoningEffort;
+      autonomyLevel?: AutonomyLevel;
+    },
   ): Promise<{ ok: boolean; text: string; error?: string }> {
     const agent = this.db.getAgent(agentId);
     if (!agent || !agent.activeSessionId) throw new Error(`Agent/session missing: ${agentId}`);
     const session = this.db.getSession(agent.activeSessionId);
     if (!session) throw new Error(`Session missing: ${agent.activeSessionId}`);
 
+    const prefs = this.agentTurnPrefs.get(agent.id);
+    const reasoningEffort = opts.reasoningEffort ?? prefs?.reasoningEffort ?? agent.reasoningEffort;
+    const autonomyLevel = opts.autonomyLevel ?? prefs?.autonomyLevel ?? agent.autonomyLevel;
+    const botTimelineTopic: SubscriptionTopic = `bot:${agent.id}:timeline`;
+
     const admission = this.db.runAtomicWrite(() => this.db.enqueueAdmission(session.id, userText, "started"));
 
     const runtime = this.getRuntime(agent.runtimeType);
     let handle = this.sessionHandles.get(session.id);
-    if (handle && handle.runtimeKind === "acp_stdio" && !this.acpRuntime.isSessionAlive(handle.sessionId)) {
+    if (
+      handle &&
+      ((handle.runtimeKind === "acp_stdio" && !this.acpRuntime.isSessionAlive(handle.sessionId)) ||
+        (handle.runtimeKind === "cli_stream" && !this.cliRuntime?.isSessionAlive(handle.sessionId)))
+    ) {
       this.sessionHandles.delete(session.id);
       this.revokeMcpTokensForAgent(agent.id);
       handle = undefined;
     }
 
     let finalText = "";
+    let thoughtText = "";
     let runtimeError: string | null = null;
     let receivedDone = false;
 
     try {
       if (!handle) {
         this.revokeMcpTokensForAgent(agent.id);
+        const supportsMcp = agent.runtimeType === "acp_stdio" || agent.runtimeType === "cli_stream";
         const mcpToken =
-          agent.runtimeType === "acp_stdio" && agent.projectId
+          supportsMcp && agent.projectId
             ? this.mintMcpToken(agent.projectId, agent.id, session.id)
             : this.runtimeCfg.sessionToken;
         const mcpBridgeScript = resolve(import.meta.dir, "../mcp/mcpBridge.ts");
-        const mcpServers =
-          agent.runtimeType === "acp_stdio"
-            ? [
-                {
-                  name: "bot-factory",
-                  command: "bun",
-                  args: [
-                    "run",
-                    mcpBridgeScript,
-                    "--daemon-url",
-                    this.getDaemonUrl(),
-                    "--project",
-                    agent.projectId ?? "global",
-                    "--agent",
-                    agent.id,
-                  ],
-                  env: {
-                    BOT_FACTORY_TOKEN: mcpToken,
-                  },
+        const mcpServers = supportsMcp
+          ? [
+              {
+                name: "bot-factory",
+                command: "bun",
+                args: [
+                  "run",
+                  mcpBridgeScript,
+                  "--daemon-url",
+                  this.getDaemonUrl(),
+                  "--project",
+                  agent.projectId ?? "global",
+                  "--agent",
+                  agent.id,
+                ],
+                env: {
+                  BOT_FACTORY_TOKEN: mcpToken,
                 },
-              ]
-            : undefined;
+              },
+            ]
+          : undefined;
 
         handle = await runtime.startSession({
           agentId: agent.id,
@@ -1303,6 +1534,8 @@ export class OrchestrationEngine {
           cwd: agent.worktreePath ?? this.runtimeCfg.rootDir,
           systemPrompt: session.systemPrompt,
           mcpServers,
+          reasoningEffort,
+          autonomyLevel,
         });
         const latestAfterStart = this.db.getAgent(agent.id);
         if (!latestAfterStart || latestAfterStart.status === "stopped" || latestAfterStart.status === "paused") {
@@ -1329,18 +1562,39 @@ export class OrchestrationEngine {
         }
       }
 
-      const history = this.db
-        .listAgentTimeline(agent.id, 24)
-        .filter((m) => m.kind === "message" && (m.role === "user" || m.role === "assistant"))
-        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+      const rawHistory = this.db
+        .listActiveSessionMessages(session.id, 24)
+        .filter(
+          (m) =>
+            (m.kind === "message" && (m.role === "user" || m.role === "assistant")) ||
+            (m.kind === "status" && Boolean(m.title?.startsWith("Compaction Gen #"))),
+        )
+        .map((m) => ({
+          role: (m.kind === "status" ? "system" : m.role) as "user" | "assistant" | "system",
+          content: m.content,
+        }));
+      if (rawHistory.length > 0 && rawHistory[rawHistory.length - 1]?.role === "user" && rawHistory[rawHistory.length - 1]?.content === userText) {
+        rawHistory.pop();
+      }
+      const history = rawHistory;
 
-      const ephemeralContext = this.memory.prefetch(opts.namespace);
+      let recalled = "";
+      try {
+        recalled = await this.memory.recallForTurn(opts.namespace, userText, 6);
+      } catch {
+        recalled = "";
+      }
+      const memoryContext = recalled || this.memory.prefetch(opts.namespace);
+      const projectSummary = opts.projectId ? this.buildConciseProjectSummary(opts.projectId) : "";
+      const ephemeralContext = [projectSummary, memoryContext].filter(Boolean).join("\n\n");
 
       for await (const evt of runtime.sendTurn(handle, {
         userText,
         ephemeralContext: ephemeralContext || undefined,
         history,
         imageDataUrl: opts.imageDataUrl,
+        reasoningEffort,
+        autonomyLevel,
       })) {
         if (evt.type === "plan") {
           const item: TimelineItem = {
@@ -1358,6 +1612,13 @@ export class OrchestrationEngine {
             this.db.runAtomicWrite(() => this.db.appendMessage(item));
             this.core.emitDirectEvent(opts.emitTopic, "timeline.item", item);
           }
+        } else if (evt.type === "thought") {
+          thoughtText += evt.text;
+          this.core.emitDirectEvent(
+            opts.emitTopic,
+            opts.emitTopic === "chat:meta" ? "chat.thought" : "timeline.delta",
+            { agentId: agent.id, sessionId: session.id, kind: "thought", text: evt.text },
+          );
         } else if (evt.type === "tool_call") {
           const item: TimelineItem = {
             id: newId("msg"),
@@ -1378,8 +1639,20 @@ export class OrchestrationEngine {
           // Strict Anti-Log-Spam invariant: tool_calls are persisted & emitted ONLY on bot timeline, NEVER pushed to chat:meta!
           if (opts.emitTopic !== "chat:meta") {
             this.db.runAtomicWrite(() => this.db.appendMessage(item));
-            this.core.emitDirectEvent(opts.emitTopic, "timeline.item", item);
           }
+          this.core.emitDirectEvent(botTimelineTopic, "timeline.item", item);
+        } else if (evt.type === "tool_result") {
+          // Strict Anti-Log-Spam invariant: tool_results stay on bot timeline, NEVER pushed to chat:meta!
+          this.core.emitDirectEvent(botTimelineTopic, "tool.result", {
+            agentId: agent.id,
+            sessionId: session.id,
+            toolCallId: evt.toolCallId,
+            name: evt.name,
+            output: evt.output,
+            isError: Boolean(evt.isError),
+          });
+        } else if (evt.type === "permission_requested") {
+          // Handled synchronously via acpRuntime.setOnPermissionRequest
         } else if (evt.type === "permission_escalated") {
           this.db.runAtomicWrite(() => {
             this.db.updateAgentStatus(agent.id, "requires_action", { lastSummary: evt.reason });
@@ -1389,8 +1662,15 @@ export class OrchestrationEngine {
             });
           });
           this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
+        } else if (evt.type === "usage") {
+          this.db.runAtomicWrite(() => this.db.addSessionTokenUsage(session.id, evt.tokenIn, evt.tokenOut));
         } else if (evt.type === "text_delta") {
           finalText += evt.text;
+          this.core.emitDirectEvent(
+            opts.emitTopic,
+            opts.emitTopic === "chat:meta" ? "chat.delta" : "timeline.delta",
+            { agentId: agent.id, sessionId: session.id, kind: "text_delta", text: evt.text },
+          );
         } else if (evt.type === "done") {
           receivedDone = true;
           finalText = evt.finalText;
@@ -1409,7 +1689,10 @@ export class OrchestrationEngine {
       }
 
       if (runtimeError !== null) {
-        if (handle.runtimeKind === "acp_stdio" && !this.acpRuntime.isSessionAlive(handle.sessionId)) {
+        if (
+          (handle.runtimeKind === "acp_stdio" && !this.acpRuntime.isSessionAlive(handle.sessionId)) ||
+          (handle.runtimeKind === "cli_stream" && !this.cliRuntime?.isSessionAlive(handle.sessionId))
+        ) {
           this.sessionHandles.delete(session.id);
           this.revokeMcpTokensForAgent(agent.id);
         }
@@ -1418,7 +1701,8 @@ export class OrchestrationEngine {
           const latest = this.db.getAgent(agent.id);
           if (!latest || (latest.status !== "paused" && latest.status !== "stopped")) {
             const keepPid =
-              handle?.runtimeKind === "acp_stdio" && this.acpRuntime.isSessionAlive(session.id)
+              (handle?.runtimeKind === "acp_stdio" && this.acpRuntime.isSessionAlive(session.id)) ||
+              (handle?.runtimeKind === "cli_stream" && this.cliRuntime?.isSessionAlive(session.id))
                 ? handle.pid
                 : null;
             this.db.updateAgentStatus(agent.id, "error", {
@@ -1431,6 +1715,22 @@ export class OrchestrationEngine {
         return { ok: false, text: finalText, error: runtimeError };
       }
 
+      const now = Date.now();
+      const thoughtItem: TimelineItem | null =
+        opts.emitTopic !== "chat:meta" && thoughtText.trim().length > 0
+          ? {
+              id: newId("msg"),
+              agentId: agent.id,
+              sessionId: session.id,
+              seq: 0,
+              kind: "thought",
+              role: "assistant",
+              title: "Reasoning",
+              content: thoughtText.trim(),
+              createdAt: now,
+            }
+          : null;
+
       const assistantItem: TimelineItem = {
         id: newId("msg"),
         agentId: agent.id,
@@ -1439,10 +1739,13 @@ export class OrchestrationEngine {
         kind: "message",
         role: "assistant",
         content: finalText || "(no output)",
-        createdAt: Date.now(),
+        createdAt: now,
       };
 
       this.db.runAtomicWrite(() => {
+        if (thoughtItem) {
+          this.db.appendMessage(thoughtItem);
+        }
         this.db.appendMessage(assistantItem);
         this.db.updateAdmissionStatus(admission.id, "terminal");
         const latest = this.db.getAgent(agent.id);
@@ -1451,12 +1754,61 @@ export class OrchestrationEngine {
         }
       });
 
+      if (thoughtItem) {
+        this.core.emitDirectEvent(opts.emitTopic, "timeline.item", thoughtItem);
+      }
       this.core.emitDirectEvent(
         opts.emitTopic,
         opts.emitTopic === "chat:meta" ? "chat.message" : "timeline.item",
         assistantItem,
       );
       this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
+
+      if (opts.emitTopic === "chat:meta") {
+        try {
+          await this.memory.ingestDocument({
+            docId: `chat:${session.id}:${assistantItem.id}`,
+            namespace: opts.namespace,
+            content: `User: ${userText}\n\nAssistant: ${finalText || "(no output)"}`,
+            metadata: {
+              agentId: agent.id,
+              sessionId: session.id,
+              projectId: opts.projectId ?? null,
+              createdAt: assistantItem.createdAt,
+            },
+          });
+        } catch {
+          // Fail-open invariant: memory ingestion must not break completed turns
+        }
+      }
+
+      const totalTokens = this.db.getSessionTokenTotal(session.id);
+      if (totalTokens >= this.runtimeCfg.config.guardrails.autoCompactThresholdTokens) {
+        const activeMsgs = this.db.listActiveSessionMessages(session.id, 40);
+        const summaryLines = activeMsgs
+          .filter((m) => m.kind === "message" && (m.role === "user" || m.role === "assistant"))
+          .slice(-8)
+          .map((m) => `- ${m.role}: ${m.content.replace(/\s+/g, " ").slice(0, 180)}`);
+        const summaryText = this.scrubber.scrub(
+          `Compacted ${activeMsgs.length} active messages (${totalTokens} tokens).\n${summaryLines.join("\n")}`,
+        );
+        const freshAgent = this.db.getAgent(agent.id) ?? agent;
+        const rebuilt = this.buildAgentSystemPrompt(freshAgent);
+        const nextGen = this.db.compactSessionInPlace(session.id, summaryText, rebuilt.systemPrompt, rebuilt.hash);
+        this.db.runAtomicWrite(() => {
+          this.db.updateSessionSystemPrompt(session.id, rebuilt.systemPrompt, rebuilt.hash);
+        });
+        if (handle) {
+          this.sessionHandles.delete(session.id);
+          await runtime.closeSession(handle).catch(() => {});
+        }
+        this.core.emitDirectEvent(botTimelineTopic, "session.compacted", {
+          agentId: agent.id,
+          sessionId: session.id,
+          generation: nextGen,
+          previousTokens: totalTokens,
+        });
+      }
 
       // Non-blocking memory pre-warm for next turn
       this.memory.queuePrefetch(opts.namespace, `${userText}\n${finalText}`);
@@ -1465,7 +1817,11 @@ export class OrchestrationEngine {
       const msg = this.scrubber.scrub(err instanceof Error ? err.message : String(err));
       if (!this.sessionHandles.has(session.id)) {
         this.revokeMcpTokensForAgent(agent.id);
-      } else if (handle?.runtimeKind === "acp_stdio" && !this.acpRuntime.isSessionAlive(session.id)) {
+      } else if (
+        handle &&
+        ((handle.runtimeKind === "acp_stdio" && !this.acpRuntime.isSessionAlive(session.id)) ||
+          (handle.runtimeKind === "cli_stream" && !this.cliRuntime?.isSessionAlive(session.id)))
+      ) {
         this.sessionHandles.delete(session.id);
         this.revokeMcpTokensForAgent(agent.id);
       }
@@ -1474,7 +1830,8 @@ export class OrchestrationEngine {
         const latest = this.db.getAgent(agent.id);
         if (!latest || (latest.status !== "paused" && latest.status !== "stopped")) {
           const keepPid =
-            handle?.runtimeKind === "acp_stdio" && this.acpRuntime.isSessionAlive(session.id)
+            (handle?.runtimeKind === "acp_stdio" && this.acpRuntime.isSessionAlive(session.id)) ||
+            (handle?.runtimeKind === "cli_stream" && this.cliRuntime?.isSessionAlive(session.id))
               ? handle.pid
               : null;
           this.db.updateAgentStatus(agent.id, "error", { pid: keepPid, lastSummary: msg.slice(0, 90) });
@@ -2000,6 +2357,20 @@ export class OrchestrationEngine {
     }
   }
 
+  private reloadLiveConfigFromDisk(): void {
+    if (existsSync(this.runtimeCfg.configPath)) {
+      const parsed = HubConfigSchema.parse(JSON.parse(readFileSync(this.runtimeCfg.configPath, "utf8")));
+      this.reloadConfig(parsed);
+      return;
+    }
+    const inspected = resolveHubConfigInspection({
+      rootDir: this.runtimeCfg.rootDir,
+      dbPath: this.runtimeCfg.dbPath,
+      port: this.runtimeCfg.config.hub.port,
+    });
+    this.reloadConfig(inspected.config);
+  }
+
   private handleSelfModPromote(cmd: Extract<RpcCommand, { type: "selfmod.promote" }>) {
     const existing = this.db.getSelfModProposal(cmd.proposalId);
     if (!existing) throw new Error(`Self-mod proposal not found: ${cmd.proposalId}`);
@@ -2008,7 +2379,7 @@ export class OrchestrationEngine {
     this.selfMod.promoteProposal(candidate);
 
     try {
-      return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      const committed = this.core.commitCommand(cmd.commandId, cmd.type, () => ({
         result: { proposal: candidate },
         applyProjections: () => {
           this.db.upsertSelfModProposal(candidate);
@@ -2020,6 +2391,10 @@ export class OrchestrationEngine {
         ],
         effects: [],
       }));
+      if (candidate.kind === "config_patch") {
+        this.reloadLiveConfigFromDisk();
+      }
+      return committed;
     } catch (err) {
       try {
         this.selfMod.rollbackProposal(candidate);
@@ -2036,7 +2411,7 @@ export class OrchestrationEngine {
     const candidate: SelfModProposalRecord = { ...existing };
     this.selfMod.rollbackProposal(candidate);
 
-    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+    const committed = this.core.commitCommand(cmd.commandId, cmd.type, () => ({
       result: { proposal: candidate },
       applyProjections: () => {
         this.db.upsertSelfModProposal(candidate);
@@ -2052,16 +2427,461 @@ export class OrchestrationEngine {
       ],
       effects: [],
     }));
+    if (candidate.kind === "config_patch") {
+      this.reloadLiveConfigFromDisk();
+    }
+    return committed;
+  }
+
+  // --- Phase 2: Operator Controls, Config Hot-Reload, L1 Memory & Checkpoints ---
+
+  private handlePermissionRespond(cmd: Extract<RpcCommand, { type: "permission.respond" }>) {
+    const pending = this.acpRuntime.listPendingPermissions?.().find((p) => p.permissionId === cmd.permissionId);
+    const resolved = this.acpRuntime.resolvePermission?.(cmd.permissionId, cmd.decision) ?? false;
+    if (!resolved) {
+      throw new Error(`permission_not_pending:${cmd.permissionId}`);
+    }
+
+    const resolvedEvent = {
+      permissionId: cmd.permissionId,
+      id: cmd.permissionId,
+      agentId: pending?.agentId ?? null,
+      sessionId: pending?.sessionId ?? null,
+      decision: cmd.decision,
+      status: cmd.decision === "deny" ? ("denied" as const) : ("allowed" as const),
+      resolvedAt: Date.now(),
+    };
+    const statusEvt = { topic: "global:status" as SubscriptionTopic, eventType: "status.updated", payload: null as unknown };
+
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result: {
+        permissionId: cmd.permissionId,
+        decision: cmd.decision,
+        resolved: true,
+        agentId: pending?.agentId ?? null,
+      },
+      applyProjections: () => {
+        if (pending?.agentId) {
+          const ag = this.db.getAgent(pending.agentId);
+          if (ag && ag.status === "requires_action") {
+            this.db.updateAgentStatus(ag.id, "working", {
+              lastSummary: `Permission ${cmd.decision}: ${pending.title.slice(0, 50)}`,
+            });
+          }
+        }
+        statusEvt.payload = this.getQuietStatusProjection();
+      },
+      events: [
+        { topic: "global:status", eventType: "permission.resolved", payload: resolvedEvent },
+        ...(pending?.agentId
+          ? [
+              {
+                topic: `bot:${pending.agentId}:timeline` as SubscriptionTopic,
+                eventType: "permission.resolved",
+                payload: resolvedEvent,
+              },
+            ]
+          : []),
+        statusEvt,
+      ],
+      effects: [],
+    }));
+  }
+
+  private handleBotResume(cmd: Extract<RpcCommand, { type: "bot.resume" }>) {
+    const agent = this.db.getAgent(cmd.agentId);
+    if (!agent) throw new Error(`Agent not found: ${cmd.agentId}`);
+    if (agent.status === "working") {
+      throw new Error("agent_already_working");
+    }
+
+    const hadSession = agent.activeSessionId ? this.db.getSession(agent.activeSessionId) : null;
+    const needsFreshSession = !hadSession || agent.status === "stopped";
+    let nextSessionId = agent.activeSessionId;
+
+    if (agent.activeSessionId) {
+      const staleHandle = this.sessionHandles.get(agent.activeSessionId);
+      const isDead =
+        needsFreshSession ||
+        (staleHandle?.runtimeKind === "acp_stdio" && !this.acpRuntime.isSessionAlive(agent.activeSessionId)) ||
+        (staleHandle?.runtimeKind === "cli_stream" && !this.cliRuntime?.isSessionAlive(agent.activeSessionId));
+      if (isDead) {
+        this.sessionHandles.delete(agent.activeSessionId);
+        this.revokeMcpTokensForAgent(agent.id);
+      }
+    }
+
+    const now = Date.now();
+    const freshPrompt = needsFreshSession ? this.buildAgentSystemPrompt(agent) : null;
+    if (needsFreshSession) {
+      nextSessionId = newId("ses");
+    }
+
+    const statusEvt = { topic: "global:status" as SubscriptionTopic, eventType: "status.updated", payload: null as unknown };
+
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result: { agentId: agent.id, status: "idle" as const, sessionId: nextSessionId },
+      applyProjections: () => {
+        if (needsFreshSession && nextSessionId && freshPrompt) {
+          this.db.createSession({
+            id: nextSessionId,
+            agentId: agent.id,
+            parentSessionId: agent.activeSessionId,
+            systemPrompt: freshPrompt.systemPrompt,
+            systemPromptHash: freshPrompt.hash,
+            generation: 1,
+            tokenIn: 0,
+            tokenOut: 0,
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          });
+          this.db.upsertAgent({
+            ...agent,
+            status: "idle",
+            pid: null,
+            activeSessionId: nextSessionId,
+            lastSummary: "Resumed by operator (fresh session)",
+            updatedAt: now,
+          });
+        } else {
+          this.db.updateAgentStatus(agent.id, "idle", {
+            pid: agent.status === "error" ? null : undefined,
+            lastSummary: "Resumed by operator",
+          });
+        }
+        statusEvt.payload = this.getQuietStatusProjection();
+      },
+      events: [
+        { topic: `bot:${agent.id}:timeline`, eventType: "agent.status", payload: { agentId: agent.id, status: "idle" } },
+        statusEvt,
+      ],
+      effects: [],
+    }));
+  }
+
+  private handleConfigUpdate(cmd: Extract<RpcCommand, { type: "config.update" }>) {
+    let patch: unknown;
+    try {
+      patch = JSON.parse(cmd.patchJson);
+    } catch {
+      throw new Error("invalid_config_patch_json");
+    }
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+      throw new Error("invalid_config_patch_json");
+    }
+
+    const nextCfg = mergeOpenByosConfigPatch(
+      this.runtimeCfg.config,
+      patch as Record<string, unknown>,
+      this.runtimeCfg.config,
+    );
+    const prevCfg = this.runtimeCfg.config;
+    const savedCfg = saveHubConfig(this.runtimeCfg.configPath, nextCfg);
+    this.reloadConfig(savedCfg);
+
+    const statusEvt = { topic: "global:status" as SubscriptionTopic, eventType: "status.updated", payload: null as unknown };
+    try {
+      return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+        result: { config: savedCfg },
+        applyProjections: () => {
+          this.db.addInboxNotice("info", "Hub configuration updated and hot-reloaded", {});
+          statusEvt.payload = this.getQuietStatusProjection();
+        },
+        events: [
+          { topic: "global:status", eventType: "config.updated", payload: { config: savedCfg } },
+          statusEvt,
+        ],
+        effects: [],
+      }));
+    } catch (err) {
+      this.reloadConfig(prevCfg);
+      throw err;
+    }
+  }
+
+  private handleRoutingSetOverride(cmd: Extract<RpcCommand, { type: "routing.set_override" }>) {
+    const project = this.db.getProject(cmd.projectId);
+    if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
+    if (cmd.target !== null) {
+      this.router.resolveTarget(cmd.target);
+    }
+    const nextOverrides = { ...project.routingOverrides };
+    if (cmd.target === null) {
+      delete nextOverrides[cmd.intent];
+    } else {
+      nextOverrides[cmd.intent] = cmd.target;
+    }
+    const updatedProject: ProjectRecord = { ...project, routingOverrides: nextOverrides };
+    const statusEvt = { topic: "global:status" as SubscriptionTopic, eventType: "status.updated", payload: null as unknown };
+
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result: { project: updatedProject },
+      applyProjections: () => {
+        this.db.db
+          .query("UPDATE projects SET routing_overrides_json = ? WHERE id = ?")
+          .run(JSON.stringify(nextOverrides), project.id);
+        statusEvt.payload = this.getQuietStatusProjection();
+      },
+      events: [
+        { topic: "global:status", eventType: "project.updated", payload: updatedProject },
+        statusEvt,
+      ],
+      effects: [],
+    }));
+  }
+
+  private handleMemoryL1Get(cmd: Extract<RpcCommand, { type: "memory.l1.get" }>) {
+    let project: ProjectRecord | null = null;
+    if (cmd.target === "project") {
+      if (!cmd.projectId) throw new Error("project_id_required_for_project_l1");
+      project = this.db.getProject(cmd.projectId);
+      if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
+    }
+    const snap = this.memory.getL1Target(cmd.target, project?.rootPath);
+    const result = { ...snap, projectId: project?.id ?? null };
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result,
+      applyProjections: () => {},
+      events: [],
+      effects: [],
+    }));
+  }
+
+  private handleMemoryL1Update(cmd: Extract<RpcCommand, { type: "memory.l1.update" }>) {
+    let project: ProjectRecord | null = null;
+    if (cmd.target === "project") {
+      if (!cmd.projectId) throw new Error("project_id_required_for_project_l1");
+      project = this.db.getProject(cmd.projectId);
+      if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
+    }
+    const snap = this.memory.updateL1Target(cmd.target, cmd.content, project?.rootPath);
+    const result = { ...snap, projectId: project?.id ?? null };
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result,
+      applyProjections: () => {},
+      events: [
+        {
+          topic: "global:status",
+          eventType: "memory.l1.updated",
+          payload: { target: cmd.target, projectId: project?.id ?? null, usedChars: snap.usedChars, maxChars: snap.maxChars },
+        },
+      ],
+      effects: [],
+    }));
+  }
+
+  private listProjectCheckpoints(projectId: string, agentId?: string): CheckpointRecord[] {
+    const rows = agentId
+      ? (this.db.db
+          .query(
+            `SELECT c.* FROM checkpoints c
+             JOIN agents a ON a.id = c.agent_id
+             WHERE a.project_id = ? AND c.agent_id = ?
+             ORDER BY c.created_at DESC LIMIT 100`,
+          )
+          .all(projectId, agentId) as Array<Record<string, unknown>>)
+      : (this.db.db
+          .query(
+            `SELECT c.* FROM checkpoints c
+             JOIN agents a ON a.id = c.agent_id
+             WHERE a.project_id = ?
+             ORDER BY c.created_at DESC LIMIT 100`,
+          )
+          .all(projectId) as Array<Record<string, unknown>>);
+
+    return rows.map((r) => ({
+      id: String(r.id),
+      scopeKey: String(r.scope_key),
+      agentId: String(r.agent_id),
+      cwd: String(r.cwd),
+      turnNum: Number(r.turn_num),
+      refName: String(r.ref_name),
+      commitSha: String(r.commit_sha),
+      createdAt: Number(r.created_at),
+    }));
+  }
+
+  private handleCheckpointList(cmd: Extract<RpcCommand, { type: "checkpoint.list" }>) {
+    const project = this.db.getProject(cmd.projectId);
+    if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
+    if (cmd.agentId) {
+      const agent = this.db.getAgent(cmd.agentId);
+      if (!agent) throw new Error(`Agent not found: ${cmd.agentId}`);
+      if (agent.projectId !== project.id) throw new Error("agent_project_mismatch");
+    }
+    const checkpoints = this.listProjectCheckpoints(project.id, cmd.agentId);
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result: { checkpoints },
+      applyProjections: () => {},
+      events: [],
+      effects: [],
+    }));
+  }
+
+  private handleCheckpointRollback(cmd: Extract<RpcCommand, { type: "checkpoint.rollback" }>) {
+    const project = this.db.getProject(cmd.projectId);
+    if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
+    const cp = this.db.getCheckpoint(cmd.checkpointId);
+    if (!cp) throw new Error(`checkpoint_not_found: ${cmd.checkpointId}`);
+    const agent = this.db.getAgent(cp.agentId);
+    if (!agent || agent.projectId !== project.id) {
+      throw new Error("checkpoint_project_mismatch");
+    }
+    const currentCwd = agent.worktreePath ?? project.repoPath;
+    if (cp.scopeKey !== makeCheckpointScopeKey(agent.id, currentCwd)) {
+      throw new Error("cross_worktree_restore_refused");
+    }
+
+    const statusEvt = { topic: "global:status" as SubscriptionTopic, eventType: "status.updated", payload: null as unknown };
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result: { checkpoint: cp, projectId: project.id, agentId: agent.id, queued: true },
+      applyProjections: () => {
+        this.db.addInboxNotice("info", `Rolling back ${agent.name} to checkpoint #${cp.turnNum}`, {
+          projectId: project.id,
+          agentId: agent.id,
+        });
+        statusEvt.payload = this.getQuietStatusProjection();
+      },
+      events: [
+        { topic: `project:${project.id}:board`, eventType: "board.updated", payload: this.getProjectBoardSnapshot(project.id) },
+        statusEvt,
+      ],
+      effects: [
+        {
+          effectType: "checkpoint.rollback.run",
+          payload: { projectId: project.id, agentId: agent.id, currentCwd, checkpointId: cp.id },
+        },
+      ],
+    }));
+  }
+
+  private async executeCheckpointRollback(
+    projectId: string,
+    agentId: string,
+    currentCwd: string,
+    checkpointId: string,
+  ): Promise<void> {
+    try {
+      await restoreCheckpoint(this.db, { agentId, currentCwd, checkpointId });
+      this.db.runAtomicWrite(() => {
+        const ag = this.db.getAgent(agentId);
+        if (ag) {
+          this.db.updateAgentStatus(ag.id, ag.status, {
+            lastSummary: `Restored checkpoint ${checkpointId}`,
+          });
+        }
+        this.db.addInboxNotice("info", `Checkpoint ${checkpointId} restored cleanly`, { projectId, agentId });
+      });
+    } catch (err) {
+      const msg = this.scrubber.scrub(err instanceof Error ? err.message : String(err));
+      this.db.runAtomicWrite(() => {
+        this.db.addInboxNotice("action", `Checkpoint rollback failed (${checkpointId}): ${msg.slice(0, 120)}`, {
+          projectId,
+          agentId,
+        });
+      });
+    }
+    this.core.emitDirectEvent(`project:${projectId}:board`, "board.updated", this.getProjectBoardSnapshot(projectId));
+    this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
+  }
+
+  private handleTaskMerge(cmd: Extract<RpcCommand, { type: "task.merge" }>) {
+    const project = this.db.getProject(cmd.projectId);
+    if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
+    const task = this.db.getTask(cmd.taskId);
+    if (!task) throw new Error(`Task not found: ${cmd.taskId}`);
+    if (task.projectId !== project.id) throw new Error("task_project_mismatch");
+    if (task.status !== "verified" && !cmd.overrideReason?.trim()) {
+      throw new Error(`task_not_verified:${task.status}`);
+    }
+    throw new Error("task_merge_phase3_pending");
+  }
+
+  private handleProjectArchive(cmd: Extract<RpcCommand, { type: "project.archive" }>) {
+    const project = this.db.getProject(cmd.projectId);
+    if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
+    const updated: ProjectRecord = { ...project, status: cmd.status };
+    const statusEvt = { topic: "global:status" as SubscriptionTopic, eventType: "status.updated", payload: null as unknown };
+
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result: { project: updated },
+      applyProjections: () => {
+        this.db.db.query("UPDATE projects SET status = ? WHERE id = ?").run(cmd.status, project.id);
+        this.db.addInboxNotice("info", `Project '${project.name}' status → ${cmd.status}`, { projectId: project.id });
+        statusEvt.payload = this.getQuietStatusProjection();
+      },
+      events: [
+        { topic: "global:status", eventType: "project.updated", payload: updated },
+        statusEvt,
+      ],
+      effects: [],
+    }));
+  }
+
+  private handleInboxDismiss(cmd: Extract<RpcCommand, { type: "inbox.dismiss" }>) {
+    const statusEvt = { topic: "global:status" as SubscriptionTopic, eventType: "status.updated", payload: null as unknown };
+    const resObj = { noticeId: cmd.noticeId, dismissed: false };
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result: resObj,
+      applyProjections: () => {
+        const res = this.db.db.query("UPDATE inbox_notices SET dismissed = 1 WHERE id = ? AND dismissed = 0").run(cmd.noticeId);
+        resObj.dismissed = res.changes > 0;
+        statusEvt.payload = this.getQuietStatusProjection();
+      },
+      events: [statusEvt],
+      effects: [],
+    }));
+  }
+
+  private buildConciseProjectSummary(projectId: string): string {
+    const project = this.db.getProject(projectId);
+    if (!project) return "";
+    const tasks = this.db.listTasks(project.id);
+    const agents = this.db.listAgents(project.id);
+    const openDebates = this.db.listDebates(project.id).filter((d) => d.status !== "resolved");
+
+    const counts: Record<string, number> = {};
+    for (const t of tasks) {
+      counts[t.status] = (counts[t.status] ?? 0) + 1;
+    }
+    const countsLine = Object.entries(counts)
+      .map(([status, count]) => `${status}=${count}`)
+      .join(", ");
+    const activeTaskLines = tasks
+      .filter((t) => t.status !== "merged")
+      .slice(0, 5)
+      .map((t) => `- [${t.status}] ${t.title} (${t.id})`);
+    const agentLines = agents.slice(0, 6).map((a) => `- ${a.name} (${a.scope}, ${a.status}, ${a.provider}/${a.model})`);
+
+    return this.scrubber.scrub(
+      [
+        `<active_project_context id="${project.id}" slug="${project.slug}" status="${project.status}">`,
+        `Name: ${project.name}`,
+        `Repo: ${project.repoPath}`,
+        `Tasks (${tasks.length}): ${countsLine || "none"}`,
+        activeTaskLines.length > 0 ? `Recent Tasks:\n${activeTaskLines.join("\n")}` : "",
+        agentLines.length > 0 ? `Agents:\n${agentLines.join("\n")}` : "",
+        `Open Debates: ${openDebates.length}`,
+        `</active_project_context>`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
   }
 
   // --- Read Projections for Scoped Subscriptions ---
 
   public getQuietStatusProjection(): QuietStatusProjection {
     const counts = this.db.getQuietStatusCounts();
+    const rawPending = this.acpRuntime.listPendingPermissions?.() ?? [];
+    const pendingPermissions = rawPending.map((p) => this.toPermissionRequestRecord(p));
     return {
       ...counts,
       inboxNotices: this.db.listInboxNotices(15),
       unknownAdmissions: this.db.listUnknownAdmissions(),
+      pendingPermissionsCount: pendingPermissions.length,
+      pendingPermissions,
     };
   }
 

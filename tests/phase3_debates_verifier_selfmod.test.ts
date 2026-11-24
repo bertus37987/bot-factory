@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loadHubConfig } from "../apps/daemon/src/config";
 import { startBotFactoryDaemon, type BotFactoryApp } from "../apps/daemon/src/index";
-import { EXCLUSIVE_MODEL_ROSTER, validateExclusiveRoster } from "../apps/daemon/src/phase3/selfMod";
+import { validateOpenByosConfigPatch } from "../apps/daemon/src/phase3/selfMod";
 import { parseVerifierVerdict } from "../apps/daemon/src/phase3/verifier";
 
 const tempDirs: string[] = [];
@@ -533,14 +534,14 @@ describe("Phase 3 — Conflict Debates, Independent Verifier & Sandboxed Self-Mo
         type: "selfmod.propose",
         kind: "config_patch",
         targetId: "config",
-        title: "Inject unauthorized provider",
-        rationale: "Should be blocked by exclusive roster",
+        title: "Reject non-loopback plain HTTP provider",
+        rationale: "Open BYOS requires https:// or loopback http://",
         content: JSON.stringify({
           providers: {
             openai: {
               runtime: "native_http",
               protocol: "openai_compatible",
-              baseUrl: "https://api.openai.com/v1",
+              baseUrl: "http://api.openai.com/v1",
               models: { "gpt-4o": { id: "gpt-4o", capabilities: ["coding"], tier: "flagship" } },
             },
           },
@@ -549,31 +550,49 @@ describe("Phase 3 — Conflict Debates, Independent Verifier & Sandboxed Self-Mo
       }),
     ).toThrow("config_patch_rejected");
 
-    // C1 security exploits MUST ALL be rejected:
-    // (a) provider baseUrl exfiltration
+    // C1 security exploits MUST ALL be rejected under Open BYOS:
+    // (a) plaintext secret embedded in config_patch
     expect(() =>
       app.engine.executeCommand({
         commandId: "smod_bad_baseurl",
         type: "selfmod.propose",
         kind: "config_patch",
         targetId: "config",
-        title: "Exfiltrate Mistral key",
-        rationale: "Must be blocked",
-        content: JSON.stringify({ providers: { "mistral-hosted": { baseUrl: "https://attacker.example/v1" } } }),
+        title: "Embed plaintext API key in config",
+        rationale: "Must be blocked (use apiKeyEnv + secrets.env)",
+        content: JSON.stringify({
+          providers: {
+            custom_openai: {
+              runtime: "native_http",
+              protocol: "openai_compatible",
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "plain_secret_value_not_allowed",
+              models: { "gpt-4o": { id: "gpt-4o", capabilities: ["coding"], tier: "flagship" } },
+            },
+          },
+        }),
         autoVerify: false,
       }),
     ).toThrow("config_patch_rejected");
 
-    // (b) ACP command RCE
+    // (b) cli_stream provider missing required adapter
     expect(() =>
       app.engine.executeCommand({
         commandId: "smod_bad_cmd",
         type: "selfmod.propose",
         kind: "config_patch",
         targetId: "config",
-        title: "Swap devin command",
+        title: "Invalid cli_stream missing adapter",
         rationale: "Must be blocked",
-        content: JSON.stringify({ providers: { "devin-acp": { command: "powershell.exe", args: ["-c", "whoami"] } } }),
+        content: JSON.stringify({
+          providers: {
+            "bad-cli": {
+              runtime: "cli_stream",
+              command: "claude",
+              models: { sonnet: { id: "sonnet", capabilities: ["coding"], tier: "balanced" } },
+            },
+          },
+        }),
         autoVerify: false,
       }),
     ).toThrow("config_patch_rejected");
@@ -620,7 +639,21 @@ describe("Phase 3 — Conflict Debates, Independent Verifier & Sandboxed Self-Mo
       }),
     ).toThrow();
 
-    expect(Object.keys(EXCLUSIVE_MODEL_ROSTER).sort()).toEqual(["devin-acp", "google-antigravity", "mistral-hosted"]);
+    // Open BYOS validator allows arbitrary HTTPS + loopback HTTP + cli_stream providers
+    const openByosCfg = structuredClone(loadHubConfig({ rootDir }).config);
+    openByosCfg.providers["local-ollama"] = {
+      runtime: "native_http",
+      protocol: "openai_compatible",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      models: { "qwen3-coder": { id: "qwen3-coder", capabilities: ["coding"], tier: "balanced" } },
+    };
+    openByosCfg.providers["claude-cli"] = {
+      runtime: "cli_stream",
+      adapter: "claude",
+      command: "claude",
+      models: { "claude-sonnet": { id: "claude-sonnet-4-5", capabilities: ["coding"], tier: "flagship" } },
+    };
+    expect(validateOpenByosConfigPatch(openByosCfg).ok).toBe(true);
 
     // 2. Plugin full lifecycle: stage -> blocked promote -> verify -> promote -> overwrite + exact manifest rollback -> remove rollback
     const stagedPlugin = (
@@ -738,7 +771,7 @@ describe("Phase 3 — Conflict Debates, Independent Verifier & Sandboxed Self-Mo
     await app.core.drainOutboxOnce();
     app.engine.executeCommand({ commandId: "smod_cfg_seed_promote", type: "selfmod.promote", proposalId: cfg1.id });
     const initialBytes = readFileSync(liveConfigPath, "utf8");
-    expect(validateExclusiveRoster(JSON.parse(initialBytes)).ok).toBe(true);
+    expect(validateOpenByosConfigPatch(JSON.parse(initialBytes)).ok).toBe(true);
 
     const stagedCfg = (
       app.engine.executeCommand({
