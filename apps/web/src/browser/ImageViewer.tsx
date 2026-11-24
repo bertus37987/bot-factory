@@ -51,8 +51,13 @@ export function ImageViewer({
 
   useEffect(() => {
     setLoadError(false);
-    setNaturalSize(null);
     setDraftRect(null);
+    const img = imgRef.current;
+    if (img?.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+      setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+    } else {
+      setNaturalSize(null);
+    }
   }, [artifactUrl]);
 
   useEffect(() => {
@@ -95,27 +100,80 @@ export function ImageViewer({
     };
   };
 
-  const baseWidth = naturalSize && naturalSize.w > 0 ? naturalSize.w : isSvg ? 720 : 640;
-  const imgStyle: React.CSSProperties =
-    zoom === "fit"
-      ? {
-          display: "block",
-          width: isSvg && (!naturalSize || naturalSize.w === 0) ? Math.min(720, Math.max(180, viewportSize.w - 48)) : "auto",
-          height: "auto",
-          maxWidth: Math.max(120, viewportSize.w - 48),
-          maxHeight: Math.max(120, viewportSize.h - 48),
-          borderRadius: "var(--radius-md)",
-          userSelect: "none",
+  const maxFitWidth = Math.max(120, viewportSize.w - 48);
+  const maxFitHeight = Math.max(120, viewportSize.h - 48);
+  const hasNatural = Boolean(naturalSize && naturalSize.w > 0 && naturalSize.h > 0);
+  const naturalAspect = hasNatural && naturalSize ? naturalSize.w / naturalSize.h : null;
+
+  const imgStyle: React.CSSProperties = (() => {
+    const baseStyle: React.CSSProperties = {
+      display: "block",
+      borderRadius: "var(--radius-md)",
+      userSelect: "none",
+    };
+
+    if (zoom === "fit") {
+      if (naturalSize && naturalAspect) {
+        if (isSvg) {
+          // SVGs without explicit width/height attrs collapse to 0x0 with width/height: auto inside inline-block.
+          const maxByHeight = maxFitHeight * naturalAspect;
+          const fitWidth = Math.max(1, Math.floor(Math.min(maxFitWidth, maxByHeight)));
+          const fitHeight = Math.min(maxFitHeight, Math.max(1, Math.round(fitWidth / naturalAspect)));
+          return {
+            ...baseStyle,
+            width: fitWidth,
+            height: fitHeight,
+            maxWidth: maxFitWidth,
+            maxHeight: maxFitHeight,
+          };
         }
-      : {
-          display: "block",
-          width: Math.max(80, Math.round(baseWidth * (zoom === "75%" ? 0.75 : 1))),
-          height: "auto",
-          maxWidth: "none",
-          maxHeight: "none",
-          borderRadius: "var(--radius-md)",
-          userSelect: "none",
+        const scale = Math.min(1, maxFitWidth / naturalSize.w, maxFitHeight / naturalSize.h);
+        return {
+          ...baseStyle,
+          width: Math.max(1, Math.round(naturalSize.w * scale)),
+          height: Math.max(1, Math.round(naturalSize.h * scale)),
+          maxWidth: maxFitWidth,
+          maxHeight: maxFitHeight,
         };
+      }
+
+      if (isSvg) {
+        const fallbackWidth = Math.min(720, maxFitWidth);
+        const fallbackHeight = Math.min(maxFitHeight, Math.max(120, Math.round(fallbackWidth * (9 / 16))));
+        return {
+          ...baseStyle,
+          width: fallbackWidth,
+          height: fallbackHeight,
+          maxWidth: maxFitWidth,
+          maxHeight: maxFitHeight,
+        };
+      }
+
+      return {
+        ...baseStyle,
+        width: "auto",
+        height: "auto",
+        maxWidth: maxFitWidth,
+        maxHeight: maxFitHeight,
+      };
+    }
+
+    const baseWidth = hasNatural && naturalSize ? naturalSize.w : isSvg ? 720 : 640;
+    const zoomScale = zoom === "75%" ? 0.75 : 1;
+    const zoomedWidth = Math.max(80, Math.round(baseWidth * zoomScale));
+    const zoomedHeight = naturalAspect
+      ? Math.max(1, Math.round(zoomedWidth / naturalAspect))
+      : isSvg
+        ? Math.max(1, Math.round(zoomedWidth * (9 / 16)))
+        : "auto";
+    return {
+      ...baseStyle,
+      width: zoomedWidth,
+      height: zoomedHeight,
+      maxWidth: "none",
+      maxHeight: "none",
+    };
+  })();
 
   return (
     <div

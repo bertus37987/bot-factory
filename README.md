@@ -1,124 +1,151 @@
 # Bot-Factory Harness
 
 > **Local-First Multi-Agent Orchestration Control Plane & Light-Mode Studio**
-> Bun · TypeScript · SQLite (WAL + FTS5) · React 19 + Vite · Three.js · Hybrid BYOS (Native HTTP + ACP stdio + MCP Bridge)
+> Bun · TypeScript · SQLite (WAL + FTS5 + Embeddings) · React 19 + Vite 6 · Three.js · Open BYOS (Native HTTP SSE + ACP stdio + Claude/Codex CLI Stream + 14-Tool MCP Bridge)
 
-**Bot-Factory** is a local-first operating hub for running, steering, auditing, and reviewing autonomous AI coding & creative bot teams on your own machine — without drowning the human operator in raw tool-call log spam.
-
----
-
-## 1. Concept & Core Idea
-
-Multi-agent coding tools usually fail in one of two ways: either they stay single-threaded (too slow for parallel work), or they unleash 5 agents at once and overwhelm the human with noisy terminal streams, colliding file edits, prompt-cache thrashing, and unverified self-edits.
-
-**Bot-Factory solves this through six foundational architectural ideas** (synthesized clean-room from [T3 Code](./docs/research/t3code.md), [Hermes Agent](./docs/research/hermes.md), [Supermemory](./docs/research/supermemory.md), and [Devin Control Plane UX](./docs/research/devin-ux.md)):
-
-1. **Two-Worlds UX (`Agent Chat` vs. `Bot-Teams`)**
-   - **World 1 — Agent Chat (Quiet Strategic Channel):** Calm 1-on-1 conversation with the **Meta-Orchestrator**. Consumes only a quiet projection (messages, inline preview cards, aggregated counts, escalations). *Never* receives raw background tool chunks.
-   - **World 2 — Bot-Teams (High-Density Group Chat & Control Plane):** Project-scoped team rooms + individual Low-Poly Orange Beaver bot views (`Team lead`, `Builder`, `3D Artist`, `Research`, `Verifier`) with alternating group-chat lanes, quietly collapsed tool traces, a 5-column Task-Board, Conflict Debates, Cross-Family Verifier, and Self-Mod Sandbox.
-   - **Strict Transport Separation:** Course corrections go through the **Steer → PM** composer; hard transport controls (**Pause** / **Hard Stop**) are physically separated in the top header and never disguised as chat messages.
-
-2. **Local Control Plane & Single-Writer Event-Sourcing (`state.db`)**
-   - *“The client shows the work; the environment performs the work.”*
-   - Only the local Bun daemon (`127.0.0.1`) mutates SQLite (`WAL` + `FTS5`). Every `RpcCommand` commits `{events, projections, command_receipt, outbox_effects}` in **one atomic transaction** with zero I/O inside the decider, guarded by a monotonic `runtime_epoch` and PID lockfile.
-   - Crash recovery never blindly replays interrupted turns: any `started` turn from a dead epoch becomes `unknown` and blocks subsequent admissions until explicitly resolved.
-
-3. **Hybrid BYOS Runtime (Native HTTP + External ACP CLIs + Local MCP Bridge)**
-   - Run direct HTTP models (`Mistral Large 4`, `GLM 5.3`, `GLM 5.3 Flash`, `Gemini 4 Hydrogen/Neon`) alongside local **ACP JSON-RPC stdio** agent CLIs (`devin acp`, `opencode acp`) behind one normalized event stream.
-   - External ACP bots receive an injected local **MCP Bridge** (`bf_task_*`, `bf_handoff_write`, `bf_debate_post`, `bf_memory_search`, `bf_fix_tasks_*`) so every agent — internal or external — speaks the same structured coordination protocol.
-
-4. **Workspace-Scoped Git Worktrees & Hidden Checkpoints**
-   - Every parallel peer bot operates in its own isolated Git worktree (`worktrees/<short-id>/` on a `bf/*` branch).
-   - Per-turn snapshots are stored as hidden Git refs (`refs/bot-factory/checkpoints/<sha1(scope)>/<turn>`) keyed by `root:{agentId}:{normalizedCwd}` so restores can never corrupt another worktree.
-
-5. **3-Tier Frozen System Prompt + Layered Memory (`L1` / `L2` / `L3`)**
-   - System prompts are assembled once per session (`stable → cwd-free context → volatile`), hashed, and frozen to maximize provider prefix-cache hits across parallel worktrees.
-   - Human-readable **L1 Markdown** (`USER.md`, `GLOBAL_MEMORY.md`, `MEMORY.md` with hard char caps) sits above a **Supermemory-style L2 Temporal Fact Graph** (`updates` / `extends` / `derives`, soft-forget decay, `live_memory_facts` SQL view) and **L3 FTS5 Documents/Chunks**.
-
-6. **Native 2-Row Tabbed In-App Browser & Annotation-to-Fix Loop**
-   - Split-view right-hand browser with 6 full-bleed viewers: **Rendered Markdown Plans**, **Images/SVGs** (normalized `0..1` pins & drag-rectangles), **Three.js Light Museum 3D Studio** (`.glb`/`.gltf` with auto-framing, raycast pins, saved camera poses & PNG snapshots), **Live Code**, **Live Git Diff**, and **Loopback-Only Sandboxed Web**.
-   - Dropping an annotation on a Doc, Image, or 3D model automatically spawns a linked `FixTask` (routed to coding or vision-fix models) with a retry cap before human escalation.
-
-7. **Phase-3 Governance (Conflict Debates, Fresh Cross-Family Verifier, Sandboxed Self-Mod)**
-   - **Conflict Debates:** Strictly capped at 3 rounds before automatic escalation to the Project Manager.
-   - **Independent Verifier:** Runs in a fresh, ephemeral session with **zero author history**, **zero L1/project memory**, and a **different model provider family** (`excludeProvider`) using fail-closed verdict parsing (`PASS` / `FAIL` / `NEEDS_HUMAN`).
-   - **Self-Mod Sandbox:** Plugins and config patches are staged under `system/staging/`, SHA-256 integrity-checked (TOCTOU-safe single read), secret-scanned, verifier-gated, backed up before atomic promotion, and support one-click rollback.
+**Bot-Factory** is a local-first operating hub for delegating, steering, verifying, and merging work across autonomous AI coding & creative engineering teams on your own machine — without drowning the human operator in raw background tool-call spam.
 
 ---
 
-## 2. Repository Structure
+## 1. Separated Source Repo vs. Runtime Data Plane
+
+Bot-Factory strictly separates version-controlled source code from live mutable runtime data:
+
+- **Source Repository** (for example `C:\Users\willy\source\repos\bot-factory`): holds only source code (`packages/`, `apps/`), automated tests (`tests/`), documentation, `config.example.json`, `secrets.env.example`, `biome.json`, and CI workflows. Live databases, tokens, secrets, and managed project repos must never live inside the Git repo.
+- **Runtime Data Root (`BOT_FACTORY_ROOT`, default `~/bot-factory`)**: holds mutable local state:
+  - `system/state.db` (+ `-wal`, `-shm`, `.writer.lock`) — single-writer SQLite state plane
+  - `system/config.json` — Open BYOS provider, routing, memory, and guardrail config
+  - `system/secrets.env` — local API keys (never echoed back by the API or UI)
+  - `system/.daemon-token` — per-hub localhost auth secret
+  - `system/staging/` & `system/backups/` — Self-Mod sandbox staging & rollback snapshots
+  - `memory/USER.md` & `memory/GLOBAL_MEMORY.md` — global L1 curated Markdown memory
+  - `logs/`, `plugins/`, and `projects/<slug>/` (`plans/`, `artifacts/`, `handoffs/`, `repo/`, `worktrees/`, `MEMORY.md`)
+- **Isolated Local Dev & Read-Only Diagnostics:**
+  - `bun run dev:daemon:isolated` runs the daemon against gitignored `.dev-runtime/` (`BOT_FACTORY_ROOT=.dev-runtime`) and prints an authenticated `http://127.0.0.1:<port>/?token=...` URL.
+  - `bun run doctor` performs a zero-mutation preflight inspection of `BOT_FACTORY_ROOT`, config resolution, secret presence (keys present vs. missing only), `.writer.lock` health, temp-copy WAL SQLite schema/epoch/FTS diagnostics, and local CLI availability (`bun`, `git`, `devin`, `opencode`, `claude`, `codex`).
+
+---
+
+## 2. Five-Pillar Architecture
+
+### Pillar 1 — Main Managing Agent (`Meta-Orchestrator`) & Active 3-Layer Memory
+- **1 Calm Strategic Channel (`chat:meta`):** The Main Managing Agent converses 1-on-1 with the operator, manages portfolio context across projects, and invokes **8 executive tools** (`bf_projects_list`, `bf_project_create`, `bf_team_delegate`, `bf_team_status`, `bf_memory_search`, `bf_memory_remember`, `bf_memory_update_l1`, `bf_memory_forget`). Raw background tool calls, thoughts, and terminal logs are never streamed into `chat:meta`.
+- **3-Tier Frozen System Prompt:** Prompt assembly follows `stable -> context (cwd-free first) -> volatile snapshot`, SHA-256 hashed per session to maximize provider prefix-cache hits. Ephemeral per-turn recall is attached to outgoing user turns rather than mutating the system prompt mid-session.
+- **Active 3-Layer Memory (`LocalSuperHermesMemory`):**
+  - **L1 (Curated Markdown):** `USER.md` (2,000 chars), `GLOBAL_MEMORY.md` (3,000 chars), and project `MEMORY.md` (3,000 chars) with strict char caps and live percentage gauges.
+  - **L2 (Temporal Fact Graph):** `memory_facts` and `memory_edges` (`updates`, `extends`, `derives`), `live_memory_facts` SQL view, decay sweeper, and debounced LLM batch dreaming (`createLlmDreamExtractor` routed via `memory_dreaming`, with deterministic heuristic fallback offline).
+  - **L3 (Hybrid Retrieval + Auto-Compaction):** Combines dense cosine vector similarity (`memory_embeddings`), SQLite FTS5 (`messages_fts`, `chunks_fts`, `facts_fts` with auto-detach self-healing and `LIKE` fallback), and multi-hop graph traversal, plus automatic in-place session compaction (`compactSessionInPlace`) when tokens reach `autoCompactThresholdTokens`.
+
+### Pillar 2 — Engineering Team Leads (`PM`), Parallel Bots & Depth-1 Subagents
+- **Engineering Team Leads (`scope: "project"`):** Provisioned per project with **11 orchestration & read-only repo tools** (`bf_repo_tree`, `bf_repo_read`, `bf_repo_diff`, `bf_task_create_batch`, `bf_task_update`, `bf_bot_spawn`, `bf_task_dispatch`, `bf_bot_message`, `bf_task_verify_trigger`, `bf_debate_resolve`, `bf_report_to_manager`).
+- **Parallel Peer Bots (`scope: "peer"`):** Each coding bot operates in its own isolated Git worktree (`worktrees/wt-<shortId>/` on branch `bf/<shortId>`) with workspace-scoped hidden Git checkpoints (`refs/bot-factory/checkpoints/<sha1(scopeKey)>/<turnNum>`) and confirmed `checkpoint.rollback`.
+- **Depth-1 Bot-Deployed Subagents (`SubagentManager`):** Peer bots can deploy helper subagents (`scope: "sidekick"`, capped at `maxSubagentsPerBot`; depth > 1 rejected with `subagent_max_depth_exceeded`) in either `readonly` mode (shared parent worktree at `spec` autonomy) or `code` mode (isolated child worktree + `extractAndApplySubagentPatch`), coordinated through the **14-tool MCP Bridge** (`8 core bf_*` + `6 bf_subagent_*` tools).
+
+### Pillar 3 — Continuous Autonomous DAG Loop, Real `IndependentVerifier` & Human-Approved `task.merge`
+- **Autonomous DAG Loop (`AutonomyLoop`):** Tracks delegated goals, validates acyclic `dependsOn` task graphs, dispatches unblocked ready tasks up to `maxConcurrentBotsPerProject`, automatically triggers verification on completion, retries failed tasks with verifier findings up to `maxTaskAutoRetries`, and wakes the Team Lead to report milestones/completion back to the Main Agent via `bf_report_to_manager` (`meta.team_report` delivery cards).
+- **Real `IndependentVerifier`:** Always executes in a brand-new ephemeral session with zero author history, zero project memory (`verifier:ephemeral`), and cross-family model routing (`excludeProvider`). Runs real `project.verifyChecks` shell commands (process-tree timeout kill + secret scrubbing), inspects real `git diff` + branch commits (empty-diff fail-closed gate), and parses `VERDICT: PASS | FAIL | NEEDS_HUMAN` fail-closed.
+- **Debates, Self-Mod Sandbox & `task.merge`:** Conflict Debates cap at `maxDebateRounds` (default `3`) before PM escalation; Self-Mod proposals pass `system/staging/` -> TOCTOU-safe single-read SHA-256 -> secret scan -> verifier gate -> backup -> atomic promote -> rollback; human operators approve `task.merge` (`squash` or `merge_commit` via `mergeBotWorktree` with `preMergeRef`, dirty-base refusal, clean conflict abort, and automatic worktree/branch cleanup).
+
+### Pillar 4 — Open BYOS Runtimes, 4-Tier Autonomy & Localhost Security
+- **Open BYOS Runtimes:**
+  - `native_http`: SSE streaming + multi-step tool loop supporting `openai_compatible` (Mistral, OpenAI, Ollama, custom OpenAI-compatible servers), `google_gemini`, and `anthropic` with `reasoningEffort` mapping and deterministic offline fallback (`BOT_FACTORY_OFFLINE_MOCK=1` or missing API key).
+  - `acp_stdio`: JSON-RPC 2.0 stdio CLIs (`devin acp`, `opencode acp`) with per-session scoped MCP Bridge tokens and Windows `taskkill /T /F` process-tree cleanup.
+  - `cli_stream`: streaming subprocess adapters for `claude` and `codex` CLIs using minimal sanitized env (`buildMinimalCliEnv`, never forwarding `BOT_FACTORY_TOKEN`).
+- **Progressive 4-Tier Autonomy & 120s Permissions:** Every turn respects `spec | low | medium | high` autonomy. Hard-deny rules block protected files (`secrets.env`, `.daemon-token`, `state.db`, `~/bot-factory/system`) and destructive commands; escalated actions pause up to `permissionRequestTimeoutSeconds` (`120s`) for human `Allow Once`, `Allow Session`, or `Deny` via `permission.respond`.
+- **Localhost Auth & Transport:** `DaemonServer` (`127.0.0.1`) enforces Host/Origin allowlists and authenticates browser sessions via `/?token=...` -> `HttpOnly; SameSite=Strict` HMAC-signed `bf_session` cookie (or `POST /api/auth/session` from `AuthUnlockGate`), and CLI/MCP callers via `x-bf-token` or `Authorization: Bearer`.
+
+### Pillar 5 — English Light-Mode Studio (`apps/web`)
+- **Monochrome Ink Light Mode:** Strict `#FFFFFF` / `#FAFAFA` / `#F5F5F5` surfaces, `#171717` ink, `#D95D22` Burnt Orange accents, custom Low-Poly Orange Beaver avatars, Smoke & Pearl 2D Canvas Thinking Orbs, self-hosted `@fontsource/inter` and `@fontsource/jetbrains-mono` (zero external CDNs).
+- **Dual-Layer Shell & Navigation:** `44px` icon rail + collapsible `248px` drawer (`<1000px` responsive auto-collapse), `Ctrl+K` Command Palette searching Bots, Subagents, Projects, Artifacts, and Repo Files, hydration skeleton, WS 15s heartbeat + reconnect banner, and unified toast stack.
+- **Two Worlds + Modular 2-Row In-App Browser + Wave 4 Studios:**
+  - **Main Agent (`ChatTab`):** Devin/Codex airy stream with `MarkdownRenderer`, live streaming thoughts/replies, `Memory recalled` indicator, interleaved Delegation / Artifact / Verified Delivery cards (`Review Diff` + one-click `Merge to main`), and Double-Deck `PrecisionComposer` (auto-resetting Diff Tray, `/` slash commands, 4-tier `Autonomy`, live `Model` picker, 4-stop `Effort` slider, Context ring).
+  - **Bots Page (`BotsTab` + `BotChatStream`):** Grok-Bot multi-side Group Chat (Human & Team Lead right-aligned, specialist bots & verifier left-aligned, `@mention` chips, reply-quote bars, collapsible tool & subagent traces), explicit bot target chips + Pause/Resume/Stop controls, 5-column DAG Kanban Board, Debates, Checkpoints & Merge, and Self-Mod panels.
+  - **Modular 2-Row 6-Viewer Browser (`apps/web/src/browser/*`):** `BrowserChrome` + `DocViewer`, percentage-coordinate `ImageViewer` (with zoom/pan), lazy-loaded Three.js `Model3DViewer` (demand-driven rendering, camera presets, surface pins, PNG snapshots), `CodeViewer`, `DiffViewer`, loopback-only `WebViewer` (self-embed guard + strict iframe sandbox), and `AnnotationOverlay` (`requestFixNow` + snapshot thumbnails).
+  - **Escalation Inbox & Studios (`apps/web/src/studio/*`):** `EscalationInbox` (Allow/Deny with live countdown, `session.resolve_unknown` crash recovery, `inboxNotices`), `ProjectModal` (`externalRepoPath`, `verifyChecks`), `BotSpawnModal`, `CheckpointsMergePanel`, `MemoryL1Studio` (L1 editor + L2 fact explorer), and `SettingsView` (BYOS providers, write-only API key management, `Test Connection`, project routing overrides, guardrails).
+
+---
+
+## 3. Repository Structure
 
 ```text
 bot-factory/
-├── AGENTS.md                   # AI-Agent engineering guide, invariants, commands & gotchas
-├── HANDOFF.md                  # Brutally honest Product Goal vs. Current UI gap matrix & Wave 3 roadmap
-├── DESIGN.md                   # Monochrome Ink Light-Mode design system + Smoke & Pearl Thinking Orbs
-├── config.example.json         # Reference HubConfig (providers, routing intents, memory, guardrails)
-├── secrets.env.example         # Placeholder env vars for live remote model API keys
-├── docs/research/              # Phase-0 clean-room architecture specs (T3, Hermes, Supermemory, Devin UX)
+├── .github/workflows/ci.yml        # GitHub Actions CI (typecheck, Biome lint, web build, tests)
+├── AGENTS.md                       # AI-Agent engineering guide, invariants, RPC/HTTP map & gotchas
+├── HANDOFF.md                      # Phase 1-5 implementation scorecard, verification & next-horizon backlog
+├── DESIGN.md                       # Monochrome Ink Light-Mode design system & Smoke/Pearl Thinking Orbs
+├── biome.json                      # Biome 2.6.8 lint configuration across packages/, apps/, and tests/
+├── config.example.json             # Reference HubConfig (BYOS providers, routing intents, memory, guardrails)
+├── secrets.env.example             # Template for ~/bot-factory/system/secrets.env
+├── docs/                           # Architecture spec + clean-room research notes
 ├── packages/
-│   └── shared/src/index.ts     # Shared Zod schemas, RpcCommand, WsServerMessage, entity & config types
+│   └── shared/src/index.ts         # Shared Zod schemas, 30 RpcCommands, WsServerMessage & domain types
 ├── apps/
-│   ├── daemon/src/             # Local control plane (Bun.serve HTTP/WS, SQLite, Outbox, Worktrees, Memory, ACP, MCP, Phase 3)
-│   └── web/src/                # React 19 + Vite UI (Dual-Rail Shell, Group Chat, Precision Composer, In-App Browser)
-├── tests/                      # 25 automated integration & security tests (242 assertions)
-└── variants/                   # Archived Gen-1 (20) & Gen-2 (4) Light-Mode HTML design prototypes
+│   ├── daemon/src/
+│   │   ├── index.ts                # Daemon bootstrap, LLM dreamer, embedder, shutdown lifecycle
+│   │   ├── config.ts               # HubConfig loader, secrets.env parser, SecretScrubber, .daemon-token
+│   │   ├── cli/                    # devIsolated.ts (.dev-runtime) & doctor.ts (read-only preflight)
+│   │   ├── core/commandCore.ts     # 1-TX Command -> Event -> Outbox worker (200ms poll, 3 retries)
+│   │   ├── db/database.ts          # Single-writer SQLite (22 tables, 1 view, 3 FTS5 tables, WAL)
+│   │   ├── git/worktrees.ts        # Worktrees, subagent patches, hidden checkpoints, squash/merge_commit
+│   │   ├── mcp/mcpBridge.ts        # Standalone stdio JSON-RPC 2.0 MCP server (14 bf_* tools)
+│   │   ├── memory/memoryEngine.ts  # L1 Markdown, 3-tier frozen prompts, L2 graph/dreaming, L3 hybrid search
+│   │   ├── orchestration/          # engine.ts, autonomyLoop.ts, subagentManager.ts, agentTools.ts
+│   │   ├── phase3/                 # verifier.ts (IndependentVerifier) & selfMod.ts (Sandbox staging)
+│   │   ├── rpc/server.ts           # 127.0.0.1 HTTP/WS server, session cookie/token auth, safe file/diff APIs
+│   │   └── runtimes/               # nativeHttpRuntime, acpSubprocessRuntime, cliStreamRuntime, router
+│   └── web/src/
+│       ├── App.tsx                 # Dual-layer Studio shell, auth gate, Ctrl+K palette, WS orchestration
+│       ├── main.tsx                # Self-hosted Fontsource Inter & JetBrains Mono entry
+│       ├── client/useBotFactory.ts # Ref-counted WS pub/sub, heartbeat, streaming buffers, HTTP helpers
+│       ├── chat/ChatTab.tsx        # Main Agent stream, delivery cards, composer integration
+│       ├── bots/                   # BotsTab.tsx & BotChatStream.tsx (Grok-Bot multi-side chat + Kanban)
+│       ├── browser/                # Modular 2-row 6-viewer In-App Browser (lazy Three.js Model3DViewer)
+│       ├── studio/                 # EscalationInbox, ProjectModal, BotSpawnModal, CheckpointsMerge, MemoryL1, Settings
+│       ├── phase3/Phase3Panels.tsx # Conflict Debates & Self-Mod Sandbox panels
+│       ├── components/             # MarkdownRenderer, PrecisionComposer, ReasoningEffortSlider, Avatars, Orbs, Icons
+│       └── styles/                 # tokens.css & app.css (Phase 3.3 Light Mode)
+└── tests/                          # Bun integration, security, BYOS, autonomy & Playwright UI E2E tests
 ```
 
 ---
 
-## 3. Current Implementation Status
-
-| Pillar | Daemon Backend | Current Web UI (E2E) | Summary |
-|---|---:|---:|---|
-| **Annotatable Previews & In-App Browser** | **95%** | **85%** | All 6 viewers live (Doc, Image/SVG, 3D GLB, Code, Diff, Web) + end-to-end pin/rect/3D annotations |
-| **Phase-3 Governance** | **90%** | **75%** | Debates, Fresh Cross-Family Verifier & Self-Mod Stage→Verify→Promote→Rollback wired end-to-end |
-| **Two-Worlds UI & Chat Isolation** | **90%** | **70%** | Dual-rail shell, Low-Poly Beaver avatars, Burnt-Orange bubbles & quiet traces live; `inboxNotices` not yet rendered |
-| **Project & Task Orchestration** | **75%** | **45%** | Worktree provisioning & task dispatch work; UI still lacks custom project/repo modal & rich task spec/assignee editor |
-| **Bot Fleet, BYOS & Model Routing** | **80%** | **25%** | Native HTTP + ACP + MCP work in daemon; UI lacks `bot.resume`, provider/model picker & daemon-side `Aufwand`/`Autonomie` wiring |
-| **Checkpoints & Scoped Rollback** | **65%** | **10%** | Per-turn hidden Git refs + `restoreCheckpoint()` exist in daemon; rollback RPC & UI timeline missing |
-| **Escalations & Crash Recovery** | **75%** | **5%** | `session.resolve_unknown` & ACP permission escalation exist in daemon; UI needs inbox panel, recovery & live human approve/deny |
-| **Memory, Fact-Graph & Compaction** | **65%** | **0%** | L1/L2/L3 SQLite engine exists; LLM dreaming, compaction trigger & Memory UI studio not yet wired |
-| **Onboarding, Settings & Secrets** | **50%** | **0%** | Config & `secrets.env` work on disk; no Settings/API-key UI yet |
-
-See **[HANDOFF.md](./HANDOFF.md)** for the complete file-and-line gap analysis and prioritized **Wave 3** engineering roadmap.
-
----
-
-## 4. Quick Start (Local Hub)
+## 4. Quick Start & Commands
 
 ### Prerequisites
 - [Bun](https://bun.sh/) `v1.4+`
 - `git` `2.40+`
-- Optional local ACP CLIs: `devin acp`, `opencode acp`
+- Optional local agent CLIs: `devin`, `opencode`, `claude`, `codex`
+- Optional for local headless browser smoke tests: Python `playwright` with Chromium installed (skipped automatically in CI via `BOT_FACTORY_SKIP_PLAYWRIGHT=1`)
 
-### Install, Test & Build
+### Install, Check & Build
 ```bash
 bun install
-bun run typecheck
-bun test tests
-bun run build:web
+bun run build:web   # Build Studio UI into apps/web/dist (required before Playwright UI E2E on a clean checkout)
+bun run check       # Runs: typecheck && lint (Biome) && test (bun test tests) && build:web
+bun run doctor      # Read-only preflight check of BOT_FACTORY_ROOT, secrets, lock, DB & CLIs
 ```
 
 ### Configure Live Model Keys (Optional)
-Without API keys, the daemon runs deterministically in **local simulation mode** (`local-sim`) so you can test the entire UI, worktrees, previews, debates, verifier, and self-mod offline.
+Without API keys (or with `BOT_FACTORY_OFFLINE_MOCK=1`), the daemon runs deterministically in offline simulation mode so you can exercise the full Studio UI, worktrees, 6-viewer browser, debates, verifier, and self-mod locally.
 
-For live remote model calls, copy `secrets.env.example` to `~/bot-factory/system/secrets.env` and set your keys (`MISTRAL_API_KEY`, `GEMINI_API_KEY`).
+For live models, copy `secrets.env.example` to `~/bot-factory/system/secrets.env` (or configure keys write-only inside **Settings → API Keys** in the Studio UI).
 
-### Run
+### Run Locally
 ```bash
-# Production single-port mode (Daemon serves built Web UI at http://127.0.0.1:4310)
+# 1. Isolated daemon against ./.dev-runtime (recommended for development; prints tokenized URL)
+bun run build:web
+bun run dev:daemon:isolated
+
+# 2. Optional Vite HMR frontend alongside a running daemon (:4310 -> :5173 auto-proxied with token)
+bun run dev:web
+
+# 3. Production single-port hub using default ~/bot-factory root (http://127.0.0.1:4310)
 bun run build:web
 bun run start
-
-# Development mode (Daemon watch on :4310 + Vite HMR on :5173)
-bun run dev:daemon
-bun run dev:web
 ```
 
 ---
 
-## 5. For AI Agents Taking Over This Repo
+## 5. For AI Agents Working in This Repository
 
-**Start by reading [`AGENTS.md`](./AGENTS.md) and [`HANDOFF.md`](./HANDOFF.md).**
-They contain every non-negotiable invariant, exact entry points, verification commands, protocol contracts, and known footguns so you can immediately implement Wave 3 without breaking security boundaries or rediscovering architecture decisions.
+Start by reading **[`AGENTS.md`](./AGENTS.md)**, **[`HANDOFF.md`](./HANDOFF.md)**, and **[`DESIGN.md`](./DESIGN.md)**. They document every non-negotiable security and concurrency invariant, protocol contract, and verified workflow.

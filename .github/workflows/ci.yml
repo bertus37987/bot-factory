@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, Lint, Build & Tests
+    runs-on: ubuntu-latest
+    env:
+      BOT_FACTORY_SKIP_PLAYWRIGHT: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck monorepo
+        run: bun run typecheck
+
+      - name: Lint with Biome
+        run: bun run lint
+
+      - name: Build Studio Web UI
+        run: bun run build:web
+
+      - name: Run integration and security tests
+        run: bun test tests

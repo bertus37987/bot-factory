@@ -79,12 +79,15 @@ export function MemoryL1Studio({
 
   useEffect(() => {
     if (!open) return;
-    setErrorMsg(null);
-    setSavedBanner(null);
     void onRefreshMemory(selectedProjectId || undefined, searchQuery.trim() || undefined).catch((err) => {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     });
   }, [open, selectedProjectId, onRefreshMemory]);
+
+  useEffect(() => {
+    setSavedBanner(null);
+    setErrorMsg(null);
+  }, [open, activeTab, selectedProjectId]);
 
   useEffect(() => {
     if (!open) return;
@@ -110,10 +113,12 @@ export function MemoryL1Studio({
     return l1Memory[activeTab] ?? Object.values(l1Memory).find((e) => e.target === activeTab) ?? null;
   }, [l1Memory, activeTab, selectedProjectId]);
 
+  const entryContent = activeEntry?.content ?? "";
+
   useEffect(() => {
-    setDraftContent(activeEntry?.content ?? "");
-    setSavedBanner(null);
-  }, [activeTab, selectedProjectId, activeEntry?.content]);
+    if (!open) return;
+    setDraftContent(entryContent);
+  }, [open, activeTab, selectedProjectId, entryContent]);
 
   const filteredFacts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();

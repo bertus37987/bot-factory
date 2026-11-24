@@ -23,25 +23,69 @@ function openAuthedWs(url: string, token: string): WebSocket {
   return new WebSocket(url, { headers: { "x-bf-token": token } } as unknown as string[]);
 }
 
+let wsPingSeq = 1;
+
+function waitForWsEvent(
+  ws: WebSocket,
+  predicate: (msg: Record<string, unknown>) => boolean,
+  timeoutMs = 8000,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.removeEventListener("message", handler);
+      reject(new Error("ws_wait_timeout"));
+    }, timeoutMs);
+    const handler = (ev: MessageEvent) => {
+      const parsed = JSON.parse(String(ev.data)) as Record<string, unknown>;
+      if (predicate(parsed)) {
+        clearTimeout(timer);
+        ws.removeEventListener("message", handler);
+        resolve(parsed);
+      }
+    };
+    ws.addEventListener("message", handler);
+  });
+}
+
+async function syncWs(ws: WebSocket): Promise<void> {
+  const ts = Date.now() * 1000 + (wsPingSeq++ % 1000);
+  const pong = waitForWsEvent(ws, (m) => m.kind === "pong" && m.ts === ts);
+  ws.send(JSON.stringify({ kind: "ping", ts }));
+  await pong;
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 8000, label = "condition"): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`waitUntil_timeout:${label}`);
+}
+
 beforeEach(() => {
   prevOfflineMock = process.env.BOT_FACTORY_OFFLINE_MOCK;
 });
 
 afterEach(() => {
-  while (runningApps.length > 0) {
-    runningApps.pop()!.stop();
-  }
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop()!;
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // Windows handle release delay
+  try {
+    while (runningApps.length > 0) {
+      runningApps.pop()?.stop();
     }
+    while (tempDirs.length > 0) {
+      const dir = tempDirs.pop();
+      if (!dir) continue;
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Windows handle release delay
+      }
+    }
+  } finally {
+    if (prevOfflineMock === undefined) delete process.env.BOT_FACTORY_OFFLINE_MOCK;
+    else process.env.BOT_FACTORY_OFFLINE_MOCK = prevOfflineMock;
+    prevOfflineMock = undefined;
   }
-  if (prevOfflineMock === undefined) delete process.env.BOT_FACTORY_OFFLINE_MOCK;
-  else process.env.BOT_FACTORY_OFFLINE_MOCK = prevOfflineMock;
-  prevOfflineMock = undefined;
 });
 
 describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
@@ -158,6 +202,7 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
     botClient.onmessage = (ev) => botReceived.push(JSON.parse(String(ev.data)));
 
     chatClient.send(JSON.stringify({ kind: "subscribe", topic: "chat:meta" }));
+    await syncWs(chatClient);
 
     const projRes = app.engine.executeCommand({
       commandId: "cmd_proj_ws",
@@ -185,9 +230,24 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
 
     expect(annRes.fixTask.id).toBeTruthy();
     botClient.send(JSON.stringify({ kind: "subscribe", topic: `bot:${annRes.fixTask.assignedAgentId}:timeline` }));
+    await syncWs(botClient);
 
     await app.core.drainOutboxOnce();
-    await new Promise((r) => setTimeout(r, 150));
+    await waitUntil(
+      () => {
+        const outboxRows = app.db.db.query("SELECT status FROM outbox_effects").all() as Array<{ status: string }>;
+        const task = app.db.getTask(annRes.fixTask.id);
+        return (
+          outboxRows.length > 0 &&
+          outboxRows.every((r) => r.status === "done") &&
+          task?.status === "in_review"
+        );
+      },
+      8000,
+      "fixTask_in_review",
+    );
+    await syncWs(chatClient);
+    await syncWs(botClient);
 
     // Verify Fix-Task moved to in_review, Handoff file created, Annotation moved to resolved_pending_review
     const outbox = app.db.db.query("SELECT effect_type, status, last_error FROM outbox_effects").all();
@@ -215,6 +275,8 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
     }) as { pmAgentId: string };
     expect(steerRes.pmAgentId).toBeTruthy();
     await app.core.drainOutboxOnce();
+    await syncWs(chatClient);
+    await syncWs(botClient);
 
     chatClient.close();
     botClient.close();
@@ -464,13 +526,16 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
     expect(ipv6Ok.status).toBe(200);
 
     // 6. WS close cleans up topic subscriber count
-    const ws = openAuthedWs(app.url.replace("http://", "ws://") + "/ws", token);
+    const ws = openAuthedWs(`${app.url.replace("http://", "ws://")}/ws`, token);
     await new Promise<void>((res) => (ws.onopen = () => res()));
     ws.send(JSON.stringify({ kind: "subscribe", topic: "chat:meta" }));
-    await new Promise((r) => setTimeout(r, 80));
+    await syncWs(ws);
+    await waitUntil(() => app.server.getSubscriberCount("chat:meta") === 1, 5000, "ws_subscriber_added");
     expect(app.server.getSubscriberCount("chat:meta")).toBe(1);
+    const wsClosed = new Promise<void>((res) => (ws.onclose = () => res()));
     ws.close();
-    await new Promise((r) => setTimeout(r, 100));
+    await wsClosed;
+    await waitUntil(() => app.server.getSubscriberCount("chat:meta") === 0, 5000, "ws_subscriber_cleaned_up");
     expect(app.server.getSubscriberCount("chat:meta")).toBe(0);
 
     // 7. Stale lock recovery: after clean stop, writing a dead PID lock file still lets a new daemon boot

@@ -1,134 +1,136 @@
 # AGENTS.md — AI Agent Engineering Guide for Bot-Factory
 
-Read this file **before** editing code in this repository. It gives you the exact architecture, non-negotiable invariants, file map, verification commands, and known traps.
+Read this file **before** editing code in this repository. It documents the Phase 5 architecture, non-negotiable invariants, exact entry points, verification commands, protocol surfaces, and known engineering constraints.
 
-For the prioritized list of missing features and bugs to build next, also read **[`HANDOFF.md`](./HANDOFF.md)**.
-For visual/CSS rules, read **[`DESIGN.md`](./DESIGN.md)**.
-For original clean-room architecture patterns, read **[`docs/research/README.md`](./docs/research/README.md)**.
+See also:
+- **[`HANDOFF.md`](./HANDOFF.md)** — Phase 1–5 delivery scorecard, verified checks, and remaining roadmap.
+- **[`DESIGN.md`](./DESIGN.md)** — Monochrome Ink Light-Mode design system (`#FFFFFF`/`#FAFAFA`/`#F5F5F5`, `#D95D22`, Low-Poly Beavers, Smoke & Pearl Thinking Orbs).
+- **[`docs/ARCHITECTURE_AND_UI_SPEC.md`](./docs/ARCHITECTURE_AND_UI_SPEC.md)** and **[`docs/research/README.md`](./docs/research/README.md)** — Original clean-room design specs.
 
 ---
 
 ## 1. Monorepo Architecture & Entry Points
 
-Bot-Factory is a Bun + TypeScript monorepo with three workspaces:
+Bot-Factory is a Bun + TypeScript monorepo (`packages/*`, `apps/*`) with strict separation between **source code** and **runtime state (`BOT_FACTORY_ROOT`, default `~/bot-factory`)**.
 
-| Workspace | Purpose | Key Files |
+| Workspace | Purpose | Key Entry Points |
 |---|---|---|
-| `packages/shared` | Single source of truth for Zod contracts (`RpcCommandSchema`, `WsClientMessage`, `WsServerMessage`, `HubConfigSchema`, entity types, subscription topics) | [`packages/shared/src/index.ts`](./packages/shared/src/index.ts) |
-| `apps/daemon` | Local-only Control Plane (`127.0.0.1`), Single-Writer SQLite (`bun:sqlite` WAL + FTS5), Outbox Worker, Git Worktrees & Hidden Checkpoints, Memory Engine, Native HTTP + ACP Runtimes, MCP Bridge, Phase-3 Verifier & Self-Mod | [`apps/daemon/src/index.ts`](./apps/daemon/src/index.ts)<br>[`apps/daemon/src/rpc/server.ts`](./apps/daemon/src/rpc/server.ts)<br>[`apps/daemon/src/orchestration/engine.ts`](./apps/daemon/src/orchestration/engine.ts)<br>[`apps/daemon/src/core/commandCore.ts`](./apps/daemon/src/core/commandCore.ts)<br>[`apps/daemon/src/db/database.ts`](./apps/daemon/src/db/database.ts)<br>[`apps/daemon/src/git/worktrees.ts`](./apps/daemon/src/git/worktrees.ts)<br>[`apps/daemon/src/memory/memoryEngine.ts`](./apps/daemon/src/memory/memoryEngine.ts)<br>[`apps/daemon/src/runtimes/nativeHttpRuntime.ts`](./apps/daemon/src/runtimes/nativeHttpRuntime.ts)<br>[`apps/daemon/src/runtimes/acpSubprocessRuntime.ts`](./apps/daemon/src/runtimes/acpSubprocessRuntime.ts)<br>[`apps/daemon/src/runtimes/router.ts`](./apps/daemon/src/runtimes/router.ts)<br>[`apps/daemon/src/mcp/mcpBridge.ts`](./apps/daemon/src/mcp/mcpBridge.ts)<br>[`apps/daemon/src/phase3/verifier.ts`](./apps/daemon/src/phase3/verifier.ts)<br>[`apps/daemon/src/phase3/selfMod.ts`](./apps/daemon/src/phase3/selfMod.ts) |
-| `apps/web` | React 19 + Vite 6 + Three.js Light-Mode Studio UI | [`apps/web/src/App.tsx`](./apps/web/src/App.tsx)<br>[`apps/web/src/client/useBotFactory.ts`](./apps/web/src/client/useBotFactory.ts)<br>[`apps/web/src/chat/ChatTab.tsx`](./apps/web/src/chat/ChatTab.tsx)<br>[`apps/web/src/bots/BotsTab.tsx`](./apps/web/src/bots/BotsTab.tsx)<br>[`apps/web/src/bots/BotChatStream.tsx`](./apps/web/src/bots/BotChatStream.tsx)<br>[`apps/web/src/browser/InAppBrowser.tsx`](./apps/web/src/browser/InAppBrowser.tsx)<br>[`apps/web/src/phase3/Phase3Panels.tsx`](./apps/web/src/phase3/Phase3Panels.tsx)<br>[`apps/web/src/components/PrecisionComposer.tsx`](./apps/web/src/components/PrecisionComposer.tsx)<br>[`apps/web/src/components/ReasoningEffortSlider.tsx`](./apps/web/src/components/ReasoningEffortSlider.tsx)<br>[`apps/web/src/components/BotAvatars.tsx`](./apps/web/src/components/BotAvatars.tsx)<br>[`apps/web/src/components/BotFactoryIcons.tsx`](./apps/web/src/components/BotFactoryIcons.tsx)<br>[`apps/web/src/components/BotThinkingOrb.tsx`](./apps/web/src/components/BotThinkingOrb.tsx)<br>[`apps/web/src/styles/tokens.css`](./apps/web/src/styles/tokens.css)<br>[`apps/web/src/styles/app.css`](./apps/web/src/styles/app.css) |
-| `tests` | End-to-end, unit, memory/ACP/MCP, Phase-3 & browser-API security test suites | [`tests/harness_e2e.test.ts`](./tests/harness_e2e.test.ts)<br>[`tests/memory_acp_mcp.test.ts`](./tests/memory_acp_mcp.test.ts)<br>[`tests/phase3_debates_verifier_selfmod.test.ts`](./tests/phase3_debates_verifier_selfmod.test.ts)<br>[`tests/browser_api_security.test.ts`](./tests/browser_api_security.test.ts) |
+| `packages/shared` | Single source of truth for Zod contracts (`HubConfigSchema`, `RpcCommandSchema`, `WsClientMessage`, `WsServerMessage`, `SubscriptionTopic`, entity & anchor schemas) | [`packages/shared/src/index.ts`](./packages/shared/src/index.ts) |
+| `apps/daemon` | Local-only Control Plane (`127.0.0.1`), Config/Secrets, Single-Writer SQLite (`bun:sqlite` WAL + FTS5 + Embeddings, schema v2), Outbox Worker, Git Worktrees/Subagent Patches/Merge/Checkpoints, 3-Layer Memory Engine, Autonomy Loop, Subagent Manager, Open BYOS Runtimes (`native_http`, `acp_stdio`, `cli_stream`), 14-Tool MCP Bridge, Independent Verifier & Self-Mod Sandbox | [`apps/daemon/src/index.ts`](./apps/daemon/src/index.ts)<br>[`apps/daemon/src/config.ts`](./apps/daemon/src/config.ts)<br>[`apps/daemon/src/cli/devIsolated.ts`](./apps/daemon/src/cli/devIsolated.ts)<br>[`apps/daemon/src/cli/doctor.ts`](./apps/daemon/src/cli/doctor.ts)<br>[`apps/daemon/src/core/commandCore.ts`](./apps/daemon/src/core/commandCore.ts)<br>[`apps/daemon/src/db/database.ts`](./apps/daemon/src/db/database.ts)<br>[`apps/daemon/src/rpc/server.ts`](./apps/daemon/src/rpc/server.ts)<br>[`apps/daemon/src/git/worktrees.ts`](./apps/daemon/src/git/worktrees.ts)<br>[`apps/daemon/src/memory/memoryEngine.ts`](./apps/daemon/src/memory/memoryEngine.ts)<br>[`apps/daemon/src/orchestration/engine.ts`](./apps/daemon/src/orchestration/engine.ts)<br>[`apps/daemon/src/orchestration/agentTools.ts`](./apps/daemon/src/orchestration/agentTools.ts)<br>[`apps/daemon/src/orchestration/autonomyLoop.ts`](./apps/daemon/src/orchestration/autonomyLoop.ts)<br>[`apps/daemon/src/orchestration/subagentManager.ts`](./apps/daemon/src/orchestration/subagentManager.ts)<br>[`apps/daemon/src/mcp/mcpBridge.ts`](./apps/daemon/src/mcp/mcpBridge.ts)<br>[`apps/daemon/src/runtimes/router.ts`](./apps/daemon/src/runtimes/router.ts)<br>[`apps/daemon/src/runtimes/nativeHttpRuntime.ts`](./apps/daemon/src/runtimes/nativeHttpRuntime.ts)<br>[`apps/daemon/src/runtimes/acpSubprocessRuntime.ts`](./apps/daemon/src/runtimes/acpSubprocessRuntime.ts)<br>[`apps/daemon/src/runtimes/cliStreamRuntime.ts`](./apps/daemon/src/runtimes/cliStreamRuntime.ts)<br>[`apps/daemon/src/phase3/verifier.ts`](./apps/daemon/src/phase3/verifier.ts)<br>[`apps/daemon/src/phase3/selfMod.ts`](./apps/daemon/src/phase3/selfMod.ts) |
+| `apps/web` | React 19 + Vite 6 + Three.js Light-Mode Studio UI (Dual-Layer Shell, Devin/Codex Main Agent, Grok-Bot Multi-Side Group Chat, Modular 2-Row 6-Viewer Browser, Escalation Inbox, Wave 4 Studios) | [`apps/web/src/App.tsx`](./apps/web/src/App.tsx)<br>[`apps/web/src/main.tsx`](./apps/web/src/main.tsx)<br>[`apps/web/src/client/useBotFactory.ts`](./apps/web/src/client/useBotFactory.ts)<br>[`apps/web/src/chat/ChatTab.tsx`](./apps/web/src/chat/ChatTab.tsx)<br>[`apps/web/src/bots/BotsTab.tsx`](./apps/web/src/bots/BotsTab.tsx)<br>[`apps/web/src/bots/BotChatStream.tsx`](./apps/web/src/bots/BotChatStream.tsx)<br>[`apps/web/src/browser/InAppBrowser.tsx`](./apps/web/src/browser/InAppBrowser.tsx)<br>[`apps/web/src/browser/Model3DViewer.tsx`](./apps/web/src/browser/Model3DViewer.tsx)<br>[`apps/web/src/studio/EscalationInbox.tsx`](./apps/web/src/studio/EscalationInbox.tsx)<br>[`apps/web/src/studio/ProjectModal.tsx`](./apps/web/src/studio/ProjectModal.tsx)<br>[`apps/web/src/studio/BotSpawnModal.tsx`](./apps/web/src/studio/BotSpawnModal.tsx)<br>[`apps/web/src/studio/CheckpointsMergePanel.tsx`](./apps/web/src/studio/CheckpointsMergePanel.tsx)<br>[`apps/web/src/studio/MemoryL1Studio.tsx`](./apps/web/src/studio/MemoryL1Studio.tsx)<br>[`apps/web/src/studio/SettingsView.tsx`](./apps/web/src/studio/SettingsView.tsx)<br>[`apps/web/src/phase3/Phase3Panels.tsx`](./apps/web/src/phase3/Phase3Panels.tsx)<br>[`apps/web/src/components/PrecisionComposer.tsx`](./apps/web/src/components/PrecisionComposer.tsx)<br>[`apps/web/src/components/MarkdownRenderer.tsx`](./apps/web/src/components/MarkdownRenderer.tsx)<br>[`apps/web/src/styles/tokens.css`](./apps/web/src/styles/tokens.css)<br>[`apps/web/src/styles/app.css`](./apps/web/src/styles/app.css) |
+| `tests` | Bun integration, security, BYOS, memory/ACP/MCP, autonomous DAG/subagents/merge & Playwright Chromium UI E2E suites | [`tests/harness_e2e.test.ts`](./tests/harness_e2e.test.ts)<br>[`tests/browser_api_security.test.ts`](./tests/browser_api_security.test.ts)<br>[`tests/memory_acp_mcp.test.ts`](./tests/memory_acp_mcp.test.ts)<br>[`tests/phase1_security_parallel_recovery.test.ts`](./tests/phase1_security_parallel_recovery.test.ts)<br>[`tests/phase2_byos_streaming_memory.test.ts`](./tests/phase2_byos_streaming_memory.test.ts)<br>[`tests/phase3_debates_verifier_selfmod.test.ts`](./tests/phase3_debates_verifier_selfmod.test.ts)<br>[`tests/phase3_autonomous_subagents_merge.test.ts`](./tests/phase3_autonomous_subagents_merge.test.ts)<br>[`tests/ui_e2e.test.ts`](./tests/ui_e2e.test.ts) + [`tests/ui_e2e_playwright.py`](./tests/ui_e2e_playwright.py) |
 
 ---
 
 ## 2. Non-Negotiable Architecture & Security Invariants
 
-**NEVER break these invariants when adding features or fixing bugs:**
+**NEVER weaken or bypass these invariants:**
 
-1. **Single-Writer SQLite + `runtime_epoch` (`apps/daemon/src/db/database.ts`)**
-   - Only the daemon writes `state.db` (exclusive PID lockfile + `assertWritable()` epoch guard on every write). Never let the UI, CLI, or MCP bridge open `state.db` directly for writes.
-2. **1-TX Command → Event → Outbox Atomicity (`apps/daemon/src/core/commandCore.ts`)**
-   - Every RPC command commits `{events, projections, command_receipt, outbox_effects}` in one SQLite transaction with **zero network or filesystem I/O inside the transaction**. All side effects (model calls, ACP turns, Git checkpoints) run asynchronously via the Outbox worker.
-3. **Never Blindly Replay Crashed Turns**
-   - On restart (`recoverAfterRestart`), `started` session admissions become `unknown`, prior-epoch effects become `retired`, and FIFO blocks until `session.resolve_unknown` with matching `executionGeneration`.
-4. **3-Tier Frozen System Prompt & CWD-Free Prefix Ordering (`apps/daemon/src/memory/memoryEngine.ts`)**
-   - Prompt assembly order is `stable → context (cwd-free first!) → volatile`. Freeze and hash once per session. Never inject timestamps, live task counts, or dynamic recall into the system prompt mid-session — attach ephemeral per-turn recall only to the outgoing user turn.
-5. **FTS5 Is Derived & Detachable (`apps/daemon/src/db/database.ts`)**
-   - Canonical writes must never fail due to FTS5 corruption. On FTS errors, detach triggers, set `fts_stale`, and fall back to `LIKE`. Never run `INSERT INTO ... VALUES('rebuild')` inside a live write path.
-6. **Workspace-Scoped Hidden Git Checkpoints (`apps/daemon/src/git/worktrees.ts`)**
-   - Checkpoint scope keys MUST include `(agentId, normalizedCwd)` (`root:{agentId}:{cwd}`). Always refuse cross-worktree restores.
-7. **Strict Path Containment & Secret Hygiene (`apps/daemon/src/rpc/server.ts`, `worktrees.ts`, `memory/secretScrubber.ts`)**
-   - All artifact reads (`/api/projects/:id/artifact`) are restricted to `plans/`, `artifacts/`, and `handoffs/` via `realpath`-checked boundary validation.
-   - All repo reads (`/files`, `/file`, `/diff`) MUST enforce `isPathStrictlyWithinRoot`, block `.git` (both directories AND worktree `.git` pointer files!), `.env*`, `secrets.env`, `.pem`, `.key`, binary files, and oversized files (`>512 KB`), and pass text through `SecretScrubber`.
-   - Web previews inside `InAppBrowser.tsx` MUST remain **loopback-only** (`127.0.0.1`, `localhost`, `[::1]`) inside a sandboxed `<iframe>`.
-   - HTTP/WS server MUST remain bound to `127.0.0.1` with localhost-only Origin allowlist.
-8. **Two-Worlds Anti-Log-Spam Isolation (`apps/daemon/src/orchestration/engine.ts`)**
-   - `chat:meta` MUST NEVER receive raw `tool_call`, `thought`, `plan`, or `terminal` chunks from background bots. Dense telemetry belongs strictly to `bot:<id>:timeline`.
-9. **Cross-Family Independent Verification & Self-Mod Integrity (`apps/daemon/src/phase3/`)**
-   - `IndependentVerifier` MUST run in a fresh ephemeral session with zero author conversation history, zero L1/project memory, cross-family provider selection (`excludeProvider`), and fail-closed verdict parsing.
-   - Self-Mod promotion MUST re-verify SHA-256 on a single read (TOCTOU-safe), keep immutable hub keys locked, and always snapshot a backup before atomic promotion.
-10. **Windows Process-Tree Safety (`apps/daemon/src/runtimes/acpSubprocessRuntime.ts`)**
-    - Always flush pending `session/request_permission` requests with `{ outcome: "cancelled" }` on abort/disconnect (otherwise ACP subprocesses hang).
-    - On Windows Hard-Stop, use process-tree termination (`taskkill /PID <pid> /T /F`) so child processes are not orphaned.
-11. **Design System Discipline (`DESIGN.md` & `apps/web/src/styles/tokens.css`)**
-    - **Light Mode only** (`#FFFFFF`, `#FAFAFA`, `#F5F5F5`, `#171717`, `#525252`, `#8A8A8A`, `1px #EBEBEB`).
-    - Warm **Burnt-Orange (`#D95D22`)** is reserved strictly for Human chat/steer bubbles, the 4-stop `Aufwand` slider, and the Low-Poly Flat-Shaded Orange Beaver avatars.
-    - **Zero** purple/indigo gradients, **zero** neon glows, **zero** emojis as UI icons.
+1. **Single-Writer SQLite + `runtime_epoch` (`apps/daemon/src/db/database.ts`):**
+   - Only the local daemon writes `state.db` (exclusive PID lockfile `${dbPath}.writer.lock` with Windows PID-reuse validation + `assertWritable()` epoch check on every write). Never let the UI, tests against live user data, `doctor.ts`, or MCP bridge write `state.db` directly.
+2. **1-TX Command -> Event -> Outbox Atomicity (`apps/daemon/src/core/commandCore.ts`):**
+   - Every `RpcCommand` checks `command_receipts` before any pre-commit I/O and commits `{events, projections, command_receipts, outbox_effects}` in one atomic SQLite transaction with **zero network or filesystem I/O inside the transaction**.
+3. **Never Blindly Replay Crashed Turns:**
+   - `recoverAfterRestart()` transitions prior-epoch `started` admissions to `unknown` and prior-epoch effects to `retired`, blocking FIFO admissions until `session.resolve_unknown` confirms `expectedGeneration`.
+4. **3-Tier Frozen System Prompt & CWD-Free Prefix (`apps/daemon/src/memory/memoryEngine.ts`):**
+   - Assembly order is `stable -> context (cwd-free first) -> volatile snapshot`, frozen and SHA-256 hashed per session. Never mutate the system prompt mid-session with dynamic timestamps or recall; attach ephemeral hybrid recall to outgoing turns only.
+5. **FTS5 Is Derived & Detachable (`apps/daemon/src/db/database.ts`):**
+   - Canonical writes must never fail due to FTS5 corruption. On FTS errors, detach FTS triggers, set `fts_stale = 1`, and fall back to `LIKE`.
+6. **Workspace-Scoped Hidden Git Checkpoints & Merge Guards (`apps/daemon/src/git/worktrees.ts`):**
+   - Checkpoint scope keys MUST include `(agentId, normalizedCwd)` (`root:{agentId}:{cwd}`), refusing cross-worktree restores.
+   - `mergeBotWorktree` must reject dirty base repos (`base_repo_dirty`), record `preMergeRef`, abort cleanly on `merge_conflict`, and clean worktrees/branches only after closing live agent sessions.
+7. **Depth-1 Subagent Cap & Windows Worktree Lock Safety (`apps/daemon/src/orchestration/subagentManager.ts`):**
+   - Only `peer` bots (`depth < 1`) may spawn `sidekick` subagents (`subagent_max_depth_exceeded` otherwise, bounded by `maxSubagentsPerBot`).
+   - On `applySubagentPatch` (and `cleanupSingleSubagent`), ALWAYS revoke MCP tokens and `abortAndCloseAgentSession(..., "hard_stop")` **before** removing the child worktree (`skipCleanup: true` -> close session -> `cleanupSubagentWorktree`), otherwise Windows holds open directory handles and fails `git worktree remove`.
+8. **Strict Path Containment, Localhost Auth & Secret Hygiene (`apps/daemon/src/rpc/server.ts`, `config.ts`, `agentTools.ts`):**
+   - Daemon binds strictly to `127.0.0.1` (`HubConfigSchema.hub.host = "127.0.0.1"`) with Origin/Host validation and HMAC-signed `bf_session` cookie / `x-bf-token` auth.
+   - Artifact reads (`/api/projects/:id/artifact`) are restricted via `isPathStrictlyWithinRoot` (`realpathSync` symlink containment) to `plans/`, `artifacts/`, and `handoffs/`.
+   - Repo reads (`/files`, `/file`, `/diff`, `bf_repo_tree`, `bf_repo_read`) must block `.git` (both dirs and worktree `.git` pointer files), `.env*`, `secrets.env`, `.daemon-token`, `config.json`, `.pem`, `.key`, `*.db*`, binaries, and files `>512 KB`, and scrub all text through `SecretScrubber`.
+   - `WebViewer.tsx` MUST remain loopback-only with self-embed origin/port blocking and `sandbox="allow-scripts allow-forms"` (NO `allow-same-origin`).
+   - Write-only Secrets API (`/api/secrets`) must NEVER return plaintext secret values.
+   - Subprocesses (`cliStreamRuntime.ts`, `acpSubprocessRuntime.ts`, `verifier.ts`, `probeCliVersion`) must NEVER inherit `BOT_FACTORY_TOKEN` (except scoped per-session `bfmcp_*` tokens passed explicitly to `mcpBridge.ts`).
+9. **Two-Worlds Anti-Log-Spam Isolation (`apps/daemon/src/orchestration/engine.ts`):**
+   - `chat:meta` MUST NEVER receive raw `tool_call`, `thought`, `plan`, or `terminal` telemetry from background bots or subagents.
+10. **Cross-Family Independent Verification & Self-Mod Integrity (`apps/daemon/src/phase3/`):**
+    - `IndependentVerifier` runs in a fresh ephemeral session (`verifier:ephemeral`), zero author history, zero project memory, cross-family model selection (`excludeProvider`), real `verifyChecks` execution, empty-diff fail-closed gating, and fail-closed `VERDICT` parsing.
+    - Self-Mod promotion verifies Open BYOS config schema, blocks embedded plaintext secrets, locks immutable hub keys (`rootDir`, `dbPath`, `secretsEnvPath`, `defaultProjectsDir`), re-verifies SHA-256 on a single read (TOCTOU-safe), and creates backups before atomic promotion.
+11. **Windows Process-Tree Safety (`acpSubprocessRuntime.ts`, `cliStreamRuntime.ts`, `verifier.ts`):**
+    - Flush pending `session/request_permission` requests with `{ outcome: "cancelled" }` on abort/disconnect.
+    - Terminate subprocess trees on Windows with `taskkill /PID <pid> /T /F`.
+12. **Design System Discipline (`DESIGN.md` & `apps/web/src/styles/tokens.css`):**
+    - Light Mode only (`#FFFFFF`, `#FAFAFA`, `#F5F5F5`, `#171717`, `#D95D22` Burnt Orange, Low-Poly Beavers, Smoke & Pearl 2D Orbs). No runtime `<style>` tag injection in JSX, no external CDNs, no emojis as UI icons.
 
 ---
 
-## 3. Verification & Dev Commands
+## 3. Verification & Development Commands
 
 > **Windows PowerShell 5.1 Note:** Chain commands with `;` (not `&&`), checking `$LASTEXITCODE` between steps if needed.
 
 ```powershell
-# 1. Typecheck entire monorepo (must exit 0)
+# 1. Typecheck entire monorepo
 bun run typecheck
 
-# 2. Run all 25 integration, memory/ACP/MCP, Phase-3 & browser-API security tests
+# 2. Lint packages/, apps/, and tests/ with Biome (biome.json)
+bun run lint
+
+# 3. Build Studio UI into apps/web/dist (required before Playwright E2E on clean checkout)
+bun run build:web
+
+# 4. Run full Bun test suite (set BOT_FACTORY_SKIP_PLAYWRIGHT=1 if Chromium is absent)
 bun test tests
 
-# 3. Production Vite build (outputs to apps/web/dist, served automatically by daemon)
-bun run build:web
+# 5. Full check pipeline (typecheck + lint + tests + build:web)
+bun run check
+
+# 6. Read-only preflight diagnostics (never modifies state.db or .writer.lock)
+bun run doctor
 ```
 
-### Running an Isolated Daemon for Live UI / Browser Testing
-Always test against a fresh temporary `rootDir` so you don't pollute `~/bot-factory/system/state.db`:
-
+### Running an Isolated Daemon for Live Testing (Never Pollute `~/bot-factory`)
 ```powershell
-$tmp = Join-Path $env:TEMP ('bf-dev-' + [guid]::NewGuid().ToString('N').Substring(0,8))
-New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-bun -e "import { startBotFactoryDaemon } from './apps/daemon/src/index.ts'; const app = startBotFactoryDaemon({ rootDir: process.argv[1], port: 4318 }); console.log('READY', app.url); await new Promise(() => {});" $tmp
+bun run build:web
+bun run dev:daemon:isolated
 ```
-
-Then open `http://127.0.0.1:4318` (make sure `bun run build:web` ran first!).
+`dev:daemon:isolated` sets `BOT_FACTORY_ROOT` to `./.dev-runtime` (gitignored) and logs `http://127.0.0.1:4310/?token=<token>`. To run Vite HMR alongside it (`:5173`), run `bun run dev:web` in a second terminal (`vite.config.ts` automatically reads `.daemon-token` and injects `x-bf-token` on `/api` and `/ws` proxy requests).
 
 ---
 
-## 4. Protocol Quick Reference
+## 4. Protocol & Tool Quick Reference
 
-### RPC Commands (`RpcCommandSchema` in `packages/shared/src/index.ts:411-551`)
+### `RpcCommandSchema` (`30` Commands in `packages/shared/src/index.ts`)
 - **Chat & Steer:** `chat.send`, `steer.submit`
-- **Projects & Bots:** `project.create`, `bot.spawn`, `bot.pause`, `bot.stop`, `session.resolve_unknown`
-- **Tasks & Verification:** `task.create`, `task.dispatch`, `task.verify`
-- **Annotations:** `annotation.create`, `annotation.resolve`
-- **Phase-3 Debates:** `debate.open`, `debate.post`, `debate.resolve`
-- **Phase-3 Self-Mod:** `selfmod.propose`, `selfmod.verify`, `selfmod.promote`, `selfmod.rollback`
+- **Projects & Bots:** `project.create`, `project.archive`, `bot.spawn`, `bot.pause`, `bot.stop`, `bot.resume`, `permission.respond`, `session.resolve_unknown`
+- **Tasks, Checkpoints & Merge:** `task.create`, `task.dispatch`, `task.verify`, `task.merge`, `checkpoint.list`, `checkpoint.rollback`
+- **Annotations & Inbox:** `annotation.create`, `annotation.resolve`, `inbox.dismiss`
+- **Phase-3 Debates & Self-Mod:** `debate.open`, `debate.post`, `debate.resolve`, `selfmod.propose`, `selfmod.verify`, `selfmod.promote`, `selfmod.rollback`
+- **Settings, Routing & Memory:** `config.update`, `routing.set_override`, `memory.l1.get`, `memory.l1.update`
 
 ### HTTP Endpoints (`apps/daemon/src/rpc/server.ts`)
-- `GET /api/health` — daemon epoch, `ftsStale`, quiet projection
-- `GET /api/snapshot` — global status snapshot
-- `POST /api/command` — HTTP fallback for `RpcCommandSchema`
-- `POST /api/mcp/:tool` — `x-bf-token`-authenticated MCP bridge dispatch
-- `GET /api/projects/:id/artifact?path=` — scoped read for `plans|artifacts|handoffs`
-- `GET /api/projects/:id/files` — safe repo file listing (respects `?agentId=` worktree)
-- `GET /api/projects/:id/file?path=` — safe UTF-8 file read (512 KB cap, binary/sensitive blocked, scrubbed)
-- `GET /api/projects/:id/diff` — safe workspace `git diff` + untracked synthetic patches (scrubbed)
-- `GET /ws` — typed WebSocket RPC + scoped pub/sub
+- `GET /?token=<token>` — exchanges daemon token for `HttpOnly; SameSite=Strict` `bf_session` cookie and redirects to `/`
+- `GET /api/auth/status`, `POST /api/auth/session` — auth status check & token-to-cookie login
+- `GET /api/health`, `GET /api/snapshot`, `POST /api/command`
+- `GET /api/config`, `GET /api/secrets`, `POST /api/secrets`, `DELETE /api/secrets/:key`, `POST /api/secrets/test`
+- `GET /api/memory/l1`, `GET /api/memory/facts`
+- `POST /api/mcp/:toolName` — scoped `bfmcp_*` / master token MCP dispatch
+- `GET /api/projects/:id/artifact?path=` — `plans|artifacts|handoffs` read (sandbox CSP)
+- `GET /api/projects/:id/files`, `GET /api/projects/:id/file?path=`, `GET /api/projects/:id/diff` — worktree-aware (`?agentId=`) safe read-only browser APIs
+- `GET /ws` — typed WebSocket RPC + ref-counted pub/sub (`ping`/`pong`)
 
-### WebSocket Subscription Topics (`packages/shared/src/index.ts:402-409`)
+### Agent Tool Surfaces
+- **Main Manager (`8` tools in `agentTools.ts`):** `bf_projects_list`, `bf_project_create`, `bf_team_delegate`, `bf_team_status`, `bf_memory_search`, `bf_memory_remember`, `bf_memory_update_l1`, `bf_memory_forget`.
+- **Team Lead (`11` tools in `agentTools.ts`):** `bf_repo_tree`, `bf_repo_read`, `bf_repo_diff`, `bf_task_create_batch`, `bf_task_update`, `bf_bot_spawn`, `bf_task_dispatch`, `bf_bot_message`, `bf_task_verify_trigger`, `bf_debate_resolve`, `bf_report_to_manager`.
+- **MCP Bridge (`14` tools in `mcpBridge.ts`):** `bf_task_list`, `bf_task_claim`, `bf_task_update`, `bf_handoff_write`, `bf_memory_search`, `bf_fix_tasks_list`, `bf_fix_task_resolve`, `bf_debate_post`, `bf_subagent_spawn`, `bf_subagent_status`, `bf_subagent_wait`, `bf_subagent_message`, `bf_subagent_kill`, `bf_subagent_apply_patch`.
+
+### WebSocket Subscription Topics (`packages/shared/src/index.ts`)
 `global:status` · `global:selfmod` · `chat:meta` · `project:{id}:board` · `project:{id}:previews` · `project:{id}:debates` · `bot:{id}:timeline`
-
-### Local MCP Bridge Tools (`apps/daemon/src/mcp/mcpBridge.ts:64-160`)
-`bf_task_list` · `bf_task_claim` · `bf_task_update` · `bf_handoff_write` · `bf_memory_search` · `bf_fix_tasks_list` · `bf_fix_task_resolve` · `bf_debate_post`
 
 ---
 
-## 5. Known Gotchas & Footguns (Save Hours of Debugging)
+## 5. Known Constraints & Engineering Traps
 
-1. **`reasoningEffort`, `autonomyLevel`, and `chat.send.projectId` are currently NO-OPs in the daemon.**
-   They are validated by Zod (`packages/shared/src/index.ts`) and sent by `App.tsx`, but `apps/daemon/src/orchestration/engine.ts` never reads them yet. Wire them before claiming they work!
-2. **No `bot.resume` exists yet.**
-   Calling `bot.pause` or `bot.stop` permanently marks the agent `paused`/`stopped`; `task.dispatch` rejects it (`engine.ts:617-619`). Adding `bot.resume` is a P0 task.
-3. **`apps/web/src/previews/PreviewStudio.tsx` is dead legacy code.**
-   713 lines, completely unreferenced since `InAppBrowser.tsx` replaced it, and its CSS classes were removed from `app.css`. Safe to delete.
-4. **Git `status --porcelain` leading space trap.**
-   `runGitSync` trims stdout, so `" M README.md"` arrives as `"M README.md"`. Never use `line.slice(3)` — keep the regex parser in `parsePorcelainStatus` (`worktrees.ts:787`) and its regression guard in `tests/browser_api_security.test.ts`.
-5. **Git worktree `.git` is a file, not a directory.**
-   Always filter `entry.name.toLowerCase() === ".git"` for files as well as directories in `listSafeRepoFiles` (`worktrees.ts:717`).
-6. **`runningBots` excludes `scope === "global"`.**
-   The Meta-Orchestrator is not counted in `quietStatus.runningBots` (`engine.ts:1581`), and `ChatTab`'s `busy` state clears on RPC ACK rather than turn completion.
-7. **Error status event gap.**
-   When `runAgentTurn` catches an error (`engine.ts:1070-1081`), it writes `status: "error"` to SQLite without emitting a `status.updated` WS event — emit it when fixing turn lifecycle.
-8. **3D SVG intrinsic sizing.**
-   SVGs without explicit `width`/`height` attributes (like `artifacts/ui-mockup.svg`) collapse to `0×0` inside `inline-block` flex children unless given explicit `width: "100%"` (already handled in `InAppBrowser.tsx:1602-1666`).
+1. **`biome.json` keeps `formatter.enabled: false` and `assist.enabled: false` intentionally.** Existing repository files mix CRLF/LF line endings and deliberate multi-line formatting; `bun run lint` (`bun x biome check packages apps tests`) runs recommended TS/TSX/CSS lint rules without failing on line-ending diffs.
+2. **Playwright E2E requires built `apps/web/dist/index.html`.** Run `bun run build:web` before `bun test tests` on a fresh checkout unless `BOT_FACTORY_SKIP_PLAYWRIGHT=1` is set.
+3. **Git `status --porcelain` leading space trap.** `runGitSync` trims stdout, so `" M file"` becomes `"M file"`. Always keep the regex parser in `parsePorcelainStatus` (`worktrees.ts`).
+4. **Git worktree `.git` is a file, not a directory.** Always filter `.git` entries on both files and directories in repo listing/tree walkers (`worktrees.ts`, `agentTools.ts`).
+5. **SQLite schema v2 + FTS triggers.** If upgrading an older `state.db`, `database.ts` idempotently migrates v1 columns (`verify_checks_json`, `turn_counter`, `depth`, `subagent_mode`, `depends_on_json`, `auto_retry_count`) and second-scale timestamps to epoch ms. Never bypass `StateDatabase` migrations.
+6. **Three.js `Model3DViewer` renders on demand.** Do not reintroduce a continuous 60fps `requestAnimationFrame` loop; schedule frames via `controls.addEventListener("change", ...)` / `ResizeObserver` / pointer events so idle GPU usage stays 0%.

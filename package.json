@@ -14,10 +14,12 @@
     "start": "bun apps/daemon/src/index.ts",
     "doctor": "bun apps/daemon/src/cli/doctor.ts",
     "typecheck": "bun x tsc --noEmit",
+    "lint": "bun x biome check packages apps tests",
     "test": "bun test tests",
-    "check": "bun run typecheck && bun test tests && bun run build:web"
+    "check": "bun run typecheck && bun run lint && bun test tests && bun run build:web"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
     "@types/bun": "1.2.15",
     "typescript": "5.8.3"
   }
