@@ -655,6 +655,8 @@ export class NativeHttpRuntime implements AgentRuntime {
       sessionId: spec.sessionId,
       agentId: spec.agentId,
       runtimeKind: "native_http",
+      provider: spec.provider,
+      model: spec.model,
       pid: null,
     };
   }

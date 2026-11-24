@@ -22,19 +22,20 @@ focus visible, respect reduced motion, and test with the offline runtime.
 
 ## Seamless navigation and one-click workspace actions
 
-- Use the labeled destination rail for Main, Teams, Split, Browser, Search,
-  Inbox, Memory, Settings and Theme. Tasks are a workspace surface inside a
-  team, not a separate top-level destination. Destinations open their
-  contextual panel; the panel close control must never cover header content.
-  Split remains available only when the viewport can support it.
-- Label split panes locally. Focus is a keyboard and composer cue, not a
-  global status pill.
-- Show named draft destinations on the artifact action itself. In split
-  view both visible conversations are direct choices. A click only adds
-  context; the composer has a separate, explicit send action.
-- Use live bear motion for real activity or a brief hover/focus response.
-  Older messages and team clusters stay still. Click the live header
-  portrait to read the agent's role, status, and model.
+- Use the labeled destination rail for Main, Teams, Browser, Search, Inbox,
+  Memory, Settings and Theme. Tasks are a workspace surface inside a team,
+  not a separate top-level destination. Destinations open their contextual
+  panel; the panel close control must never cover header content. Split Chat
+  is disabled: Main Agent and Teams are separate destinations rather than
+  simultaneous panes.
+- Show the named draft destination on the artifact action itself. A click
+  only adds context; the composer has a separate, explicit send action.
+- Use the vector Feltworks bear crew: one simple plush squircle bear blank,
+  capsule eyes, muted role-dyed felt, and one functional factory module per
+  role. Live bears blink and glance subtly; working bears move with more
+  energy, and hover/focus produces a brief plush acknowledgement. Older
+  messages and team clusters stay still. Click the live header portrait to
+  read the agent's role, status, and model.
 
 - Prefer the handcrafted Bot-Factory geometric icon set for shell
   navigation. Use familiar control glyphs only where recognition matters
@@ -44,3 +45,10 @@ focus visible, respect reduced motion, and test with the offline runtime.
   and the command menu uses larger command typography with readable
   descriptions. `/goal` remains inline so the operator can write the goal
   after the token; action commands still execute directly.
+
+## Model target picker
+
+The model selector is a keyboard-accessible route picker, not a flat
+provider dump. It uses a fixed search field, provider sections, large
+two-line rows, runtime badges, a clear selected route, and a footer with
+keyboard affordances. Do not invent latency, cost, or quality metadata.

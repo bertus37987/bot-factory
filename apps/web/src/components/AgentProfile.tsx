@@ -55,7 +55,7 @@ export function AgentProfile({
         title={`View ${name} profile`}
         onClick={() => setOpen(!open)}
       >
-        <BotAvatar role={role} size={32} live agentStatus={status} seed={seed} />
+        <BotAvatar role={role} size={36} live agentStatus={status} seed={seed} />
       </button>
       {open && (
         <section className="agent-profile-card" id={id} aria-label={`${name} details`}>

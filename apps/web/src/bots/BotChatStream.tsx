@@ -630,7 +630,7 @@ export function BotChatStream({
                   >
                     <BotAvatar
                       role={speaker.meta.role}
-                      size={30}
+                      size={34}
                       seed={speaker.agent?.id ?? speaker.meta.role}
                     />
                   </button>
@@ -835,7 +835,7 @@ export function BotChatStream({
               <span style={{ display: "inline-flex", flexShrink: 0 }}>
                 <BotAvatar
                   role={meta.role}
-                  size={30}
+                  size={34}
                   live
                   status="working"
                   seed={agent.id}
@@ -980,7 +980,7 @@ export function BotChatStream({
               <span style={{ display: "inline-flex", flexShrink: 0 }}>
                 <BotAvatar
                   role={liveMeta.role}
-                  size={28}
+                  size={32}
                   live
                   agentStatus={a.status}
                   seed={a.id}

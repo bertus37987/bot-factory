@@ -195,7 +195,7 @@ export function ChatTab({
               <div className="chat-empty-emblem">
                 <BotAvatar
                   role="orchestrator"
-                  size={64}
+                  size={72}
                   active={busy}
                   status={busy ? "working" : "idle"}
                   seed="main-agent"
@@ -249,7 +249,7 @@ export function ChatTab({
                     </div>
                   ) : (
                     <div className="chat-assistant-row">
-                      <BotAvatar role="orchestrator" size={30} seed="main-agent" />
+                      <BotAvatar role="orchestrator" size={34} seed="main-agent" />
                       <div className="chat-assistant-body">
                         <div className="chat-turn-meta">
                           <span className="chat-speaker-name">Main Agent</span>
@@ -398,7 +398,7 @@ export function ChatTab({
           {isStreaming && (
             <div className="chat-turn assistant msg-side-left">
               <div className="chat-assistant-row">
-                <BotAvatar role="orchestrator" size={30} live status="working" seed="main-agent" />
+                <BotAvatar role="orchestrator" size={34} live status="working" seed="main-agent" />
                 <div className="chat-assistant-body">
                   <div className="chat-turn-meta">
                     <span className="chat-speaker-name">Main Agent</span>
@@ -420,7 +420,7 @@ export function ChatTab({
 
           {busy && !isStreaming && (
             <div className="chat-thinking-row">
-              <BotAvatar role="orchestrator" size={24} seed="main-agent" />
+              <BotAvatar role="orchestrator" size={28} seed="main-agent" />
               <BotThinkingOrb activity="composing" size={20} shell={false} />
               <span>Main Agent is thinking…</span>
             </div>

@@ -28,16 +28,6 @@
   overflow-wrap: anywhere;
 }
 
-.bots-inbox-header {
-  position: relative;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex: none;
-  padding: 8px 14px;
-  border-bottom: var(--hairline);
-}
 
 .center-header.bots-topbar {
   position: relative;
@@ -243,7 +233,6 @@
   .bots-center-shell .group-msg-stack { max-width: calc(100% - 40px); }
   .bots-topbar .center-header-left { flex-basis: 210px; }
   .bots-topbar .bots-team-switcher { max-width: 70%; }
-  .bots-topbar [data-testid="split-chat-toggle-btn"] { display: none; }
   .bots-topbar .bots-inspected-model { display: none; }
   .bots-topbar button[aria-label="Browser"] > span { display: none; }
   .bots-topbar button[aria-label="Browser"] { min-width: 32px; min-height: 32px; }

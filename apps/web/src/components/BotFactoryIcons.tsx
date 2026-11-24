@@ -81,18 +81,6 @@ export function BrowserPaneIcon({ size, className }: BotFactoryIconProps) {
 }
 
 
-/** Split workspace — two nested work panes sharing a center seam. */
-export function SplitPanelsIcon({ size, className }: BotFactoryIconProps) {
-  return (
-    <IconFrame size={size} className={className}>
-      <rect x="3.5" y="5" width="7" height="14" rx="2.4" />
-      <rect x="13.5" y="5" width="7" height="14" rx="2.4" />
-      <path d="M12 5.8 V18.2" />
-      <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
-    </IconFrame>
-  );
-}
-
 /** Search — aperture loupe with the factory focal dot. */
 export function SearchApertureIcon({ size, className }: BotFactoryIconProps) {
   return (

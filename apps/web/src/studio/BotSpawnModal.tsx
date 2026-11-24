@@ -189,7 +189,7 @@ export function BotSpawnModal({
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <BotAvatar role={previewMeta.role} size={26} />
+            <BotAvatar role={previewMeta.role} size={30} />
             <div>
               <h2
                 id="bot-spawn-modal-title"

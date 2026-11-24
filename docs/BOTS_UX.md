@@ -17,7 +17,7 @@ names or role labels.
   keyboard users are not dependent on hover alone.
 - Drafts and attachments belong to the conversation in which they were
   entered. Switching does not send them and a failed send preserves them.
-- Vanta Black remains the default; Light and the existing Bear Crew stay.
+- Vanta Black remains the default; Light and the vector Feltworks Bear Crew stay.
   Use rounded neutral surfaces, human messages on the right, bot messages
   on the left, and role color in attribution rather than whole bubbles.
   Keep technical traces collapsed and don't move the transcript while the

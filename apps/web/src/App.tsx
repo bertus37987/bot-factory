@@ -33,7 +33,6 @@ import {
   MemoryCoreIcon,
   SearchApertureIcon,
   SettingsFactoryIcon,
-  SplitPanelsIcon,
   ThemeEclipseIcon,
   Cube3DTabIcon,
   DiffBranchIcon,
@@ -55,7 +54,6 @@ type ThemeMode = "vanta" | "light";
 const LS_THEME = "bf_theme";
 const LS_DRAWER_W = "bf_drawer_w";
 const LS_BROWSER_DOCK = "bf_browser_dock";
-const LS_SPLIT_PCT = "bf_split_pct";
 
 function readStoredTheme(): ThemeMode {
   try {
@@ -96,7 +94,6 @@ function readStoredDockMode(): BrowserDockMode {
 }
 
 const clampDrawerWidth = (w: number) => Math.max(180, Math.min(420, Math.round(w)));
-const clampSplitPercent = (pct: number) => Math.max(36, Math.min(64, Math.round(pct * 10) / 10));
 
 if (typeof document !== "undefined") {
   document.documentElement.dataset.theme = readStoredTheme();
@@ -140,12 +137,6 @@ export function App() {
   const [drawerWidth, setDrawerWidth] = useState<number>(() =>
     clampDrawerWidth(readStoredNumber(LS_DRAWER_W, 256)),
   );
-  const [splitRequested, setSplitChatOpen] = useState(false);
-  const [narrowChat, setNarrowChat] = useState(() => window.matchMedia("(max-width: 699px)").matches);
-  const splitChatOpen = splitRequested && !narrowChat;
-  const [splitPercent, setSplitPercent] = useState<number>(() =>
-    clampSplitPercent(readStoredNumber(LS_SPLIT_PCT, 48)),
-  );
   const [focusedChatPane, setFocusedChatPane] = useState<"chat" | "bots">("chat");
   const [composerAttachmentsByTarget, setComposerAttachmentsByTarget] = useState<
     Record<string, ComposerAttachment[]>
@@ -184,9 +175,6 @@ export function App() {
 
   const drawerWidthRef = useRef(drawerWidth);
   drawerWidthRef.current = drawerWidth;
-  const splitPercentRef = useRef(splitPercent);
-  splitPercentRef.current = splitPercent;
-  const worldContainerRef = useRef<HTMLElement | null>(null);
   const browserTabsRef = useRef<BrowserTab[]>([]);
   browserTabsRef.current = browserTabs;
   const toastTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -307,8 +295,8 @@ export function App() {
     };
   }, [activeProject?.id, activeAgent?.id, bf.subscribe, bf.unsubscribe, bf.refreshProjectCodeContext]);
 
-  // Keep BotsTab subscriptions active when Bots world OR Split-Chat is visible
-  const botsVisible = world === "bots" || splitChatOpen;
+  // Keep BotsTab subscriptions active while the Bots world is mounted.
+  const botsVisible = world === "bots";
   const projectAgentIdsKey = projectAgents.map((a) => a.id).join(",");
   useEffect(() => {
     if (!botsVisible || !activeProject) return;
@@ -339,21 +327,10 @@ export function App() {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 699px)");
-    const onChange = (e: MediaQueryListEvent) => setNarrowChat(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-
-  // Global keyboard shortcuts (Ctrl+E world switch, Ctrl+K quick palette, Ctrl+B toggle drawer, Ctrl+Shift+S split chat)
+  // Global keyboard shortcuts (Ctrl+E world switch, Ctrl+K quick palette, Ctrl+B toggle drawer)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "s") {
-        if (narrowChat) return;
-        e.preventDefault();
-        setSplitChatOpen((s) => !s);
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
         e.preventDefault();
         setWorld((w) => {
           const next = w === "chat" ? "bots" : "chat";
@@ -374,7 +351,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [narrowChat]);
+  }, []);
 
   const openBrowserTab = useCallback((tab: Omit<BrowserTab, "id">) => {
     setBrowserOpen(true);
@@ -510,7 +487,7 @@ export function App() {
       ? `bots:${activeAgent.id}`
       : `bots:group:${activeProject?.id ?? "none"}`;
   const attachmentDestinations: AttachmentDestination[] = [];
-  if (splitChatOpen || world === "chat") {
+  if (world === "chat") {
     attachmentDestinations.push({ key: chatTargetKey, label: "Main Agent" });
   }
   if (botsVisible && activeProject && (botsSubView === "chat_group" || botsSubView === "chat_single")) {
@@ -581,8 +558,8 @@ export function App() {
   const handleSelectTarget = useCallback(
     (target: ModelTargetSelection) => {
       setSelectedChatTarget(target);
-      void bf
-        .sendCommand({
+      const commands: Array<Promise<unknown>> = [
+        bf.sendCommand({
           type: "config.update",
           patchJson: JSON.stringify({
             routing: {
@@ -591,12 +568,23 @@ export function App() {
               },
             },
           }),
-        })
-        .catch((err) => {
-          pushToast(err instanceof Error ? err.message : String(err), "error");
-        });
+        }),
+      ];
+      if (metaAgent) {
+        commands.push(
+          bf.sendCommand({
+            type: "bot.update_model",
+            agentId: metaAgent.id,
+            provider: target.provider,
+            model: target.model,
+          }),
+        );
+      }
+      void Promise.all(commands).catch((err) => {
+        pushToast(err instanceof Error ? err.message : String(err), "error");
+      });
     },
-    [bf.sendCommand, pushToast],
+    [bf.sendCommand, metaAgent, pushToast],
   );
 
   // Compute Context/Memory Ring % from loaded L1 memory budgets
@@ -720,7 +708,7 @@ export function App() {
   const executePaletteEntry = useCallback(
     (entry: PaletteEntry) => {
       if (entry.kind === "project") {
-        if (world === "bots" || splitChatOpen) selectBotsTeam(entry.projectId);
+        if (world === "bots") selectBotsTeam(entry.projectId);
         else setSelectedProjectId(entry.projectId);
       } else if (entry.kind === "bot") {
         if (entry.agent.projectId) setSelectedProjectId(entry.agent.projectId);
@@ -742,7 +730,7 @@ export function App() {
       }
       setPaletteOpen(false);
     },
-    [world, splitChatOpen, selectBotsTeam, openArtifactInBrowser, openBrowserTab],
+    [world, selectBotsTeam, openArtifactInBrowser, openBrowserTab],
   );
 
   const brandActivity = !bf.connected
@@ -871,20 +859,6 @@ export function App() {
             {bf.quietStatus.runningBots > 0 && <span className="rail-badge">{bf.quietStatus.runningBots}</span>}
           </button>
 
-          {!narrowChat && (
-            <button
-              type="button"
-              data-testid="split-chat-toggle-btn"
-              className={`rail-util-btn ${splitChatOpen ? "active" : ""}`}
-              onClick={() => setSplitChatOpen((open) => !open)}
-              title="Split workspace (Ctrl+Shift+S)"
-              aria-label="Split workspace"
-              aria-pressed={splitChatOpen}
-            >
-              <SplitPanelsIcon size={16} />
-              <span className="rail-label">Split</span>
-            </button>
-          )}
 
           <button
             type="button"
@@ -1200,7 +1174,7 @@ export function App() {
                             >
                               <BotAvatar
                                 role={meta.role}
-                                size={30}
+                                size={34}
                                 live
                                 agentStatus={bot.status}
                                 seed={bot.id}
@@ -1335,12 +1309,12 @@ export function App() {
             </div>
           )}
 
-          <header className={`center-header${world === "bots" && !splitChatOpen ? " bots-topbar" : ""}`}>
+          <header className={`center-header${world === "bots" ? " bots-topbar" : ""}`}>
             <div className="center-header-left">
-              {world === "bots" && !splitChatOpen && (
+              {world === "bots" && (
                 <TeamSwitcher projects={bf.projects} agents={bf.agents} project={activeProject} onSelect={selectBotsTeam} />
               )}
-              {splitChatOpen ? null : world === "chat" ? (
+              {world === "chat" ? (
                 <>
                   {mainProfile}
                   <span className="center-header-title">Main Agent</span>
@@ -1392,23 +1366,10 @@ export function App() {
             </div>
           </header>
 
-          <main ref={worldContainerRef} className={`world-container ${splitChatOpen ? "split-active" : ""}`}>
+          <main className="world-container">
             <div
-              className={`world-pane ${
-                splitChatOpen
-                  ? `split-left ${focusedChatPane === "chat" ? "focused" : ""}`
-                  : world === "chat"
-                    ? ""
-                    : "hidden"
-              }`.trim()}
-              style={splitChatOpen ? { width: `${splitPercent}%` } : undefined}
+              className={`world-pane ${world === "chat" ? "" : "hidden"}`.trim()}
             >
-              {splitChatOpen && (
-                <div className="split-main-header">
-                  {mainProfile}
-                  <strong>Main Agent</strong>
-                </div>
-              )}
               <ChatTab
                 messages={bf.chatMessages}
                 cards={bf.chatCards}
@@ -1489,27 +1450,9 @@ export function App() {
               />
             </div>
 
-            {splitChatOpen && (
-              <ResizeSplitter
-                orientation="vertical"
-                edge="left"
-                ariaLabel="Resize split chat panes"
-                onDelta={(dx) => {
-                  const containerW = worldContainerRef.current?.getBoundingClientRect().width || 900;
-                  setSplitPercent((prev) => clampSplitPercent(prev + (dx / Math.max(320, containerW)) * 100));
-                }}
-                onResizeEnd={() => writeStoredNumber(LS_SPLIT_PCT, splitPercentRef.current)}
-              />
-            )}
 
             <div
-              className={`world-pane ${
-                splitChatOpen
-                  ? `split-right ${focusedChatPane === "bots" ? "focused" : ""}`
-                  : world === "bots"
-                    ? ""
-                    : "hidden"
-              }`.trim()}
+              className={`world-pane ${world === "bots" ? "" : "hidden"}`.trim()}
             >
               <BotsTab
                 isVisible={botsVisible}
@@ -1537,9 +1480,7 @@ export function App() {
                 onRemoveAttachment={(id) => removeComposerAttachment(botsTargetKey, id)}
                 onClearAttachments={(sent) => clearSentAttachments(botsTargetKey, sent)}
                 onFocusPane={() => setFocusedChatPane("bots")}
-                compactSplit={splitChatOpen}
                 onSelectSubView={handleSelectSubView}
-                onSelectProject={selectBotsTeam}
                 onOpenProjectModal={() => setProjectModalOpen(true)}
                 onOpenBotSpawnModal={() => setBotSpawnModalOpen(true)}
                 onOpenBrowserItem={openBrowserItem}

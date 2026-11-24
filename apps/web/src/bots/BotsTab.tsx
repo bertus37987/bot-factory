@@ -23,13 +23,10 @@ import {
   Plus,
   RotateCw,
   Target,
-  Users,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type JSX } from "react";
 import type { ProviderSummary, RpcCommandInput } from "../client/useBotFactory";
-import { AgentProfile } from "../components/AgentProfile";
-import { BotAvatar, resolveBotRole } from "../components/BotAvatars";
 import { BearPawControlIcon } from "../components/BotFactoryIcons";
 import {
   PrecisionComposer,
@@ -41,7 +38,6 @@ import type { ReasoningEffort } from "../components/ReasoningEffortSlider";
 import { SelfModPanel } from "../phase3/Phase3Panels";
 import { CheckpointsMergePanel } from "../studio/CheckpointsMergePanel";
 import { BotChatStream } from "./BotChatStream";
-import { TeamSwitcher } from "./TeamSwitcher";
 import { TodoBoardView, type TodoCreateInput } from "./TodoBoardView";
 import "./BotsInbox.css";
 
@@ -73,9 +69,7 @@ export interface BotsTabProps {
   onRemoveAttachment?: (id: string) => void;
   onClearAttachments?: (sent: ComposerAttachment[]) => void;
   onFocusPane?: () => void;
-  compactSplit?: boolean;
   onSelectSubView: (view: BotsSubView, agentId?: string | null) => void;
-  onSelectProject: (projectId: string) => void;
   onOpenProjectModal: () => void;
   onOpenBotSpawnModal: () => void;
   onOpenBrowserItem: (
@@ -116,9 +110,7 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
     onRemoveAttachment,
     onClearAttachments,
     onFocusPane,
-    compactSplit = false,
     onSelectSubView,
-    onSelectProject,
     onOpenProjectModal,
     onOpenBotSpawnModal,
     onOpenBrowserItem,
@@ -244,6 +236,14 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
         intent: "project_manager",
         target,
       });
+      if (teamLead) {
+        await onSendCommand({
+          type: "bot.update_model",
+          agentId: teamLead.id,
+          provider: target.provider,
+          model: target.model,
+        });
+      }
     });
   };
 
@@ -324,79 +324,6 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
       onMouseDown={() => onFocusPane?.()}
       onFocusCapture={() => onFocusPane?.()}
     >
-      {compactSplit && <div className="bots-inbox-header">
-        <TeamSwitcher projects={projects} agents={agents} project={activeProject} onSelect={onSelectProject} />
-        {activeSubView === "chat_single" && activeAgent && (
-          <AgentProfile
-            key={activeAgent.id}
-            name={activeAgent.name}
-            role={resolveBotRole(activeAgent).role}
-            job={resolveBotRole(activeAgent).jobTitle}
-            status={activeAgent.status}
-            model={`${activeAgent.provider}/${activeAgent.model}`}
-            seed={activeAgent.id}
-          />
-        )}
-        <div className="bots-room-label">
-          {activeSubView === "chat_single" && activeAgent ? (
-            <><strong>{activeAgent.name}</strong><small>{activeAgent.model}</small></>
-          ) : (
-            <strong>{({
-              chat_group: "Group Chat",
-              chat_single: "Bot activity",
-              board: "Task Board",
-              checkpoints: "Checkpoints & Merge",
-              selfmod: "Self-Mod Sandbox",
-            })[activeSubView]}</strong>
-          )}
-        </div>
-      </div>}
-      {/* Compact Subview Switcher when rendered inside Split-Chat */}
-      {compactSplit && activeProject && (
-        <div className="split-bots-bar">
-          <div className="subview-tabs">
-            <button
-              type="button"
-              className={`subview-tab ${activeSubView === "chat_group" ? "active" : ""}`}
-              onClick={() => onSelectSubView("chat_group")}
-            >
-              <Users size={12} strokeWidth={1.6} />
-              <span>Group</span>
-            </button>
-            <button
-              type="button"
-              className={`subview-tab ${activeSubView === "chat_single" ? "active" : ""}`}
-              onClick={() => onSelectSubView("chat_single", activeAgent?.id ?? null)}
-              disabled={!activeAgent}
-            >
-              <span>{activeAgent?.name ?? "Bot"}</span>
-            </button>
-            <button
-              type="button"
-              className={`subview-tab ${activeSubView === "board" ? "active" : ""}`}
-              onClick={() => onSelectSubView("board")}
-            >
-              <Kanban size={12} strokeWidth={1.6} />
-              <span>Todo Board</span>
-            </button>
-          </div>
-          {activeSubView === "chat_single" && projectAgents.length > 1 && (
-            <select
-              className="todo-board-select"
-              aria-label="Select bot chat"
-              value={activeAgent?.id ?? ""}
-              onChange={(e) => onSelectSubView("chat_single", e.target.value)}
-            >
-              {projectAgents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} ({resolveBotRole(a).jobTitle})
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-      )}
-
       {/* Goal Status Strip + Explicit Target Bot Safety Controls in Chat Views */}
       {activeProject && (activeSubView === "chat_group" || activeSubView === "chat_single") && (
         <>

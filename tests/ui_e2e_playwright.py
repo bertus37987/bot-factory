@@ -143,13 +143,13 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
 
     close_panel.click()
     page.set_viewport_size({"width": 1024, "height": 768})
-    page.get_by_test_id("split-chat-toggle-btn").click()
-    expect(page.locator(".split-active")).to_be_visible()
+    expect(page.get_by_test_id("split-chat-toggle-btn")).to_have_count(0)
+    expect(page.locator(".split-active")).to_have_count(0)
     expect(sidebar).to_have_count(0)
     team.click()
     expect(search).to_be_visible()
     if capture_dir:
-        page.screenshot(path=os.path.join(capture_dir, "bots-team-switch-split.png"), animations="disabled")
+        page.screenshot(path=os.path.join(capture_dir, "bots-team-switch-wide.png"), animations="disabled")
     search.press("Escape")
 
     page.emulate_media(reduced_motion="reduce")
@@ -190,9 +190,10 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
 
 def assert_all_images_loaded(page, *, require_bear_avatar: bool = True) -> None:
     if require_bear_avatar:
-        bear_imgs = page.locator(".bear-avatar-wrap img.bear-avatar-img")
-        if bear_imgs.count() == 0:
-            raise AssertionError("Expected at least one .bear-avatar-wrap img.bear-avatar-img element")
+        plush_bodies = page.locator(".bear-avatar-wrap svg.bear-plush-body")
+        if plush_bodies.count() == 0:
+            raise AssertionError("Expected at least one .bear-avatar-wrap svg.bear-plush-body element")
+        expect(plush_bodies.first).to_be_visible()
         eye_rigs = page.locator(".bear-avatar-wrap svg.bear-eye-rig")
         if eye_rigs.count() == 0:
             raise AssertionError("Expected at least one .bear-avatar-wrap svg.bear-eye-rig SVG element")
@@ -297,7 +298,7 @@ def main() -> int:
         expect(shell).to_be_visible()
         rail = page.locator(".icon-rail")
         expect(rail).to_be_visible()
-        for label in ("Main", "Teams", "Split", "Browser", "Search", "Inbox", "Memory", "Settings", "Theme"):
+        for label in ("Main", "Teams", "Browser", "Search", "Inbox", "Memory", "Settings", "Theme"):
             expect(rail).to_contain_text(label)
         expect(page.locator(".center-header")).to_contain_text("Main Agent")
         expect(page.locator(".hydration-shell")).to_have_count(0)
@@ -344,8 +345,29 @@ def main() -> int:
         expect(sidebar).to_contain_text("ui-mockup.svg")
         expect(sidebar).to_contain_text("hero-monolith.glb")
 
-        # 3. Send a message in Main Agent (ChatTab) via PrecisionComposer -> verify Messenger bubbles
+        # 3. Inspect the keyboard-accessible model target picker, then send a Main Agent message
         chat_pane = page.locator(".world-pane:not(.hidden)")
+        model_btn = chat_pane.locator(".pc-model-btn")
+        expect(model_btn).to_be_visible()
+        model_btn.click()
+        expect(model_btn).to_have_attribute("aria-expanded", "true")
+        model_pop = page.locator('.pc-pop.pc-model-pop[role="dialog"]')
+        expect(model_pop).to_be_visible()
+        model_search = model_pop.get_by_role("combobox", name="Search models")
+        expect(model_search).to_be_focused()
+        options = model_pop.get_by_role("option")
+        assert options.count() > 0
+        assert model_pop.locator('[role="option"][aria-selected="true"]').count() > 0
+        model_search.press("ArrowDown")
+        assert (model_search.get_attribute("aria-activedescendant") or "").endswith("-option-1")
+        model_search.fill("no-such-model-route")
+        expect(model_pop.locator(".pc-model-empty")).to_contain_text("No models match")
+        model_search.fill("")
+        model_search.press("Escape")
+        expect(model_pop).to_have_count(0)
+        expect(model_btn).to_be_focused()
+        expect(model_btn).to_have_attribute("aria-expanded", "false")
+
         chat_input = chat_pane.locator("textarea.pc-input")
         user_prompt = "Hello Main Agent, verify workspace status for Playwright."
         chat_input.fill(user_prompt)
@@ -551,48 +573,28 @@ def main() -> int:
         browser_shell.locator(".iab-close").click()
         expect(browser_shell).to_have_count(0)
 
-        # 4g. Contextual panel close + destination reopen + Split-Chat toggle
+        # 4g. Contextual panel close/reopen, disabled split regression, and Main Agent profile motion
         page.locator(".drawer-close-btn").click()
         expect(page.locator(".side-drawer")).to_have_count(0)
         page.locator('nav.icon-rail button[aria-label="Main Agent"]').click()
         expect(page.locator(".side-drawer")).to_be_visible()
 
-        split_btn = page.locator('[data-testid="split-chat-toggle-btn"]')
-        split_btn.click()
-        expect(split_btn).to_have_attribute("aria-pressed", "true")
-        expect(page.locator(".world-container.split-active")).to_be_visible()
-        expect(page.locator(".world-pane.split-left .chat-root")).to_be_visible()
-        expect(page.locator(".world-pane.split-right .bots-center-shell")).to_be_visible()
-        expect(page.locator(".split-main-header")).to_contain_text("Main Agent")
-        expect(page.locator(".split-right .bots-team-trigger")).to_contain_text("Playwright Smoke Project")
-        expect(page.get_by_text("Focus: Team", exact=True)).to_have_count(0)
+        expect(page.locator('[data-testid="split-chat-toggle-btn"]')).to_have_count(0)
+        page.keyboard.press("Control+Shift+S")
+        expect(page.locator(".world-container.split-active")).to_have_count(0)
+
         profile_btn = page.get_by_role("button", name="Main Agent profile")
         profile_btn.hover()
         expect(profile_btn.locator(".bear-portrait-stage")).to_have_css("animation-name", "bear-acknowledge")
         profile_btn.click()
         expect(page.get_by_role("region", name="Main Agent details")).to_contain_text("Orchestrator")
-        capture_studio(page, "workspace-profile-split")
+        capture_studio(page, "workspace-profile-main")
         page.keyboard.press("Escape")
         expect(profile_btn).to_be_focused()
         expect(profile_btn).to_have_attribute("aria-expanded", "false")
         page.emulate_media(reduced_motion="reduce")
         expect(profile_btn.locator(".bear-portrait-stage")).to_have_css("animation-name", "none")
         page.emulate_media(reduced_motion="no-preference")
-
-        page.get_by_role("button", name="Browser", exact=True).first.click()
-        sidebar.locator("button.drawer-item", has_text="ui-mockup.svg").click()
-        split_image_actions = browser_shell.locator(".iab-image-toolbar")
-        expect(split_image_actions.get_by_role("button", name="Add to Main Agent")).to_be_visible()
-        split_image_actions.get_by_role("button", name="Add to Playwright Smoke Project team").click()
-        expect(page.locator(".split-right .pc-att-chip")).to_contain_text("ui-mockup.svg")
-        expect(page.locator(".split-left .pc-att-chip")).to_have_count(0)
-        expect(page.locator(".split-right").get_by_role("button", name="Send to Team Lead")).to_be_enabled()
-        capture_studio(page, "workspace-attachment-actions")
-        page.locator(".split-right .pc-att-remove").click()
-        browser_shell.locator(".iab-close").click()
-        split_btn.click()
-        expect(split_btn).to_have_attribute("aria-pressed", "false")
-        expect(page.locator(".world-container.split-active")).to_have_count(0)
 
         # 5. Switch via 44px icon rail to Engineering Teams -> verify NO "Debates & Verifier" -> Spawn Atlas -> TodoBoardView
         page.locator('nav.icon-rail button[aria-label="Engineering Teams"]').click()
