@@ -48,7 +48,9 @@ export interface PrecisionComposerProps {
   onChangeAutonomy: (v: AutonomyLevel) => void;
   attachments?: ComposerAttachment[];
   onRemoveAttachment?: (id: string) => void;
-  onClearAttachments?: () => void;
+  onClearAttachments?: (sent: ComposerAttachment[]) => void;
+  draft?: string;
+  onDraftChange?: (text: string) => void;
   onSubmit: (text: string) => Promise<void>;
   onSlashAction?: (command: string) => void;
 }
@@ -177,10 +179,14 @@ export function PrecisionComposer({
   attachments,
   onRemoveAttachment,
   onClearAttachments,
+  draft,
+  onDraftChange,
   onSubmit,
   onSlashAction,
 }: PrecisionComposerProps): JSX.Element {
-  const [text, setText] = useState("");
+  const [localText, setLocalText] = useState("");
+  const text = draft ?? localText;
+  const setText = onDraftChange ?? setLocalText;
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [openPop, setOpenPop] = useState<PopKind>(null);
@@ -286,7 +292,7 @@ export function PrecisionComposer({
     try {
       await onSubmit(payload);
       setText("");
-      onClearAttachments?.();
+      onClearAttachments?.(attachments ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -436,6 +442,7 @@ export function PrecisionComposer({
           rows={1}
           placeholder={placeholder}
           value={text}
+          readOnly={draft !== undefined && isBusy}
           disabled={isDisabled}
           onChange={(e) => {
             setText(e.target.value);
@@ -708,7 +715,7 @@ export function PrecisionComposer({
           {mode === "steer" ? "Steer → Team Lead" : "Local · 127.0.0.1"}
         </span>
         <span className="pc-strip-sep" />
-        {projects.length > 0 && (
+        {projects.length > 0 && (mode === "chat" || onSelectProject) && (
           <span className="pc-anchor">
             <button
               type="button"

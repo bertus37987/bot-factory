@@ -19,6 +19,9 @@ recovered on top of `a785bba`; it supersedes the Phase 5 UI status in
 
 ## Research And Design
 
+The [Bots UX spec](./BOTS_UX.md) records the team organization decision
+and the interaction model for the Bots inbox.
+
 The [research archive](./research/antigravity-studio-v2/README.md) contains
 the implementation plan, both source-cited browser research briefs, the
 pre-V2 internal harness audit, the condensed dossier, the Phase 1-5

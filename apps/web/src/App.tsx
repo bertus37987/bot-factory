@@ -11,9 +11,6 @@ import {
   Layers,
   Lock,
   Moon,
-  OctagonX,
-  Pause,
-  Play,
   Plus,
   Search,
   Settings,
@@ -24,6 +21,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRecord, ArtifactEntry, RepoFileEntry } from "@bot-factory/shared";
 import { BotsTab, type BotsSubView } from "./bots/BotsTab";
+import { TeamSwitcher } from "./bots/TeamSwitcher";
 import { BrowserWorkspaceShell } from "./browser/BrowserWorkspaceShell";
 import { InAppBrowser, type BrowserTab, type BrowserTabKind } from "./browser/InAppBrowser";
 import type { BrowserDockMode, ComposerAttachment } from "./browser/types";
@@ -141,7 +139,9 @@ export function App() {
   const [drawerWidth, setDrawerWidth] = useState<number>(() =>
     clampDrawerWidth(readStoredNumber(LS_DRAWER_W, 256)),
   );
-  const [splitChatOpen, setSplitChatOpen] = useState(false);
+  const [splitRequested, setSplitChatOpen] = useState(false);
+  const [narrowChat, setNarrowChat] = useState(() => window.matchMedia("(max-width: 699px)").matches);
+  const splitChatOpen = splitRequested && !narrowChat;
   const [splitPercent, setSplitPercent] = useState<number>(() =>
     clampSplitPercent(readStoredNumber(LS_SPLIT_PCT, 48)),
   );
@@ -174,7 +174,6 @@ export function App() {
   const [memoryStudioOpen, setMemoryStudioOpen] = useState(false);
 
   const [expandedSubagentParents, setExpandedSubagentParents] = useState<Record<string, boolean>>({});
-  const [safetyBusy, setSafetyBusy] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   const [unlockToken, setUnlockToken] = useState("");
@@ -338,10 +337,18 @@ export function App() {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 699px)");
+    const onChange = (e: MediaQueryListEvent) => setNarrowChat(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
   // Global keyboard shortcuts (Ctrl+E world switch, Ctrl+K quick palette, Ctrl+B toggle drawer, Ctrl+Shift+S split chat)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "s") {
+        if (narrowChat) return;
         e.preventDefault();
         setSplitChatOpen((s) => !s);
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
@@ -365,7 +372,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [narrowChat]);
 
   const openBrowserTab = useCallback((tab: Omit<BrowserTab, "id">) => {
     setBrowserOpen(true);
@@ -538,6 +545,15 @@ export function App() {
     });
   }, []);
 
+  const clearSentAttachments = useCallback((targetKey: string, sent: ComposerAttachment[]) => {
+    if (!sent.length) return;
+    const sentItems = new Set(sent);
+    setComposerAttachmentsByTarget((prev) => ({
+      ...prev,
+      [targetKey]: (prev[targetKey] ?? []).filter((item) => !sentItems.has(item)),
+    }));
+  }, []);
+
   const handleSelectSubView = useCallback(
     (view: BotsSubView, agentId?: string | null) => {
       setBotsSubView(view);
@@ -593,24 +609,23 @@ export function App() {
     return hasL1Content || bf.l2Facts.length > 0;
   }, [bf.l1Memory, bf.l2Facts.length]);
 
-  // Pinned Bots (up to 3 top bots in active project: Team Lead, primary Builder, Verifier)
-  const pinnedBots = useMemo(() => {
-    const topLevel = projectAgents.filter((a) => a.scope !== "sidekick");
-    return topLevel.slice(0, 3);
-  }, [projectAgents]);
+  const selectBotsTeam = useCallback((projectId: string) => {
+    setSelectedProjectId(projectId);
+    setSelectedAgentId(null);
+    setBotsSubView("chat_group");
+    setFocusedChatPane("bots");
+    if (window.matchMedia("(max-width: 999px)").matches) setDrawerOpen(false);
+  }, []);
 
-  const unreadBots = useMemo(
-    () =>
-      bf.agents.filter(
-        (a) =>
-          a.scope !== "global" &&
-          (a.status === "working" ||
-            a.status === "waiting_review" ||
-            a.status === "debating" ||
-            a.status === "requires_action"),
-      ),
-    [bf.agents],
-  );
+  const selectRosterBot = (agentId: string) => {
+    handleSelectSubView("chat_single", agentId);
+    if (window.matchMedia("(max-width: 999px)").matches) setDrawerOpen(false);
+  };
+
+  const selectBotsWorkspace = (view: BotsSubView) => {
+    handleSelectSubView(view);
+    if (window.matchMedia("(max-width: 999px)").matches) setDrawerOpen(false);
+  };
 
   const inboxAlertCount = useMemo(() => {
     const permCount = bf.pendingPermissions.length;
@@ -691,8 +706,8 @@ export function App() {
   const executePaletteEntry = useCallback(
     (entry: PaletteEntry) => {
       if (entry.kind === "project") {
-        setSelectedProjectId(entry.projectId);
-        if (world === "bots") setBotsSubView("chat_group");
+        if (world === "bots" || splitChatOpen) selectBotsTeam(entry.projectId);
+        else setSelectedProjectId(entry.projectId);
       } else if (entry.kind === "bot") {
         if (entry.agent.projectId) setSelectedProjectId(entry.agent.projectId);
         setSelectedAgentId(entry.agent.id);
@@ -713,7 +728,7 @@ export function App() {
       }
       setPaletteOpen(false);
     },
-    [world, openArtifactInBrowser, openBrowserTab],
+    [world, splitChatOpen, selectBotsTeam, openArtifactInBrowser, openBrowserTab],
   );
 
   const brandActivity = !bf.connected
@@ -798,7 +813,7 @@ export function App() {
   }
 
   return (
-    <div className="app-shell-v3">
+    <div className={`app-shell-v3${world === "bots" ? " bots-inbox-active" : ""}`}>
       {/* Far-Left 44px Custom Icon Rail */}
       <nav className="icon-rail" aria-label="Primary navigation">
         <div className="icon-rail-top">
@@ -837,6 +852,7 @@ export function App() {
             onClick={() => setDrawerOpen((o) => !o)}
             title="Toggle Sidebar (Ctrl+B)"
             aria-label="Toggle sidebar"
+            aria-expanded={drawerOpen}
           >
             <SidebarToggleIcon size={16} />
           </button>
@@ -915,7 +931,7 @@ export function App() {
       {/* Secondary Resizable & Collapsible Contextual Drawer */}
       {drawerOpen && (
         <>
-          <aside className="side-drawer" style={{ width: drawerWidth }}>
+          <aside className={`side-drawer ${world === "bots" ? "bots-inbox-drawer" : ""}`} style={{ width: drawerWidth }}>
           {world === "chat" ? (
             <>
               <div className="drawer-header">
@@ -1056,7 +1072,7 @@ export function App() {
           ) : (
             <>
               <div className="drawer-header">
-                <span className="drawer-title">Engineering Teams</span>
+                <span className="drawer-title">Conversations</span>
                 <button
                   type="button"
                   className="btn xs"
@@ -1068,112 +1084,23 @@ export function App() {
               </div>
 
               <div className="drawer-scroll">
-                {pinnedBots.length > 0 && activeProject && (
-                  <div className="drawer-section">
-                    <div className="section-eyebrow">
-                      <span>Pinned Bots</span>
-                      <span className="mono-tag">{pinnedBots.length}</span>
-                    </div>
-                    <div className="pinned-bots-grid">
-                      {pinnedBots.map((bot) => {
-                        const meta = resolveBotRole(bot);
-                        const isSel = activeAgent?.id === bot.id && botsSubView === "chat_single";
-                        return (
-                          <button
-                            key={bot.id}
-                            type="button"
-                            className={`pinned-bot-tile ${isSel ? "active" : ""}`}
-                            onClick={() => {
-                              setSelectedProjectId(activeProject.id);
-                              setSelectedAgentId(bot.id);
-                              setBotsSubView("chat_single");
-                            }}
-                            title={`${bot.name} (${meta.jobTitle})`}
-                          >
-                            <BotAvatar
-                              role={meta.role}
-                              size={28}
-                              active={bot.status === "working" || bot.status === "debating"}
-                              agentStatus={bot.status}
-                              seed={bot.id}
-                            />
-                            <span className="pinned-bot-name">{bot.name}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {unreadBots.length > 0 && (
-                  <div className="drawer-section">
-                    <div className="section-eyebrow">
-                      <span>Active / Review</span>
-                      <span className="pill warning">{unreadBots.length}</span>
-                    </div>
-                    {unreadBots.map((bot) => {
-                      const meta = resolveBotRole(bot);
-                      const isSel = activeAgent?.id === bot.id && botsSubView === "chat_single";
-                      return (
-                        <button
-                          key={bot.id}
-                          type="button"
-                          className={`bot-roster-row ${isSel ? "active" : ""}`}
-                          onClick={() => {
-                            if (bot.projectId) setSelectedProjectId(bot.projectId);
-                            setSelectedAgentId(bot.id);
-                            setBotsSubView("chat_single");
-                          }}
-                        >
-                          <BotAvatar
-                            role={meta.role}
-                            size={30}
-                            active={bot.status === "working" || bot.status === "debating"}
-                            agentStatus={bot.status}
-                            seed={bot.id}
-                            badgeCount={
-                              bot.status === "waiting_review" || bot.status === "requires_action" ? 1 : undefined
-                            }
-                          />
-                          <div className="bot-roster-copy">
-                            <div className="bot-roster-top">
-                              <span className="bot-roster-name">{bot.name}</span>
-                              <JobTitlePill label={meta.jobTitle} role={meta.role} />
-                            </div>
-                            <div className="bot-roster-sub">{bot.lastSummary ?? bot.status}</div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
                 {bf.projects.length === 0 && (
                   <div className="drawer-empty-hint">
                     No projects yet. Click <b>+ Project</b> above to provision one.
                   </div>
                 )}
 
-                {bf.projects.map((p) => {
-                  const allProjectBots = bf.agents.filter((a) => a.projectId === p.id);
+                {(activeProject ? [activeProject] : []).map((p) => {
+                  const allProjectBots = projectAgents;
                   const topLevelBots = allProjectBots.filter((a) => a.scope !== "sidekick");
-                  const isCurrentProj = activeProject?.id === p.id;
                   const clusterRoles = topLevelBots.slice(0, 4).map((b) => resolveBotRole(b).role);
 
                   return (
                     <div key={p.id} className="drawer-section">
                       <div className="drawer-proj-row">
-                        <button
-                          type="button"
-                          className={`drawer-proj-title ${isCurrentProj ? "active" : ""}`}
-                          onClick={() => {
-                            setSelectedProjectId(p.id);
-                            setBotsSubView("chat_group");
-                          }}
-                        >
-                          <Folder size={13} strokeWidth={1.6} />
+                        <div className="drawer-proj-title">
                           <span>{p.name}</span>
-                        </button>
+                        </div>
                         <button
                           type="button"
                           className="btn xs ghost"
@@ -1190,11 +1117,9 @@ export function App() {
 
                       <button
                         type="button"
-                        className={`bot-roster-row ${isCurrentProj && botsSubView === "chat_group" ? "active" : ""}`}
-                        onClick={() => {
-                          setSelectedProjectId(p.id);
-                          setBotsSubView("chat_group");
-                        }}
+                        className={`bot-roster-row ${botsSubView === "chat_group" ? "active" : ""}`}
+                        aria-current={botsSubView === "chat_group" ? "true" : undefined}
+                        onClick={() => selectBotsTeam(p.id)}
                       >
                         <GroupAvatarCluster
                           roles={clusterRoles.length > 0 ? clusterRoles : ["team_lead", "builder"]}
@@ -1202,8 +1127,7 @@ export function App() {
                         />
                         <div className="bot-roster-copy">
                           <div className="bot-roster-top">
-                            <span className="bot-roster-name">Core Team</span>
-                            <JobTitlePill label="Group Chat" tone="accent" />
+                            <span className="bot-roster-name">Group Chat</span>
                           </div>
                           <div className="bot-roster-sub">
                             {topLevelBots.length} {topLevelBots.length === 1 ? "bot" : "bots"} in channel
@@ -1213,7 +1137,7 @@ export function App() {
 
                       {topLevelBots.map((bot) => {
                         const meta = resolveBotRole(bot);
-                        const isSel = isCurrentProj && activeAgent?.id === bot.id && botsSubView === "chat_single";
+                        const isSel = activeAgent?.id === bot.id && botsSubView === "chat_single";
                         const subagents = allProjectBots.filter(
                           (s) => s.scope === "sidekick" && s.parentAgentId === bot.id,
                         );
@@ -1224,11 +1148,8 @@ export function App() {
                             <button
                               type="button"
                               className={`bot-roster-row ${isSel ? "active" : ""}`}
-                              onClick={() => {
-                                setSelectedProjectId(p.id);
-                                setSelectedAgentId(bot.id);
-                                setBotsSubView("chat_single");
-                              }}
+                              aria-current={isSel ? "true" : undefined}
+                              onClick={() => selectRosterBot(bot.id)}
                             >
                               <BotAvatar
                                 role={meta.role}
@@ -1236,9 +1157,6 @@ export function App() {
                                 active={bot.status === "working" || bot.status === "debating"}
                                 agentStatus={bot.status}
                                 seed={bot.id}
-                                badgeCount={
-                                  bot.status === "waiting_review" || bot.status === "requires_action" ? 1 : undefined
-                                }
                               />
                               <div className="bot-roster-copy">
                                 <div className="bot-roster-top">
@@ -1246,8 +1164,8 @@ export function App() {
                                   <JobTitlePill label={meta.jobTitle} role={meta.role} />
                                 </div>
                                 <div className="bot-roster-sub">
-                                  {bot.model}
-                                  {bot.worktreeBranch ? ` · ${bot.worktreeBranch}` : ""}
+                                  {bot.status.replaceAll("_", " ")}
+                                  {bot.lastSummary ? ` · ${bot.lastSummary}` : ""}
                                 </div>
                               </div>
                             </button>
@@ -1257,6 +1175,7 @@ export function App() {
                                 <button
                                   type="button"
                                   className="subagent-tree-toggle"
+                                  aria-expanded={subExpanded}
                                   onClick={() =>
                                     setExpandedSubagentParents((prev) => ({
                                       ...prev,
@@ -1270,17 +1189,14 @@ export function App() {
                                 {subExpanded &&
                                   subagents.map((sub) => {
                                     const subSel =
-                                      isCurrentProj && activeAgent?.id === sub.id && botsSubView === "chat_single";
+                                      activeAgent?.id === sub.id && botsSubView === "chat_single";
                                     return (
                                       <button
                                         key={sub.id}
                                         type="button"
                                         className={`subagent-node ${subSel ? "active" : ""}`}
-                                        onClick={() => {
-                                          setSelectedProjectId(p.id);
-                                          setSelectedAgentId(sub.id);
-                                          setBotsSubView("chat_single");
-                                        }}
+                                        aria-current={subSel ? "true" : undefined}
+                                        onClick={() => selectRosterBot(sub.id)}
                                       >
                                         <BotAvatar
                                           role="cub"
@@ -1310,7 +1226,7 @@ export function App() {
                   <button
                     type="button"
                     className={`drawer-item ${botsSubView === "board" ? "active" : ""}`}
-                    onClick={() => setBotsSubView("board")}
+                    onClick={() => selectBotsWorkspace("board")}
                   >
                     <Kanban size={14} strokeWidth={1.6} />
                     <span className="drawer-item-label">Task Board</span>
@@ -1319,7 +1235,7 @@ export function App() {
                   <button
                     type="button"
                     className={`drawer-item ${botsSubView === "checkpoints" ? "active" : ""}`}
-                    onClick={() => setBotsSubView("checkpoints")}
+                    onClick={() => selectBotsWorkspace("checkpoints")}
                   >
                     <GitBranch size={14} strokeWidth={1.6} />
                     <span className="drawer-item-label">Checkpoints &amp; Merge</span>
@@ -1328,7 +1244,7 @@ export function App() {
                   <button
                     type="button"
                     className={`drawer-item ${botsSubView === "selfmod" ? "active" : ""}`}
-                    onClick={() => setBotsSubView("selfmod")}
+                    onClick={() => selectBotsWorkspace("selfmod")}
                   >
                     <Layers size={14} strokeWidth={1.6} />
                     <span className="drawer-item-label">Self-Mod Sandbox</span>
@@ -1371,8 +1287,11 @@ export function App() {
             </div>
           )}
 
-          <header className="center-header">
+          <header className={`center-header${world === "bots" && !splitChatOpen ? " bots-topbar" : ""}`}>
             <div className="center-header-left">
+              {world === "bots" && !splitChatOpen && (
+                <TeamSwitcher projects={bf.projects} agents={bf.agents} project={activeProject} onSelect={selectBotsTeam} />
+              )}
               {splitChatOpen ? (
                 <>
                   <BotAvatar
@@ -1402,18 +1321,7 @@ export function App() {
                   {activeProject && <span className="mono-tag">{activeProject.name}</span>}
                 </>
               ) : botsSubView === "chat_group" && activeProject ? (
-                <>
-                  <GroupAvatarCluster
-                    roles={
-                      projectAgents.length > 0
-                        ? projectAgents.slice(0, 4).map((a) => resolveBotRole(a).role)
-                        : ["team_lead", "builder"]
-                    }
-                    size={26}
-                  />
-                  <span className="center-header-title">{activeProject.name}</span>
-                  <JobTitlePill label={`${projectAgents.length} Bots`} tone="accent" role="team_lead" />
-                </>
+                <span className="center-header-title">Group Chat</span>
               ) : botsSubView === "chat_single" && activeAgent && activeBotMeta ? (
                 <>
                   <BotAvatar
@@ -1425,6 +1333,9 @@ export function App() {
                   />
                   <span className="center-header-title">{activeAgent.name}</span>
                   <JobTitlePill label={activeBotMeta.jobTitle} role={activeBotMeta.role} />
+                  <span className="bots-inspected-model" title={`${activeAgent.provider}/${activeAgent.model}`}>
+                    {activeAgent.model}
+                  </span>
                   {activeAgent.worktreeBranch && (
                     <span className="mono-tag">{activeAgent.worktreeBranch}</span>
                   )}
@@ -1453,80 +1364,13 @@ export function App() {
                 </button>
               )}
 
-              {(world === "bots" || (splitChatOpen && focusedChatPane === "bots")) &&
-                activeAgent &&
-                (botsSubView === "chat_single" || botsSubView === "chat_group") && (
-                <div className="safety-controls">
-                  {(activeAgent.status === "paused" ||
-                    activeAgent.status === "stopped" ||
-                    activeAgent.status === "error") && (
-                    <button
-                      type="button"
-                      className="btn xs"
-                      disabled={safetyBusy}
-                      onClick={async () => {
-                        setSafetyBusy(true);
-                        try {
-                          await bf.sendCommand({ type: "bot.resume", agentId: activeAgent.id });
-                        } catch (err) {
-                          pushToast(err instanceof Error ? err.message : String(err), "error");
-                        } finally {
-                          setSafetyBusy(false);
-                        }
-                      }}
-                      title="Resume bot session"
-                    >
-                      <Play size={12} strokeWidth={1.6} />
-                      <span>Resume</span>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="btn xs"
-                    disabled={safetyBusy || activeAgent.status === "paused" || activeAgent.status === "stopped"}
-                    onClick={async () => {
-                      setSafetyBusy(true);
-                      try {
-                        await bf.sendCommand({ type: "bot.pause", agentId: activeAgent.id });
-                      } catch (err) {
-                        pushToast(err instanceof Error ? err.message : String(err), "error");
-                      } finally {
-                        setSafetyBusy(false);
-                      }
-                    }}
-                    title="Soft pause active bot"
-                  >
-                    <Pause size={12} strokeWidth={1.6} />
-                    <span>Pause</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn xs danger"
-                    disabled={safetyBusy || activeAgent.status === "stopped"}
-                    onClick={async () => {
-                      setSafetyBusy(true);
-                      try {
-                        await bf.sendCommand({ type: "bot.stop", agentId: activeAgent.id });
-                      } catch (err) {
-                        pushToast(err instanceof Error ? err.message : String(err), "error");
-                      } finally {
-                        setSafetyBusy(false);
-                      }
-                    }}
-                    title="Hard process stop"
-                  >
-                    <OctagonX size={12} strokeWidth={1.6} />
-                    <span>Stop</span>
-                  </button>
-                </div>
-              )}
-
               <button
                 type="button"
                 data-testid="split-chat-toggle-btn"
                 className={`btn xs ${splitChatOpen ? "active-outline" : ""}`}
                 onClick={() => setSplitChatOpen((s) => !s)}
-                title="Split Chat: Main Agent + Engineering Teams (Ctrl+Shift+S)"
+                title={narrowChat ? "Split Chat needs a wider window" : "Split Chat: Main Agent + Engineering Teams (Ctrl+Shift+S)"}
+                disabled={narrowChat}
                 aria-pressed={splitChatOpen}
               >
                 <Columns2 size={14} strokeWidth={1.6} />
@@ -1538,6 +1382,8 @@ export function App() {
                 className={`btn xs ${browserOpen ? "active-outline" : ""}`}
                 onClick={toggleBrowserSidebar}
                 title="Toggle In-App Browser"
+                aria-label="Browser"
+                aria-pressed={browserOpen}
               >
                 <BrowserPaneIcon size={14} />
                 <span>Browser</span>
@@ -1677,15 +1523,16 @@ export function App() {
                 checkpoints={activeCheckpoints}
                 gitDiff={activeGitDiff}
                 activeSubView={botsSubView}
+                conversationKey={botsTargetKey}
                 activeAgentId={activeAgent?.id ?? null}
                 selfModProposals={bf.selfModProposals}
                 attachments={composerAttachmentsByTarget[botsTargetKey] ?? []}
                 onRemoveAttachment={(id) => removeComposerAttachment(botsTargetKey, id)}
-                onClearAttachments={() => clearComposerAttachments(botsTargetKey)}
+                onClearAttachments={(sent) => clearSentAttachments(botsTargetKey, sent)}
                 onFocusPane={() => setFocusedChatPane("bots")}
                 compactSplit={splitChatOpen}
                 onSelectSubView={handleSelectSubView}
-                onSelectProject={setSelectedProjectId}
+                onSelectProject={selectBotsTeam}
                 onOpenProjectModal={() => setProjectModalOpen(true)}
                 onOpenBotSpawnModal={() => setBotSpawnModalOpen(true)}
                 onOpenBrowserItem={openBrowserItem}
@@ -1801,8 +1648,11 @@ export function App() {
             seedDemoArtifacts: input.seedDemoArtifacts,
             ...(input.verifyChecks.length > 0 ? { verifyChecks: input.verifyChecks } : {}),
           });
-          setSelectedProjectId(res.project.id);
-          setSelectedAgentId(res.projectManager?.id ?? null);
+          if (world === "bots") selectBotsTeam(res.project.id);
+          else {
+            setSelectedProjectId(res.project.id);
+            setSelectedAgentId(res.projectManager?.id ?? null);
+          }
           pushToast(`Project "${input.name}" provisioned`, "success");
         }}
       />
