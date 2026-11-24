@@ -958,7 +958,7 @@ export function BotChatStream({
           <button type="button" className="bcs-team-pill" onClick={onOpenGroupRoom}>
             <span>{agents.length} bots on team</span>
             <GroupAvatarCluster
-              roles={agents.slice(0, 4).map((a) => resolveBotRole(a).role)}
+              roles={agents.map((a) => resolveBotRole(a).role)}
               size={18}
             />
             <span>Open Group Chat</span>

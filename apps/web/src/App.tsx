@@ -38,7 +38,6 @@ import {
   DiffBranchIcon,
   DocTabIcon,
   ImageTabIcon,
-  SidebarToggleIcon,
 } from "./components/BotFactoryIcons";
 import { BotThinkingOrb } from "./components/BotThinkingOrb";
 import type { AutonomyLevel, ModelTargetSelection } from "./components/PrecisionComposer";
@@ -833,7 +832,7 @@ export function App() {
 
   return (
     <div className={`app-shell-v3${world === "bots" ? " bots-inbox-active" : ""}${browserOpen ? " workspace-browser-open" : ""}`}>
-      {/* Far-Left 44px Custom Icon Rail */}
+      {/* Destination Rail */}
       <nav className="icon-rail" aria-label="Primary navigation">
         <div className="icon-rail-top">
           <button
@@ -842,39 +841,79 @@ export function App() {
             onClick={() => {
               setWorld("chat");
               setFocusedChatPane("chat");
+              setDrawerOpen(true);
             }}
             title="Main Agent (Ctrl+E)"
             aria-label="Main Agent"
+            aria-current={world === "chat" ? "page" : undefined}
           >
-            <AgentChatApertureIcon size={18} />
+            <AgentChatApertureIcon size={17} />
+            <span className="rail-label">Main</span>
           </button>
 
           <button
             type="button"
-            className={`rail-mode-btn ${world === "bots" ? "active" : ""}`}
+            className={`rail-mode-btn ${world === "bots" && botsSubView !== "board" ? "active" : ""}`}
             onClick={() => {
               setWorld("bots");
+              handleSelectSubView("chat_group");
               setFocusedChatPane("bots");
+              setDrawerOpen(true);
             }}
             title="Engineering Teams (Ctrl+E)"
             aria-label="Engineering Teams"
+            aria-current={world === "bots" && botsSubView !== "board" ? "page" : undefined}
           >
-            <BotsLatticeIcon size={18} />
+            <BotsLatticeIcon size={17} />
+            <span className="rail-label">Teams</span>
             {bf.quietStatus.runningBots > 0 && <span className="rail-badge">{bf.quietStatus.runningBots}</span>}
           </button>
 
-          <div className="rail-divider" />
+          <button
+            type="button"
+            className={`rail-mode-btn ${world === "bots" && botsSubView === "board" ? "active" : ""}`}
+            onClick={() => {
+              setWorld("bots");
+              handleSelectSubView("board");
+              setFocusedChatPane("bots");
+              setDrawerOpen(true);
+            }}
+            title="Task Board"
+            aria-label="Task Board"
+            aria-current={world === "bots" && botsSubView === "board" ? "page" : undefined}
+          >
+            <Kanban size={16} strokeWidth={1.6} />
+            <span className="rail-label">Tasks</span>
+          </button>
+
+          {!narrowChat && (
+            <button
+              type="button"
+              data-testid="split-chat-toggle-btn"
+              className={`rail-util-btn ${splitChatOpen ? "active" : ""}`}
+              onClick={() => setSplitChatOpen((open) => !open)}
+              title="Split workspace (Ctrl+Shift+S)"
+              aria-label="Split workspace"
+              aria-pressed={splitChatOpen}
+            >
+              <Columns2 size={15} strokeWidth={1.6} />
+              <span className="rail-label">Split</span>
+            </button>
+          )}
 
           <button
             type="button"
-            className={`rail-util-btn ${drawerOpen ? "active" : ""}`}
-            onClick={() => setDrawerOpen((o) => !o)}
-            title="Toggle Sidebar (Ctrl+B)"
-            aria-label="Toggle sidebar"
-            aria-expanded={drawerOpen}
+            className={`rail-util-btn ${browserOpen ? "active" : ""}`}
+            onClick={toggleBrowserSidebar}
+            title="In-App Browser"
+            aria-label="Browser"
+            aria-pressed={browserOpen}
           >
-            <SidebarToggleIcon size={16} />
+            <BrowserPaneIcon size={15} />
+            <span className="rail-label">Browser</span>
           </button>
+
+          <div className="rail-divider" />
 
           <button
             type="button"
@@ -888,6 +927,7 @@ export function App() {
             aria-label="Quick Jump"
           >
             <Search size={15} strokeWidth={1.6} />
+            <span className="rail-label">Search</span>
           </button>
 
           <button
@@ -897,8 +937,10 @@ export function App() {
             onClick={() => setInboxOpen((o) => !o)}
             title="Escalation Inbox"
             aria-label="Escalation Inbox"
+            aria-pressed={inboxOpen}
           >
             <Bell size={15} strokeWidth={1.6} />
+            <span className="rail-label">Inbox</span>
             {inboxAlertCount > 0 && (
               <span className={`rail-badge ${bf.pendingPermissions.length > 0 ? "danger" : ""}`}>
                 {inboxAlertCount}
@@ -906,6 +948,24 @@ export function App() {
             )}
           </button>
 
+          <button
+            type="button"
+            className={`rail-util-btn ${memoryStudioOpen ? "active" : ""}`}
+            onClick={() => {
+              setMemoryStudioOpen(true);
+              void bf.fetchMemoryStudio(activeProject?.id).catch((err) => {
+                pushToast(err instanceof Error ? err.message : String(err), "error");
+              });
+            }}
+            title="Memory Studio"
+            aria-label="Memory Studio"
+          >
+            <Brain size={15} strokeWidth={1.6} />
+            <span className="rail-label">Memory</span>
+          </button>
+        </div>
+
+        <div className="icon-rail-bottom">
           <button
             type="button"
             className={`rail-util-btn ${settingsOpen ? "active" : ""}`}
@@ -919,10 +979,8 @@ export function App() {
             aria-label="Settings"
           >
             <Settings size={15} strokeWidth={1.6} />
+            <span className="rail-label">Settings</span>
           </button>
-        </div>
-
-        <div className="icon-rail-bottom">
           <button
             type="button"
             data-testid="theme-toggle-btn"
@@ -932,6 +990,7 @@ export function App() {
             aria-label={theme === "vanta" ? "Switch to Light theme" : "Switch to Vanta Black theme"}
           >
             {theme === "vanta" ? <Sun size={15} strokeWidth={1.6} /> : <Moon size={15} strokeWidth={1.6} />}
+            <span className="rail-label">Theme</span>
           </button>
           <BotThinkingOrb
             activity={brandActivity}
@@ -951,6 +1010,15 @@ export function App() {
       {drawerOpen && (
         <>
           <aside className={`side-drawer ${world === "bots" ? "bots-inbox-drawer" : ""}`} style={{ width: drawerWidth }}>
+            <button
+              type="button"
+              className="drawer-close-btn"
+              onClick={() => setDrawerOpen(false)}
+              aria-label="Close navigation panel"
+              title="Close panel (Ctrl+B)"
+            >
+              <X size={13} strokeWidth={1.8} />
+            </button>
           {world === "chat" ? (
             <>
               <div className="drawer-header">
@@ -1112,7 +1180,7 @@ export function App() {
                 {(activeProject ? [activeProject] : []).map((p) => {
                   const allProjectBots = projectAgents;
                   const topLevelBots = allProjectBots.filter((a) => a.scope !== "sidekick");
-                  const clusterRoles = topLevelBots.slice(0, 4).map((b) => resolveBotRole(b).role);
+                  const clusterRoles = topLevelBots.map((b) => resolveBotRole(b).role);
 
                   return (
                     <div key={p.id} className="drawer-section">
@@ -1142,6 +1210,7 @@ export function App() {
                       >
                         <GroupAvatarCluster
                           roles={clusterRoles.length > 0 ? clusterRoles : ["team_lead", "builder"]}
+                          totalCount={topLevelBots.length}
                           size={32}
                         />
                         <div className="bot-roster-copy">
@@ -1363,33 +1432,6 @@ export function App() {
                   <span>{bf.pendingPermissions.length} Permission</span>
                 </button>
               )}
-
-              <fieldset className="workspace-layout-controls" aria-label="Workspace layout">
-              {!narrowChat && <button
-                type="button"
-                data-testid="split-chat-toggle-btn"
-                className="workspace-layout-button"
-                onClick={() => setSplitChatOpen((s) => !s)}
-                title="Split workspace (Ctrl+Shift+S)"
-                aria-label="Split workspace"
-                aria-pressed={splitChatOpen}
-              >
-                <Columns2 size={14} strokeWidth={1.6} />
-                <span>Split</span>
-              </button>}
-
-              <button
-                type="button"
-                className="workspace-layout-button"
-                onClick={toggleBrowserSidebar}
-                title="Toggle In-App Browser"
-                aria-label="Browser"
-                aria-pressed={browserOpen}
-              >
-                <BrowserPaneIcon size={14} />
-                <span>Browser</span>
-              </button>
-              </fieldset>
             </div>
           </header>
 

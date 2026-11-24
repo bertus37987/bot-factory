@@ -380,38 +380,71 @@ export function JobTitlePill({ label, tone = "neutral", role }: JobTitlePillProp
 export interface GroupAvatarClusterProps {
   roles: BotRoleKind[];
   size?: number;
+  totalCount?: number;
 }
 
-export function GroupAvatarCluster({ roles, size = 32 }: GroupAvatarClusterProps): JSX.Element {
-  const cells = roles.slice(0, 4);
+export function GroupAvatarCluster({ roles, size = 32, totalCount }: GroupAvatarClusterProps): JSX.Element {
+  const count = totalCount ?? roles.length;
+  const hasOverflow = count > 4;
+  const visibleRoles = roles.slice(0, hasOverflow ? 3 : 4);
   const gap = Math.max(1, Math.round(size * 0.05));
   const cellSize = Math.max(10, Math.floor((size - gap) / 2));
   const cellRadius = Math.max(3, Math.round(size * 0.14));
+
+  if (!hasOverflow && count === 1 && visibleRoles[0]) {
+    return (
+      <span
+        className="bf-group-cluster bf-group-cluster-single"
+        role="img"
+        aria-label={`Bot team (${count})`}
+        style={{ width: size, height: size }}
+      >
+        <BotAvatar role={visibleRoles[0]} size={size} seed={`cluster-single-${visibleRoles[0]}`} />
+      </span>
+    );
+  }
+
+  if (!hasOverflow && count === 2) {
+    return (
+      <span
+        className="bf-group-cluster bf-group-cluster-pair"
+        role="img"
+        aria-label={`Bot team (${count})`}
+        style={{ gap, width: size, height: size }}
+      >
+        {visibleRoles.map((role, i) => (
+          <BotAvatar key={`${i}-${role}`} role={role} size={cellSize} seed={`cluster-pair-${i}-${role}`} />
+        ))}
+      </span>
+    );
+  }
 
   return (
     <span
       className="bf-group-cluster"
       role="img"
-      aria-label={`Bot team (${cells.length})`}
+      aria-label={`Bot team (${count})`}
       style={{ gap, width: size, height: size }}
     >
-      {[0, 1, 2, 3].map((i) =>
-        cells[i] ? (
-          <BotAvatar
-            key={`${i}-${cells[i]}`}
-            role={cells[i]}
-            size={cellSize}
-            seed={`cluster-${i}-${cells[i]}`}
-          />
+      {[0, 1, 2, 3].map((i) => {
+        if (hasOverflow && i === 3) {
+          return (
+            <span
+              key="overflow"
+              className="bf-group-overflow-cell"
+              style={{ borderRadius: cellRadius, fontSize: Math.max(7, Math.round(cellSize * 0.52)) }}
+            >
+              +{count - 3}
+            </span>
+          );
+        }
+        const role = visibleRoles[i];
+        return role ? (
+          <BotAvatar key={`${i}-${role}`} role={role} size={cellSize} seed={`cluster-${i}-${role}`} />
         ) : (
-          <span
-            key={i}
-            className="bf-group-empty-cell"
-            aria-hidden="true"
-            style={{ borderRadius: cellRadius }}
-          />
-        ),
-      )}
+          <span key={i} className="bf-group-empty-cell" aria-hidden="true" />
+        );
+      })}
     </span>
   );
 }

@@ -20,10 +20,14 @@ represent agents and teams, not form controls.
 Review both themes at desktop, split and phone widths. Keep keyboard
 focus visible, respect reduced motion, and test with the offline runtime.
 
-## One-click workspace actions
+## Seamless navigation and one-click workspace actions
 
-- Keep Split and Browser directly available in the header. Label the panes
-  locally. Focus is a keyboard and composer cue, not a global status pill.
+- Use the labeled destination rail for Main, Teams, Tasks, Split, Browser,
+  Search, Inbox, Memory, Settings and Theme. Destinations open their
+  contextual panel; the panel close control must never cover header content.
+  Split remains available only when the viewport can support it.
+- Label split panes locally. Focus is a keyboard and composer cue, not a
+  global status pill.
 - Show named draft destinations on the artifact action itself. In split
   view both visible conversations are direct choices. A click only adds
   context; the composer has a separate, explicit send action.

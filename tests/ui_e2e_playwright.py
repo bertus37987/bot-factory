@@ -18,7 +18,7 @@ def capture_studio(page, name):
 
 def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, held_acks):
     bots = page.locator(".bots-center-shell")
-    drawer_toggle = page.get_by_role("button", name="Toggle sidebar")
+    close_panel = page.locator(".drawer-close-btn")
     team = page.get_by_role("button", name="Switch team:")
     composer = bots.locator("textarea.pc-input")
     first = "Playwright Smoke Project"
@@ -27,8 +27,22 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
     page.get_by_role("button", name="Engineering Teams").click()
     sidebar.get_by_role("button", name="Group Chat").click()
     expect(bots.locator(".bots-compose-destination")).to_contain_text(first)
+
+    # Truthful team seats: five members render three portraits + a compact overflow seat.
+    for bot_name in ("Vega", "Nox", "Iris"):
+        bots.locator('button[title="Spawn a new project bot"]').click()
+        spawn_dialog = page.get_by_role("dialog", name="Spawn Project Bot")
+        spawn_dialog.get_by_placeholder("e.g. Forge-2").fill(bot_name)
+        spawn_dialog.get_by_role("button", name="Spawn Bot").click()
+        expect(spawn_dialog).to_have_count(0)
+    sidebar.get_by_role("button", name="Group Chat").click()
+    first_cluster = sidebar.locator(".bot-roster-row.active .bf-group-cluster")
+    expect(first_cluster).to_have_attribute("aria-label", "Bot team (5)")
+    expect(first_cluster.locator(".bf-group-overflow-cell")).to_have_text("+2")
+    expect(first_cluster.locator(".bf-group-empty-cell")).to_have_count(0)
+
     composer.fill("Draft for the build team")
-    drawer_toggle.click()
+    close_panel.click()
     expect(sidebar).to_have_count(0)
     team.press("Enter")
     search = page.get_by_role("combobox", name="Find a team")
@@ -36,7 +50,7 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
     search.press("Escape")
     expect(team).to_be_focused()
 
-    drawer_toggle.click()
+    page.get_by_role("button", name="Engineering Teams").click()
     sidebar.get_by_role("button", name="Project", exact=True).click()
     modal = page.get_by_role("dialog", name="Create Project Workspace")
     modal.get_by_placeholder("e.g. Payments API").fill(second)
@@ -44,6 +58,11 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
     expect(modal).to_have_count(0)
     expect(team).to_contain_text(second)
     expect(composer).to_have_value("")
+    second_cluster = sidebar.locator(".bot-roster-row.active .bf-group-cluster")
+    expect(second_cluster).to_have_attribute("aria-label", "Bot team (1)")
+    expect(second_cluster.locator(".bf-group-overflow-cell")).to_have_count(0)
+    expect(second_cluster.locator(".bf-group-empty-cell")).to_have_count(0)
+    expect(second_cluster.locator(".bear-avatar-wrap")).to_have_count(1)
     expect(sidebar).not_to_contain_text("Atlas")
     expect(bots.get_by_label("Bot control target").locator("option")).to_have_count(1)
     composer.fill("Draft for the research team")
@@ -116,7 +135,7 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
         page.screenshot(path=os.path.join(capture_dir, "bots-team-chat-light.png"), animations="disabled")
     theme_toggle.click()
 
-    drawer_toggle.click()
+    close_panel.click()
     page.set_viewport_size({"width": 1024, "height": 768})
     page.get_by_test_id("split-chat-toggle-btn").click()
     expect(page.locator(".split-active")).to_be_visible()
@@ -142,7 +161,7 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
     if capture_dir:
         page.screenshot(path=os.path.join(capture_dir, "bots-team-chat-mobile.png"))
     assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
-    drawer_toggle.click()
+    page.get_by_role("button", name="Engineering Teams").click()
     expect(sidebar).to_be_visible()
     sidebar.get_by_role("button", name="Group Chat").click()
     expect(sidebar).to_have_count(0)
@@ -270,7 +289,10 @@ def main() -> int:
 
         shell = page.locator(".app-shell-v3")
         expect(shell).to_be_visible()
-        expect(page.locator(".icon-rail")).to_be_visible()
+        rail = page.locator(".icon-rail")
+        expect(rail).to_be_visible()
+        for label in ("Main", "Teams", "Tasks", "Split", "Browser", "Search", "Inbox", "Memory", "Settings", "Theme"):
+            expect(rail).to_contain_text(label)
         expect(page.locator(".center-header")).to_contain_text("Main Agent")
         expect(page.locator(".hydration-shell")).to_have_count(0)
         expect(page.locator(".auth-gate-backdrop")).to_have_count(0)
@@ -523,11 +545,10 @@ def main() -> int:
         browser_shell.locator(".iab-close").click()
         expect(browser_shell).to_have_count(0)
 
-        # 4g. Sidebar collapse & expand toggle + Split-Chat toggle
-        toggle_sidebar_btn = page.locator('nav.icon-rail button[aria-label="Toggle sidebar"]')
-        toggle_sidebar_btn.click()
+        # 4g. Contextual panel close + destination reopen + Split-Chat toggle
+        page.locator(".drawer-close-btn").click()
         expect(page.locator(".side-drawer")).to_have_count(0)
-        toggle_sidebar_btn.click()
+        page.locator('nav.icon-rail button[aria-label="Main Agent"]').click()
         expect(page.locator(".side-drawer")).to_be_visible()
 
         split_btn = page.locator('[data-testid="split-chat-toggle-btn"]')

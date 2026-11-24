@@ -20,3 +20,9 @@ names or role labels.
   on the left, and role color in attribution rather than whole bubbles.
   Keep technical traces collapsed and don't move the transcript while the
   operator is reading older messages.
+- Team portrait clusters represent actual membership. One- and two-member
+  teams use balanced compact portraits instead of empty grid positions;
+  any remaining seat space is transparent background rather than hollow
+  placeholder boxes. Teams with more than four members show the first
+  three portraits and a fourth overflow seat such as `+2`; the accessible
+  label uses the true team size.

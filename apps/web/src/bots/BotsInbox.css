@@ -240,7 +240,7 @@
 }
 
 @media (max-width: 699px) {
-  .side-drawer.bots-inbox-drawer { max-width: calc(100vw - 44px); }
+  .side-drawer.bots-inbox-drawer { max-width: calc(100vw - 58px); }
   .bots-center-shell .bots-center-scroll > .bcs-root,
   .bots-center-shell .bots-composer-wrap { padding-inline: 10px; }
   .bots-center-shell .group-target-strip { padding-inline: 8px; }

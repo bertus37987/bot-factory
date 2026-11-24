@@ -80,9 +80,9 @@ kbd {
   background: var(--bg-canvas);
 }
 
-/* Far-Left 44px Custom Icon Rail */
+/* Destination Rail */
 .icon-rail {
-  width: 44px;
+  width: 68px;
   flex-shrink: 0;
   background: var(--bg-surface);
   border-right: var(--hairline);
@@ -90,7 +90,7 @@ kbd {
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 0 12px;
+  padding: 8px 6px 10px;
   z-index: 20;
 }
 
@@ -105,15 +105,17 @@ kbd {
 .rail-mode-btn,
 .rail-util-btn {
   position: relative;
-  width: 32px;
-  height: 32px;
+  width: 56px;
+  min-height: 43px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
   color: var(--ink-muted);
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2px;
   cursor: pointer;
   transition:
     background var(--duration-fast) var(--ease-out-quiet),
@@ -127,27 +129,19 @@ kbd {
   color: var(--ink-primary);
 }
 
-.rail-mode-btn.active {
-  background: var(--bg-elevated);
+.rail-mode-btn.active,
+.rail-util-btn.active {
+  background: var(--studio-selected);
   color: var(--ink-primary);
   border-color: var(--border-strong);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
 }
 
-.rail-mode-btn.active::before {
-  content: "";
-  position: absolute;
-  left: -6px;
-  top: 7px;
-  bottom: 7px;
-  width: 2.5px;
-  border-radius: 99px;
-  background: var(--ink-primary);
-}
-
-.rail-util-btn.active {
-  color: var(--ink-primary);
-  background: var(--bg-hover);
+.rail-label {
+  color: currentColor;
+  font-size: 9.5px;
+  font-weight: var(--weight-medium);
+  line-height: 1;
 }
 
 .rail-badge {
@@ -193,9 +187,28 @@ kbd {
   z-index: 15;
 }
 
+.drawer-close-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.drawer-close-btn:hover { background: var(--bg-hover); color: var(--ink-primary); }
 .drawer-header {
   height: 44px;
-  padding: 0 12px;
+  padding: 0 38px 0 12px;
   border-bottom: var(--hairline);
   display: flex;
   align-items: center;
@@ -1152,10 +1165,26 @@ kbd {
   flex-shrink: 0;
 }
 
+.bf-group-cluster-single,
+.bf-group-cluster-pair {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .bf-group-empty-cell {
   display: block;
-  background: var(--bg-surface-subtle);
-  border: 1px solid var(--border-hairline);
+  background: transparent;
+  border: 0;
+}
+
+.bf-group-overflow-cell {
+  display: grid;
+  place-items: center;
+  background: var(--studio-selected);
+  color: var(--ink-primary);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ==========================================================================
@@ -3742,7 +3771,7 @@ kbd {
 @media (max-width: 999px) {
   .side-drawer {
     position: fixed;
-    left: 44px;
+    left: 68px;
     top: 0;
     bottom: 0;
     box-shadow: var(--shadow-modal);
@@ -3908,38 +3937,6 @@ kbd {
   .modal-card { max-height: calc(100dvh - 48px); }
 }
 
-.workspace-layout-controls {
-  display: flex;
-  gap: 3px;
-  margin: 0;
-  padding: 3px;
-  border: var(--hairline);
-  border-radius: var(--studio-row-radius);
-  background: var(--studio-panel);
-}
-
-.workspace-layout-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  min-height: 29px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--ink-secondary);
-  cursor: pointer;
-  font-size: var(--text-xs);
-}
-
-.workspace-layout-button:hover,
-.workspace-layout-button[aria-pressed="true"] {
-  background: var(--studio-selected);
-  color: var(--ink-primary);
-}
-
-.workspace-layout-button[aria-pressed="true"] { border-color: var(--border-strong); }
-.workspace-layout-button:focus-visible,
 .pc-send:focus-visible { outline: 2px solid var(--accent-orange-ink); outline-offset: 2px; }
 
 .split-main-header {
@@ -4021,9 +4018,15 @@ kbd {
 }
 
 @media (max-width: 699px) {
-  .workspace-layout-button { min-height: 35px; }
   .pc-send { width: 42px; height: 42px; }
   .pc-card .pc-bar { padding-inline-end: 55px; }
   .main-header-project { display: none; }
   .app-shell-v3 .toast-stack { top: 68px; bottom: auto; max-width: calc(100% - 65px); }
+}
+
+@media (max-width: 699px) {
+  .icon-rail { width: 58px; padding-inline: 3px; }
+  .rail-mode-btn, .rail-util-btn { width: 50px; min-height: 41px; }
+  .rail-label { font-size: 9px; }
+  .side-drawer { left: 58px; }
 }

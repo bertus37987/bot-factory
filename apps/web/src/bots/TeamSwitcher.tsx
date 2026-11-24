@@ -29,7 +29,7 @@ export function TeamSwitcher({ projects, agents, project, onSelect }: TeamSwitch
   const results = teams.filter((p) => p.name.toLowerCase().includes(query.trim().toLowerCase()));
   const current = results[Math.min(cursor, results.length - 1)];
   const roster = (id?: string) => agents.filter((a) => a.projectId === id && a.scope !== "sidekick");
-  const roles = (id?: string) => roster(id).slice(0, 3).map((a) => resolveBotRole(a).role);
+  const roles = (id?: string) => roster(id).map((a) => resolveBotRole(a).role);
   const triggerRoles = roles(project?.id);
 
   useEffect(() => {
