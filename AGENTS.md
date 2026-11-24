@@ -1,10 +1,10 @@
 # AGENTS.md — AI Agent Engineering Guide for Bot-Factory
 
-Read this file **before** editing code in this repository. It documents the Phase 5 architecture, non-negotiable invariants, exact entry points, verification commands, protocol surfaces, and known engineering constraints.
+Read this file **before** editing code in this repository. It documents the foundational architecture, non-negotiable invariants, entry points, verification commands, and known constraints. Start with the **[Studio V2 handoff](./docs/STUDIO_V2_HANDOFF.md)** for the current UI, schema v3, and research backlog; Phase 5 descriptions here are the baseline.
 
 See also:
 - **[`HANDOFF.md`](./HANDOFF.md)** — Phase 1–5 delivery scorecard, verified checks, and remaining roadmap.
-- **[`DESIGN.md`](./DESIGN.md)** — Monochrome Ink Light-Mode design system (`#FFFFFF`/`#FAFAFA`/`#F5F5F5`, `#D95D22`, Low-Poly Beavers, Smoke & Pearl Thinking Orbs).
+- **[`DESIGN.md`](./DESIGN.md)** — Historical Phase 3.3 Light-Mode design reference; use the Studio V2 handoff and `tokens.css` for current UI decisions.
 - **[`docs/ARCHITECTURE_AND_UI_SPEC.md`](./docs/ARCHITECTURE_AND_UI_SPEC.md)** and **[`docs/research/README.md`](./docs/research/README.md)** — Original clean-room design specs.
 
 ---
@@ -58,7 +58,7 @@ Bot-Factory is a Bun + TypeScript monorepo (`packages/*`, `apps/*`) with strict 
     - Flush pending `session/request_permission` requests with `{ outcome: "cancelled" }` on abort/disconnect.
     - Terminate subprocess trees on Windows with `taskkill /PID <pid> /T /F`.
 12. **Design System Discipline (`DESIGN.md` & `apps/web/src/styles/tokens.css`):**
-    - Light Mode only (`#FFFFFF`, `#FAFAFA`, `#F5F5F5`, `#171717`, `#D95D22` Burnt Orange, Low-Poly Beavers, Smoke & Pearl 2D Orbs). No runtime `<style>` tag injection in JSX, no external CDNs, no emojis as UI icons.
+    - Support both Vanta Black (default) and Light Mode with shared tokens. Preserve the Bear Crew assets and SVG eye layer. No runtime `<style>` tag injection in JSX, no external CDNs, no emojis as UI icons.
 
 ---
 
@@ -79,7 +79,7 @@ bun run build:web
 # 4. Run full Bun test suite (set BOT_FACTORY_SKIP_PLAYWRIGHT=1 if Chromium is absent)
 bun test tests
 
-# 5. Full check pipeline (typecheck + lint + tests + build:web)
+# 5. Full check pipeline (typecheck + lint + tests + build:web; build first on a clean checkout)
 bun run check
 
 # 6. Read-only preflight diagnostics (never modifies state.db or .writer.lock)
@@ -97,9 +97,9 @@ bun run dev:daemon:isolated
 
 ## 4. Protocol & Tool Quick Reference
 
-### `RpcCommandSchema` (`30` Commands in `packages/shared/src/index.ts`)
+### `RpcCommandSchema` (`packages/shared/src/index.ts`)
 - **Chat & Steer:** `chat.send`, `steer.submit`
-- **Projects & Bots:** `project.create`, `project.archive`, `bot.spawn`, `bot.pause`, `bot.stop`, `bot.resume`, `permission.respond`, `session.resolve_unknown`
+- **Projects & Bots:** `project.create`, `project.archive`, `bot.spawn`, `bot.pause`, `bot.stop`, `bot.resume`, `bot.update_model`, `bot.message`, `permission.respond`, `session.resolve_unknown`
 - **Tasks, Checkpoints & Merge:** `task.create`, `task.dispatch`, `task.verify`, `task.merge`, `checkpoint.list`, `checkpoint.rollback`
 - **Annotations & Inbox:** `annotation.create`, `annotation.resolve`, `inbox.dismiss`
 - **Phase-3 Debates & Self-Mod:** `debate.open`, `debate.post`, `debate.resolve`, `selfmod.propose`, `selfmod.verify`, `selfmod.promote`, `selfmod.rollback`
@@ -113,11 +113,12 @@ bun run dev:daemon:isolated
 - `GET /api/memory/l1`, `GET /api/memory/facts`
 - `POST /api/mcp/:toolName` — scoped `bfmcp_*` / master token MCP dispatch
 - `GET /api/projects/:id/artifact?path=` — `plans|artifacts|handoffs` read (sandbox CSP)
+- `PUT /api/projects/:id/artifact?path=` — authenticated writes to the same roots; only allowlisted UTF-8 docs and base64 image formats, with size caps
 - `GET /api/projects/:id/files`, `GET /api/projects/:id/file?path=`, `GET /api/projects/:id/diff` — worktree-aware (`?agentId=`) safe read-only browser APIs
 - `GET /ws` — typed WebSocket RPC + ref-counted pub/sub (`ping`/`pong`)
 
 ### Agent Tool Surfaces
-- **Main Manager (`8` tools in `agentTools.ts`):** `bf_projects_list`, `bf_project_create`, `bf_team_delegate`, `bf_team_status`, `bf_memory_search`, `bf_memory_remember`, `bf_memory_update_l1`, `bf_memory_forget`.
+- **Main Manager (`17` tools in `agentTools.ts`):** `bf_projects_list`, `bf_project_create`, `bf_team_delegate`, `bf_team_status`, `bf_config_get`, `bf_config_update`, `bf_bot_spawn`, `bf_bot_update_model`, `bf_bot_message`, `bf_task_list`, `bf_task_create`, `bf_task_update`, `bf_task_dispatch`, `bf_memory_search`, `bf_memory_remember`, `bf_memory_update_l1`, `bf_memory_forget`.
 - **Team Lead (`11` tools in `agentTools.ts`):** `bf_repo_tree`, `bf_repo_read`, `bf_repo_diff`, `bf_task_create_batch`, `bf_task_update`, `bf_bot_spawn`, `bf_task_dispatch`, `bf_bot_message`, `bf_task_verify_trigger`, `bf_debate_resolve`, `bf_report_to_manager`.
 - **MCP Bridge (`14` tools in `mcpBridge.ts`):** `bf_task_list`, `bf_task_claim`, `bf_task_update`, `bf_handoff_write`, `bf_memory_search`, `bf_fix_tasks_list`, `bf_fix_task_resolve`, `bf_debate_post`, `bf_subagent_spawn`, `bf_subagent_status`, `bf_subagent_wait`, `bf_subagent_message`, `bf_subagent_kill`, `bf_subagent_apply_patch`.
 
@@ -132,5 +133,5 @@ bun run dev:daemon:isolated
 2. **Playwright E2E requires built `apps/web/dist/index.html`.** Run `bun run build:web` before `bun test tests` on a fresh checkout unless `BOT_FACTORY_SKIP_PLAYWRIGHT=1` is set.
 3. **Git `status --porcelain` leading space trap.** `runGitSync` trims stdout, so `" M file"` becomes `"M file"`. Always keep the regex parser in `parsePorcelainStatus` (`worktrees.ts`).
 4. **Git worktree `.git` is a file, not a directory.** Always filter `.git` entries on both files and directories in repo listing/tree walkers (`worktrees.ts`, `agentTools.ts`).
-5. **SQLite schema v2 + FTS triggers.** If upgrading an older `state.db`, `database.ts` idempotently migrates v1 columns (`verify_checks_json`, `turn_counter`, `depth`, `subagent_mode`, `depends_on_json`, `auto_retry_count`) and second-scale timestamps to epoch ms. Never bypass `StateDatabase` migrations.
+5. **SQLite schema v3 + FTS triggers.** `database.ts` idempotently migrates v1 schema and timestamps, then adds v3 message attribution (`sender_agent_id`, `sender_role`). Never bypass `StateDatabase` migrations.
 6. **Three.js `Model3DViewer` renders on demand.** Do not reintroduce a continuous 60fps `requestAnimationFrame` loop; schedule frames via `controls.addEventListener("change", ...)` / `ResizeObserver` / pointer events so idle GPU usage stays 0%.

@@ -1,5 +1,7 @@
 # Bot-Factory Phase 0 — Clean-Room Reference Research Index
 
+For research from the later Studio V2 effort, see the [Antigravity research archive](./antigravity-studio-v2/README.md).
+
 **Status:** Phase 0 Complete (Reference-Guided, Clean-Room — keine Code-Kopien)  
 **Ziel-Stack:** Bun (v1.4+) · TypeScript · SQLite (WAL + FTS5) · React/Vite/Tailwind · Hybrid BYOS (Native HTTP + ACP/CLI)
 

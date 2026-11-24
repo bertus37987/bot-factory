@@ -1,5 +1,7 @@
 # Bot-Factory — Design System (Phase 3.3 Light Mode)
 
+> Historical design reference. [Studio V2](./docs/STUDIO_V2_HANDOFF.md) supersedes the light-only palette, beaver portraits, and fixed-layout guidance in this document.
+
 > **Guiding Principle:** Calm, high-craft *Agentic Light Mode* — generous whitespace, whisper-quiet `1px` hairlines, restrained monochrome ink punctuated sparingly by **Burnt Orange (`#D95D22`)** focus/mascot accents, **Low-Poly Orange Beaver** bot emblems, and **Smoke & Pearl** 2D Thinking Orbs.
 
 ---

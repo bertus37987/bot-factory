@@ -1,5 +1,7 @@
 # HANDOFF.md — Phase 5 Status, Architecture Matrix & Verified Commands
 
+> For current code, verification, and follow-up work, start with the [Studio V2 handoff](./docs/STUDIO_V2_HANDOFF.md). This scorecard documents the earlier Phase 5 baseline.
+
 > **Status:** Phases 1–5 Implemented (Backend Control Plane, Open BYOS, Active 3-Layer Memory, Autonomous DAG Loop & Subagents, Real Independent Verifier & Merge, Light-Mode Studio UI, Biome Lint, GitHub Actions CI & Playwright E2E)
 > **Source vs. Runtime Separation:** Source code lives in the repository (`packages/`, `apps/`, `tests/`); mutable state (`state.db`, `config.json`, `secrets.env`, `.daemon-token`, `memory/`, `projects/`) lives strictly under `BOT_FACTORY_ROOT` (default `~/bot-factory`, or `./.dev-runtime` via `bun run dev:daemon:isolated`).
 

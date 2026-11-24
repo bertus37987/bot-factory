@@ -1,9 +1,11 @@
 # Bot-Factory Harness
 
-> **Local-First Multi-Agent Orchestration Control Plane & Light-Mode Studio**
+> **Local-First Multi-Agent Orchestration Control Plane & Studio V2**
 > Bun · TypeScript · SQLite (WAL + FTS5 + Embeddings) · React 19 + Vite 6 · Three.js · Open BYOS (Native HTTP SSE + ACP stdio + Claude/Codex CLI Stream + 14-Tool MCP Bridge)
 
 **Bot-Factory** is a local-first operating hub for delegating, steering, verifying, and merging work across autonomous AI coding & creative engineering teams on your own machine — without drowning the human operator in raw background tool-call spam.
+
+See the [Studio V2 handoff](./docs/STUDIO_V2_HANDOFF.md) for the latest implementation, verification, and recovered Antigravity research.
 
 ---
 
@@ -29,7 +31,7 @@ Bot-Factory strictly separates version-controlled source code from live mutable 
 ## 2. Five-Pillar Architecture
 
 ### Pillar 1 — Main Managing Agent (`Meta-Orchestrator`) & Active 3-Layer Memory
-- **1 Calm Strategic Channel (`chat:meta`):** The Main Managing Agent converses 1-on-1 with the operator, manages portfolio context across projects, and invokes **8 executive tools** (`bf_projects_list`, `bf_project_create`, `bf_team_delegate`, `bf_team_status`, `bf_memory_search`, `bf_memory_remember`, `bf_memory_update_l1`, `bf_memory_forget`). Raw background tool calls, thoughts, and terminal logs are never streamed into `chat:meta`.
+- **1 Calm Strategic Channel (`chat:meta`):** The Main Managing Agent converses 1-on-1 with the operator and manages projects, configuration, bots, tasks, and memory through its [executive tools](./AGENTS.md#agent-tool-surfaces). Raw background tool calls, thoughts, and terminal logs are never streamed into `chat:meta`.
 - **3-Tier Frozen System Prompt:** Prompt assembly follows `stable -> context (cwd-free first) -> volatile snapshot`, SHA-256 hashed per session to maximize provider prefix-cache hits. Ephemeral per-turn recall is attached to outgoing user turns rather than mutating the system prompt mid-session.
 - **Active 3-Layer Memory (`LocalSuperHermesMemory`):**
   - **L1 (Curated Markdown):** `USER.md` (2,000 chars), `GLOBAL_MEMORY.md` (3,000 chars), and project `MEMORY.md` (3,000 chars) with strict char caps and live percentage gauges.
@@ -54,13 +56,13 @@ Bot-Factory strictly separates version-controlled source code from live mutable 
 - **Progressive 4-Tier Autonomy & 120s Permissions:** Every turn respects `spec | low | medium | high` autonomy. Hard-deny rules block protected files (`secrets.env`, `.daemon-token`, `state.db`, `~/bot-factory/system`) and destructive commands; escalated actions pause up to `permissionRequestTimeoutSeconds` (`120s`) for human `Allow Once`, `Allow Session`, or `Deny` via `permission.respond`.
 - **Localhost Auth & Transport:** `DaemonServer` (`127.0.0.1`) enforces Host/Origin allowlists and authenticates browser sessions via `/?token=...` -> `HttpOnly; SameSite=Strict` HMAC-signed `bf_session` cookie (or `POST /api/auth/session` from `AuthUnlockGate`), and CLI/MCP callers via `x-bf-token` or `Authorization: Bearer`.
 
-### Pillar 5 — English Light-Mode Studio (`apps/web`)
-- **Monochrome Ink Light Mode:** Strict `#FFFFFF` / `#FAFAFA` / `#F5F5F5` surfaces, `#171717` ink, `#D95D22` Burnt Orange accents, custom Low-Poly Orange Beaver avatars, Smoke & Pearl 2D Canvas Thinking Orbs, self-hosted `@fontsource/inter` and `@fontsource/jetbrains-mono` (zero external CDNs).
-- **Dual-Layer Shell & Navigation:** `44px` icon rail + collapsible `248px` drawer (`<1000px` responsive auto-collapse), `Ctrl+K` Command Palette searching Bots, Subagents, Projects, Artifacts, and Repo Files, hydration skeleton, WS 15s heartbeat + reconnect banner, and unified toast stack.
+### Pillar 5 — Studio V2 (`apps/web`)
+- **Vanta Black and Light Mode:** A black default canvas with a Light toggle, seven Bear Crew role portraits with animated SVG eyes, and self-hosted `@fontsource/inter` and `@fontsource/jetbrains-mono`.
+- **Dual-Layer Shell & Navigation:** A compact icon rail, collapsible/resizable drawer, split-chat mode, `Ctrl+K` command palette, WS reconnect banner, and a unified toast stack.
 - **Two Worlds + Modular 2-Row In-App Browser + Wave 4 Studios:**
   - **Main Agent (`ChatTab`):** Devin/Codex airy stream with `MarkdownRenderer`, live streaming thoughts/replies, `Memory recalled` indicator, interleaved Delegation / Artifact / Verified Delivery cards (`Review Diff` + one-click `Merge to main`), and Double-Deck `PrecisionComposer` (auto-resetting Diff Tray, `/` slash commands, 4-tier `Autonomy`, live `Model` picker, 4-stop `Effort` slider, Context ring).
-  - **Bots Page (`BotsTab` + `BotChatStream`):** Grok-Bot multi-side Group Chat (Human & Team Lead right-aligned, specialist bots & verifier left-aligned, `@mention` chips, reply-quote bars, collapsible tool & subagent traces), explicit bot target chips + Pause/Resume/Stop controls, 5-column DAG Kanban Board, Debates, Checkpoints & Merge, and Self-Mod panels.
-  - **Modular 2-Row 6-Viewer Browser (`apps/web/src/browser/*`):** `BrowserChrome` + `DocViewer`, percentage-coordinate `ImageViewer` (with zoom/pan), lazy-loaded Three.js `Model3DViewer` (demand-driven rendering, camera presets, surface pins, PNG snapshots), `CodeViewer`, `DiffViewer`, loopback-only `WebViewer` (self-embed guard + strict iframe sandbox), and `AnnotationOverlay` (`requestFixNow` + snapshot thumbnails).
+  - **Bots Page (`BotsTab` + `BotChatStream`):** Messenger-style Group Chat with role attribution, bot target chips, Pause/Resume/Stop controls, and an animated todo board grouped by bot or status.
+  - **Resizable Browser (`apps/web/src/browser/*`):** Right, bottom, floating and fullscreen modes; Markdown editing, image markup, demand-driven 3D previews, code and diff inspection, and a sandboxed loopback web viewer. Review context can be added to the active chat composer.
   - **Escalation Inbox & Studios (`apps/web/src/studio/*`):** `EscalationInbox` (Allow/Deny with live countdown, `session.resolve_unknown` crash recovery, `inboxNotices`), `ProjectModal` (`externalRepoPath`, `verifyChecks`), `BotSpawnModal`, `CheckpointsMergePanel`, `MemoryL1Studio` (L1 editor + L2 fact explorer), and `SettingsView` (BYOS providers, write-only API key management, `Test Connection`, project routing overrides, guardrails).
 
 ---
