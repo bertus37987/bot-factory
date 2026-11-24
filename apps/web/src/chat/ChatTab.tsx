@@ -1,20 +1,48 @@
-import { ArrowUpRight, FolderPlus } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import type { GitDiffResponse, ProjectRecord, QuietStatusProjection, TimelineItem } from "@bot-factory/shared";
-import type { ArtifactCardEvent } from "../client/useBotFactory";
+import {
+  ArrowUpRight,
+  Brain,
+  CheckCircle2,
+  FolderPlus,
+  GitMerge,
+  ShieldAlert,
+  Sparkles,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  GitDiffResponse,
+  ProjectRecord,
+  QuietStatusProjection,
+  TaskRecord,
+  TimelineItem,
+} from "@bot-factory/shared";
+import type { ArtifactCardEvent, ProviderSummary } from "../client/useBotFactory";
 import { BotAvatar } from "../components/BotAvatars";
-import { BrowserPaneIcon, DocTabIcon } from "../components/BotFactoryIcons";
+import { BrowserPaneIcon, DiffBranchIcon, DocTabIcon } from "../components/BotFactoryIcons";
 import { BotThinkingOrb } from "../components/BotThinkingOrb";
-import { PrecisionComposer, type AutonomyLevel } from "../components/PrecisionComposer";
+import { MarkdownRenderer } from "../components/MarkdownRenderer";
+import {
+  PrecisionComposer,
+  type AutonomyLevel,
+  type ModelTargetSelection,
+} from "../components/PrecisionComposer";
 import type { ReasoningEffort } from "../components/ReasoningEffortSlider";
 
 interface ChatTabProps {
   messages: TimelineItem[];
   cards: ArtifactCardEvent[];
+  streamingText: string;
+  streamingThought: string;
   projects: ProjectRecord[];
   activeProject: ProjectRecord | null;
+  tasksByProject: Record<string, TaskRecord[]>;
   quietStatus: QuietStatusProjection;
   activeModelLabel: string;
+  providers: ProviderSummary[];
+  selectedTarget: ModelTargetSelection | null;
+  onSelectTarget: (target: ModelTargetSelection) => void;
+  contextPercent?: number;
+  contextTooltip?: string;
+  memoryRecalledActive?: boolean;
   gitDiff: GitDiffResponse | null;
   effort: ReasoningEffort;
   autonomy: AutonomyLevel;
@@ -22,28 +50,47 @@ interface ChatTabProps {
   onChangeAutonomy: (v: AutonomyLevel) => void;
   onSelectProject: (projectId: string) => void;
   onSendChat: (text: string) => Promise<void>;
-  onCreateDemoProject: (name: string) => Promise<void>;
+  onOpenNewProjectModal: () => void;
   onOpenProjectPreview: (projectId: string, artifactPath?: string) => void;
-  onOpenDiffInBrowser: () => void;
+  onOpenDiffInBrowser: (projectId?: string) => void;
   onOpenBrowser: () => void;
-  onSwitchToBots: () => void;
+  onSwitchToBots: (projectId?: string) => void;
+  onOpenMemoryStudio: () => void;
+  onMergeTask: (projectId: string, taskId: string) => Promise<void>;
 }
 
 function formatTime(ts: number): string {
   try {
-    return new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" }).format(new Date(ts));
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date(ts));
   } catch {
     return "";
   }
 }
 
+type StreamEntry =
+  | { kind: "message"; ts: number; msg: TimelineItem }
+  | { kind: "card"; ts: number; card: ArtifactCardEvent };
+
 export function ChatTab({
   messages,
   cards,
+  streamingText,
+  streamingThought,
   projects,
   activeProject,
+  tasksByProject,
   quietStatus,
   activeModelLabel,
+  providers,
+  selectedTarget,
+  onSelectTarget,
+  contextPercent,
+  contextTooltip,
+  memoryRecalledActive,
   gitDiff,
   effort,
   autonomy,
@@ -51,69 +98,80 @@ export function ChatTab({
   onChangeAutonomy,
   onSelectProject,
   onSendChat,
-  onCreateDemoProject,
+  onOpenNewProjectModal,
   onOpenProjectPreview,
   onOpenDiffInBrowser,
   onOpenBrowser,
   onSwitchToBots,
+  onOpenMemoryStudio,
+  onMergeTask,
 }: ChatTabProps) {
   const [busy, setBusy] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [mergingTaskId, setMergingTaskId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
+
+  const isStreaming = streamingText.length > 0 || streamingThought.length > 0;
 
   useEffect(() => {
     const el = streamRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length, cards.length, busy]);
+  }, [messages.length, cards.length, streamingText, streamingThought, busy]);
+
+  const timeline = useMemo<StreamEntry[]>(() => {
+    const combined: StreamEntry[] = [
+      ...messages.map((msg) => ({ kind: "message" as const, ts: msg.createdAt, msg })),
+      ...cards.map((card) => ({ kind: "card" as const, ts: card.createdAt, card })),
+    ];
+    combined.sort((a, b) => a.ts - b.ts);
+    return combined;
+  }, [messages, cards]);
 
   const handleSend = async (text: string) => {
     if (busy) return;
     setBusy(true);
-    setErrorMsg(null);
+    setActionError(null);
     try {
       await onSendChat(text);
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
-      throw err;
     } finally {
       setBusy(false);
     }
   };
 
-  const handleCreateDemo = async (name: string) => {
-    if (busy) return;
-    setBusy(true);
-    setErrorMsg(null);
+  const handleMerge = async (projectId: string, taskId: string) => {
+    if (mergingTaskId) return;
+    setMergingTaskId(taskId);
+    setActionError(null);
     try {
-      await onCreateDemoProject(name);
+      await onMergeTask(projectId, taskId);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false);
+      setMergingTaskId(null);
     }
   };
 
   const handleSlash = (command: string) => {
     if (command === "/diff") {
-      onOpenDiffInBrowser();
+      onOpenDiffInBrowser(activeProject?.id);
     } else if (command === "/preview" || command === "/plan") {
       if (activeProject) onOpenProjectPreview(activeProject.id, "plans/roadmap.md");
       else onOpenBrowser();
     } else if (command === "/spawn-bot" || command === "/verify") {
-      onSwitchToBots();
+      onSwitchToBots(activeProject?.id);
     }
   };
 
-  const isEmpty = messages.length === 0 && cards.length === 0;
+  const isEmpty = timeline.length === 0 && !isStreaming;
 
   return (
     <div className="chat-root" data-density="airy">
       <div className="chat-layout">
-        {errorMsg && (
-          <div className="inline-error">
-            <span>{errorMsg}</span>
-            <button type="button" className="btn xs ghost" onClick={() => setErrorMsg(null)}>
-              Schließen
+        {actionError && (
+          <div className="inline-error" role="alert">
+            <span>{actionError}</span>
+            <button type="button" className="btn xs ghost" onClick={() => setActionError(null)}>
+              Dismiss
             </button>
           </div>
         )}
@@ -124,24 +182,25 @@ export function ChatTab({
               <div className="chat-empty-emblem">
                 <BotAvatar role="orchestrator" size={56} active={busy} />
               </div>
-              <h2 className="chat-empty-title">Woran sollen wir arbeiten?</h2>
+              <h2 className="chat-empty-title">What are we building today?</h2>
               <p className="chat-empty-body">
-                Sprich hier ruhig mit dem Meta-Orchestrator. Er legt Projekt-Workspaces an, koordiniert deine
-                Bot-Teams im Hintergrund und öffnet Pläne, Code, Bilder &amp; 3D-Modelle direkt im In-App-Browser.
+                Coordinate calmly with the Main Agent. It creates project workspaces, delegates goals to
+                engineering teams, verifies work in the background, and brings finished deliverables here for
+                Diff Review and Merge.
               </p>
               <div className="chat-empty-actions">
                 <button
                   type="button"
                   className="btn primary"
                   disabled={busy}
-                  onClick={() => void handleCreateDemo(`Bot-Factory Demo${projects.length ? ` ${projects.length + 1}` : ""}`)}
+                  onClick={onOpenNewProjectModal}
                 >
                   <FolderPlus size={14} strokeWidth={1.6} />
-                  <span>Projekt mit Doc-, Bild- &amp; 3D-Preview starten</span>
+                  <span>New Project</span>
                 </button>
                 {quietStatus.activeProjects > 0 && (
-                  <button type="button" className="btn" onClick={onSwitchToBots}>
-                    <span>Zu den Bots ({quietStatus.runningBots} aktiv)</span>
+                  <button type="button" className="btn" onClick={() => onSwitchToBots(activeProject?.id)}>
+                    <span>Open Engineering Teams ({quietStatus.runningBots} running)</span>
                     <ArrowUpRight size={13} strokeWidth={1.6} />
                   </button>
                 )}
@@ -151,77 +210,217 @@ export function ChatTab({
 
           {!isEmpty && (
             <div className="bcs-time-sep">
-              <span>Heute · Ruhiger Orchestrator-Kanal</span>
+              <span>Today · Main Agent Channel</span>
             </div>
           )}
 
-          {messages.map((m) => {
-            const isUser = m.role === "user";
-            return (
-              <div key={m.id} className={`chat-turn ${isUser ? "user" : "assistant"}`}>
-                {isUser ? (
-                  <div className="chat-bubble-human">
-                    <div>{m.content}</div>
-                    <span className="chat-turn-time human">{formatTime(m.createdAt)}</span>
-                  </div>
-                ) : (
-                  <div className="chat-assistant-row">
-                    <BotAvatar role="orchestrator" size={28} />
-                    <div className="chat-assistant-body">
-                      <div className="chat-turn-meta">
-                        <span className="chat-speaker-name">Meta-Orchestrator</span>
-                        <span className="chat-turn-time">{formatTime(m.createdAt)}</span>
-                      </div>
-                      <div className="chat-prose-assistant">{m.content}</div>
+          {timeline.map((entry) => {
+            if (entry.kind === "message") {
+              const m = entry.msg;
+              const isUser = m.role === "user";
+              return (
+                <div key={m.id} className={`chat-turn ${isUser ? "user" : "assistant"}`}>
+                  {isUser ? (
+                    <div className="chat-bubble-human">
+                      <div>{m.content}</div>
+                      <span className="chat-turn-time human">{formatTime(m.createdAt)}</span>
                     </div>
+                  ) : (
+                    <div className="chat-assistant-row">
+                      <BotAvatar role="orchestrator" size={28} />
+                      <div className="chat-assistant-body">
+                        <div className="chat-turn-meta">
+                          <span className="chat-speaker-name">Main Agent</span>
+                          {memoryRecalledActive && (
+                            <button
+                              type="button"
+                              className="chat-memory-badge"
+                              onClick={onOpenMemoryStudio}
+                              title="Persistent L1/L2 memory active — click to inspect"
+                            >
+                              <Brain size={11} strokeWidth={1.6} />
+                              <span>Memory recalled</span>
+                            </button>
+                          )}
+                          <span className="chat-turn-time">{formatTime(m.createdAt)}</span>
+                        </div>
+                        <div className="chat-prose-assistant">
+                          <MarkdownRenderer content={m.content} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            const c = entry.card;
+            const projectTasks = tasksByProject[c.projectId] ?? [];
+            const verifiedTasksToMerge = projectTasks.filter(
+              (t) =>
+                t.status === "verified" &&
+                (!c.verifiedTaskIds || c.verifiedTaskIds.length === 0 || c.verifiedTaskIds.includes(t.id)),
+            );
+
+            if (c.kind === "delegation") {
+              return (
+                <div key={c.id} className="delivery-card">
+                  <div className="delivery-card-top">
+                    <span className="inline-preview-icon">
+                      <Sparkles size={15} strokeWidth={1.6} />
+                    </span>
+                    <div className="inline-preview-copy">
+                      <span className="inline-preview-title">{c.title}</span>
+                      <span className="inline-preview-sub">{c.subtitle}</span>
+                    </div>
+                    <span className="pill active">Delegated</span>
                   </div>
-                )}
-              </div>
+                  <div className="delivery-card-actions">
+                    <button
+                      type="button"
+                      className="btn xs"
+                      onClick={() => onSwitchToBots(c.projectId)}
+                    >
+                      <span>Watch Team</span>
+                      <ArrowUpRight size={12} strokeWidth={1.6} />
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            if (c.kind === "review_merge" || c.kind === "blocked" || c.kind === "milestone") {
+              const isBlocked = c.kind === "blocked";
+              const isVerifiedReady = c.kind === "review_merge";
+              return (
+                <div
+                  key={c.id}
+                  className={`delivery-card ${isVerifiedReady ? "verified" : isBlocked ? "blocked" : ""}`.trim()}
+                >
+                  <div className="delivery-card-top">
+                    <span className="inline-preview-icon">
+                      {isBlocked ? (
+                        <ShieldAlert size={15} strokeWidth={1.6} />
+                      ) : (
+                        <CheckCircle2 size={15} strokeWidth={1.6} />
+                      )}
+                    </span>
+                    <div className="inline-preview-copy">
+                      <span className="inline-preview-title">{c.title}</span>
+                      <span className="inline-preview-sub">{c.subtitle}</span>
+                    </div>
+                    <span className={`pill ${isBlocked ? "warning" : isVerifiedReady ? "success" : "active"}`}>
+                      {isBlocked ? "Needs Attention" : isVerifiedReady ? "Verified Delivery" : "Milestone"}
+                    </span>
+                  </div>
+                  <div className="delivery-card-actions">
+                    <button
+                      type="button"
+                      className="btn xs"
+                      onClick={() => {
+                        onSelectProject(c.projectId);
+                        onOpenDiffInBrowser(c.projectId);
+                      }}
+                    >
+                      <DiffBranchIcon size={12} />
+                      <span>Review Diff</span>
+                    </button>
+                    {verifiedTasksToMerge.map((vt) => (
+                      <button
+                        key={vt.id}
+                        type="button"
+                        className="btn xs accent"
+                        disabled={mergingTaskId !== null}
+                        onClick={() => void handleMerge(c.projectId, vt.id)}
+                      >
+                        <GitMerge size={12} strokeWidth={1.6} />
+                        <span>
+                          {mergingTaskId === vt.id ? "Merging…" : `Merge to main (${vt.title})`}
+                        </span>
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="btn xs ghost"
+                      onClick={() => onSwitchToBots(c.projectId)}
+                    >
+                      <span>Open Team</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <button
+                key={c.id}
+                type="button"
+                className="inline-preview-card"
+                onClick={() => onOpenProjectPreview(c.projectId, c.artifactPath)}
+              >
+                <span className="inline-preview-icon">
+                  <DocTabIcon size={15} />
+                </span>
+                <span className="inline-preview-copy">
+                  <span className="inline-preview-title">{c.title}</span>
+                  <span className="inline-preview-sub">{c.subtitle}</span>
+                </span>
+                <span className="inline-preview-cta">
+                  <BrowserPaneIcon size={13} />
+                  <span>Open in Browser</span>
+                </span>
+              </button>
             );
           })}
 
-          {cards.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              className="inline-preview-card"
-              onClick={() => onOpenProjectPreview(c.projectId, c.artifactPath)}
-            >
-              <span className="inline-preview-icon">
-                <DocTabIcon size={15} />
-              </span>
-              <span className="inline-preview-copy">
-                <span className="inline-preview-title">{c.title}</span>
-                <span className="inline-preview-sub">{c.subtitle}</span>
-              </span>
-              <span className="inline-preview-cta">
-                <BrowserPaneIcon size={13} />
-                <span>Im Browser öffnen</span>
-              </span>
-            </button>
-          ))}
+          {isStreaming && (
+            <div className="chat-turn assistant">
+              <div className="chat-assistant-row">
+                <BotAvatar role="orchestrator" size={28} active />
+                <div className="chat-assistant-body">
+                  <div className="chat-turn-meta">
+                    <span className="chat-speaker-name">Main Agent</span>
+                    <BotThinkingOrb activity="composing" size={20} shell={false} />
+                    <span className="chat-turn-time">Streaming…</span>
+                  </div>
+                  {streamingThought && (
+                    <div className="chat-thought-pill">{streamingThought}</div>
+                  )}
+                  {streamingText && (
+                    <div className="chat-prose-assistant">
+                      <MarkdownRenderer content={streamingText} />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
-          {busy && (
+          {busy && !isStreaming && (
             <div className="chat-thinking-row">
               <BotAvatar role="orchestrator" size={24} active />
               <BotThinkingOrb activity="composing" size={20} shell={false} />
-              <span>Meta-Orchestrator denkt nach…</span>
+              <span>Main Agent is thinking…</span>
             </div>
           )}
         </div>
 
         <PrecisionComposer
           mode="chat"
-          placeholder="Nachricht an den Meta-Orchestrator… (/ für Befehle)"
+          placeholder="Message the Main Agent… (/ for commands)"
           busy={busy}
           activeProject={activeProject}
           projects={projects}
           onSelectProject={onSelectProject}
           activeModelLabel={activeModelLabel}
+          providers={providers}
+          selectedTarget={selectedTarget}
+          onSelectTarget={onSelectTarget}
+          contextPercent={contextPercent}
+          contextTooltip={contextTooltip}
           gitDiff={gitDiff}
           showDiffTray={true}
-          onViewDiff={onOpenDiffInBrowser}
-          onQuickReview={onOpenDiffInBrowser}
+          onViewDiff={() => onOpenDiffInBrowser(activeProject?.id)}
           onOpenBrowser={onOpenBrowser}
           effort={effort}
           onChangeEffort={onChangeEffort}

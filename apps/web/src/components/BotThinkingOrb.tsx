@@ -32,7 +32,7 @@ const AGENT_STATUS_MAP: Record<AgentRecord["status"], ResolvedOrb> = {
     paused: true,
     activeBreath: false,
     speed: 0.7,
-    label: "Bereit (Ruhezustand)",
+    label: "Idle",
   },
   working: {
     kind: "orb",
@@ -42,7 +42,7 @@ const AGENT_STATUS_MAP: Record<AgentRecord["status"], ResolvedOrb> = {
     activeBreath: true,
     color: "#1e4e79",
     speed: 0.82,
-    label: "Agent arbeitet aktiv",
+    label: "Agent working",
   },
   waiting_review: {
     kind: "orb",
@@ -52,7 +52,7 @@ const AGENT_STATUS_MAP: Record<AgentRecord["status"], ResolvedOrb> = {
     activeBreath: true,
     color: "#8a530b",
     speed: 0.72,
-    label: "Wartet auf Review",
+    label: "Waiting for review",
   },
   requires_action: {
     kind: "orb",
@@ -62,7 +62,7 @@ const AGENT_STATUS_MAP: Record<AgentRecord["status"], ResolvedOrb> = {
     activeBreath: true,
     color: "#8a530b",
     speed: 0.76,
-    label: "Erfordert Entscheidung",
+    label: "Requires operator decision",
   },
   debating: {
     kind: "orb",
@@ -72,7 +72,7 @@ const AGENT_STATUS_MAP: Record<AgentRecord["status"], ResolvedOrb> = {
     activeBreath: true,
     color: "#8a530b",
     speed: 0.8,
-    label: "In Konflikt-Debatte",
+    label: "In conflict debate",
   },
   paused: {
     kind: "orb",
@@ -82,7 +82,7 @@ const AGENT_STATUS_MAP: Record<AgentRecord["status"], ResolvedOrb> = {
     activeBreath: false,
     color: "#8a530b",
     speed: 0.65,
-    label: "Pausiert",
+    label: "Paused",
   },
   stopped: {
     kind: "idle",
@@ -91,7 +91,7 @@ const AGENT_STATUS_MAP: Record<AgentRecord["status"], ResolvedOrb> = {
     paused: true,
     activeBreath: false,
     speed: 0.65,
-    label: "Gestoppt",
+    label: "Stopped",
   },
   error: {
     kind: "orb",
@@ -101,7 +101,7 @@ const AGENT_STATUS_MAP: Record<AgentRecord["status"], ResolvedOrb> = {
     activeBreath: false,
     color: "#9e2626",
     speed: 0.65,
-    label: "Fehlerzustand",
+    label: "Error",
   },
 };
 
@@ -119,7 +119,7 @@ function resolveOrbConfig(
         paused: true,
         activeBreath: false,
         speed: 0.72,
-        label: "Ruhezustand",
+        label: "Idle",
       };
     }
     if (
@@ -135,15 +135,15 @@ function resolveOrbConfig(
     }
 
     const defaultToneByState: Record<OrbState, { tone: OrbTone; color?: string; label: string; speed: number }> = {
-      working: { tone: "neutral", label: "Verarbeitet Aufgabe", speed: 0.82 },
-      searching: { tone: "active", color: "#1e4e79", label: "Durchsucht Kontext & Speicher", speed: 0.8 },
-      solving: { tone: "active", color: "#1e4e79", label: "Prüft & löst Konflikt", speed: 0.8 },
-      listening: { tone: "warning", color: "#8a530b", label: "Wartet auf Eingabe", speed: 0.74 },
-      connecting: { tone: "active", color: "#1e4e79", label: "Synchronisiert Verbindung", speed: 0.82 },
-      weaving: { tone: "neutral", label: "Koordiniert Team-Stränge", speed: 0.8 },
-      composing: { tone: "neutral", label: "Formuliert Antwort", speed: 0.82 },
-      breathing: { tone: "neutral", label: "Bereit & aufmerksam", speed: 0.68 },
-      shaping: { tone: "success", color: "#165e3d", label: "Formt Artefakt", speed: 0.8 },
+      working: { tone: "neutral", label: "Processing task", speed: 0.82 },
+      searching: { tone: "active", color: "#1e4e79", label: "Searching context & memory", speed: 0.8 },
+      solving: { tone: "active", color: "#1e4e79", label: "Resolving conflict", speed: 0.8 },
+      listening: { tone: "warning", color: "#8a530b", label: "Waiting for input", speed: 0.74 },
+      connecting: { tone: "active", color: "#1e4e79", label: "Connecting to daemon", speed: 0.82 },
+      weaving: { tone: "neutral", label: "Coordinating team", speed: 0.8 },
+      composing: { tone: "neutral", label: "Composing response", speed: 0.82 },
+      breathing: { tone: "neutral", label: "Ready", speed: 0.68 },
+      shaping: { tone: "success", color: "#165e3d", label: "Shaping artifact", speed: 0.8 },
     };
     const meta = defaultToneByState[activity];
     return {
@@ -170,18 +170,24 @@ function resolveOrbConfig(
     paused: false,
     activeBreath: true,
     speed: 0.7,
-    label: "Meta-Orchestrator bereit",
+    label: "Meta-Orchestrator ready",
   };
 }
 
 export interface BotThinkingOrbProps {
   status?: AgentRecord["status"];
   activity?: BotOrbActivity;
-  size?: OrbSize;
+  size?: number;
   tone?: OrbTone;
   shell?: boolean;
   label?: string;
   className?: string;
+}
+
+function toOrbSize(size: number): OrbSize {
+  if (size >= 48) return 64;
+  if (size >= 26) return 32;
+  return 20;
 }
 
 export function BotThinkingOrb({
@@ -195,12 +201,13 @@ export function BotThinkingOrb({
 }: BotThinkingOrbProps) {
   const resolved = resolveOrbConfig(status, activity, tone);
   const ariaLabel = label ?? resolved.label;
+  const orbSize = toOrbSize(size);
 
-  const shellPad = size === 64 ? 8 : size === 32 ? 4 : 3;
-  const shellDim = size + shellPad * 2;
+  const shellPad = orbSize === 64 ? 8 : orbSize === 32 ? 4 : 3;
+  const shellDim = orbSize + shellPad * 2;
 
   if (resolved.kind === "idle") {
-    const slotSize = shell ? shellDim : size;
+    const slotSize = shell ? shellDim : orbSize;
     const isDanger = resolved.tone === "danger";
     return (
       <span
@@ -225,7 +232,7 @@ export function BotThinkingOrb({
   const orbEl = (
     <ThinkingOrb
       state={resolved.state}
-      size={size}
+      size={orbSize}
       theme="light"
       speed={resolved.speed}
       paused={resolved.paused}

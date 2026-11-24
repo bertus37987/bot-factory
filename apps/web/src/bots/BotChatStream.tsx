@@ -1,5 +1,6 @@
 import type {
   AgentRecord,
+  AnnotationRecord,
   ArtifactEntry,
   DebateMessageRecord,
   DebateRecord,
@@ -8,7 +9,7 @@ import type {
   TimelineItem,
   VerificationReportRecord,
 } from "@bot-factory/shared";
-import { ArrowUpRight, ChevronRight } from "lucide-react";
+import { ArrowUpRight, AtSign, ChevronRight, CornerDownRight, GitMerge, Play, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import {
   BotAvatar,
@@ -24,6 +25,7 @@ import {
   ImageTabIcon,
 } from "../components/BotFactoryIcons";
 import { BotThinkingOrb } from "../components/BotThinkingOrb";
+import { MarkdownRenderer } from "../components/MarkdownRenderer";
 
 export interface BotChatStreamProps {
   mode: "single" | "group";
@@ -31,21 +33,26 @@ export interface BotChatStreamProps {
   activeAgent: AgentRecord | null;
   agents: AgentRecord[];
   timeline: TimelineItem[];
+  streamingBotTextByAgent: Record<string, string>;
+  streamingBotThoughtByAgent: Record<string, string>;
   tasks: TaskRecord[];
+  annotations?: AnnotationRecord[];
   debates: DebateRecord[];
   debateMessages: Record<string, DebateMessageRecord[]>;
   verifications: VerificationReportRecord[];
   artifacts: ArtifactEntry[];
   onOpenArtifactInBrowser: (artifact: ArtifactEntry) => void;
-  onOpenDiffInBrowser: () => void;
+  onOpenDiffInBrowser: (agentId?: string | null) => void;
   onVerifyTask: (taskId: string) => Promise<void>;
   onDispatchTask: (taskId: string) => Promise<void>;
+  onMergeTask: (taskId: string) => Promise<void>;
+  onSelectBot?: (agentId: string) => void;
+  onInsertMention?: (botName: string) => void;
   onOpenGroupRoom?: () => void;
 }
 
 const TRACE_KINDS = new Set(["thought", "plan", "tool_call", "terminal", "status"]);
 const SEP_GAP_MS = 45 * 60 * 1000;
-const RIGHT_SIDE_ROLE = /lead|pm|verifier|manager|human/i;
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
@@ -62,23 +69,23 @@ function sepLabel(ts: number): string {
   const d = new Date(ts);
   const now = new Date();
   const t = timeLabel(ts);
-  if (dayStamp(d) === dayStamp(now)) return `Heute ${t}`;
+  if (dayStamp(d) === dayStamp(now)) return `Today ${t}`;
   const yesterday = new Date(now.getTime() - 86_400_000);
-  if (dayStamp(d) === dayStamp(yesterday)) return `Gestern ${t}`;
-  return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}. ${t}`;
+  if (dayStamp(d) === dayStamp(yesterday)) return `Yesterday ${t}`;
+  return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${t}`;
 }
 
 function roleLabel(meta: ResolvedBotMeta | null, agent: AgentRecord | null): string {
   if (meta) return meta.jobTitle;
   switch (agent?.scope) {
     case "project":
-      return "Team lead";
+      return "Team Lead";
     case "verifier":
       return "Verifier";
     case "peer":
       return "Peer";
     case "sidekick":
-      return "Sidekick";
+      return "Subagent";
     default:
       return "Bot";
   }
@@ -97,6 +104,28 @@ function artifactIcon(a: ArtifactEntry): JSX.Element {
   return <DocTabIcon size={14} />;
 }
 
+function isSubagentMergeTrace(item: TimelineItem): boolean {
+  const title = (item.title ?? "").toLowerCase();
+  return title.includes("subagent patch") || title.includes("subagent merge");
+}
+
+function extractMentionedAgents(text: string, agents: AgentRecord[]): AgentRecord[] {
+  if (!text.includes("@")) return [];
+  const lower = text.toLowerCase();
+  const matched: AgentRecord[] = [];
+  const seen = new Set<string>();
+  for (const agent of agents) {
+    if (seen.has(agent.id)) continue;
+    const escaped = agent.name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`@${escaped}(?![a-z0-9_-])`, "i");
+    if (re.test(lower)) {
+      seen.add(agent.id);
+      matched.push(agent);
+    }
+  }
+  return matched;
+}
+
 const VERDICT_LABEL: Record<VerificationReportRecord["verdict"], string> = {
   pass: "PASS",
   fail: "FAIL",
@@ -110,6 +139,11 @@ interface SpeakerInfo {
   agent: AgentRecord | null;
 }
 
+interface ReplyQuoteInfo {
+  targetAgentId?: string | null;
+  label: string;
+}
+
 type FeedNode =
   | { kind: "sep"; key: string; label: string }
   | {
@@ -120,6 +154,10 @@ type FeedNode =
       speaker: SpeakerInfo;
       text: string;
       eyebrow?: string;
+      replyQuote?: ReplyQuoteInfo;
+      diffAgentId?: string | null;
+      hasDiff?: boolean;
+      filePath?: string;
     }
   | { kind: "trace"; key: string; ts: number; items: TimelineItem[] }
   | { kind: "system"; key: string; ts: number; text: string }
@@ -133,85 +171,16 @@ type RawEvent =
   | { ts: number; ord: number; type: "verify"; report: VerificationReportRecord }
   | { ts: number; ord: number; type: "artifact"; artifact: ArtifactEntry };
 
-const BCS_CSS = `
-.bcs-root{display:flex;flex-direction:column;padding:6px 0 10px}
-.bcs-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:64px 20px;text-align:center}
-.bcs-empty-title{font-size:var(--text-lg);font-weight:var(--weight-semibold);letter-spacing:var(--tracking-snug);color:var(--ink-primary)}
-.bcs-empty-sub{font-size:var(--text-sm);color:var(--ink-muted);max-width:380px;line-height:1.55}
-.bcs-time-sep{display:flex;justify-content:center;margin:16px 0 14px}
-.bcs-time-sep>span{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--ink-muted);background:var(--bg-surface);border:var(--hairline-subtle);border-radius:var(--radius-pill);padding:2px 10px;font-variant-numeric:tabular-nums}
-.bcs-row{display:flex;align-items:flex-end;gap:9px;margin-bottom:14px}
-.bcs-row.right{flex-direction:row-reverse}
-.bcs-msg{display:flex;flex-direction:column;gap:4px;max-width:min(560px,80%);min-width:0}
-.bcs-row.right .bcs-msg{align-items:flex-end}
-.bcs-msg-head{display:flex;align-items:center;gap:7px;font-size:var(--text-xs);color:var(--ink-muted);min-width:0}
-.bcs-msg-name{font-weight:var(--weight-medium);color:var(--ink-secondary);white-space:nowrap}
-.bcs-msg-eyebrow{font-family:var(--font-mono);font-size:10px;color:var(--status-warning-ink);background:var(--status-warning-bg);border:1px solid var(--status-warning-border);border-radius:var(--radius-xs);padding:0 5px;white-space:nowrap}
-.bcs-msg-time{font-family:var(--font-mono);font-size:10px;color:var(--ink-faint);font-variant-numeric:tabular-nums;flex:0 0 auto}
-.bcs-bubble{padding:9px 13px;font-size:var(--text-base);line-height:1.6;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
-.bcs-bubble.bot{background:#F4F4F5;border:1px solid #EBEBEB;color:var(--ink-primary);border-radius:16px;border-bottom-left-radius:4px}
-.bcs-row.right .bcs-bubble.bot{border-radius:16px;border-bottom-right-radius:4px}
-.bcs-bubble.human{background:#D95D22;color:#FFFFFF;border-radius:16px;border-bottom-right-radius:4px}
-.bcs-avatar-fallback{width:28px;height:28px;border-radius:8px;background:var(--bg-surface-subtle);border:var(--hairline);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:var(--weight-semibold);color:var(--ink-muted);flex:0 0 auto}
-.bcs-system{display:flex;justify-content:center;margin:8px 0 14px}
-.bcs-system>span{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--ink-faint);text-align:center}
-.bcs-trace{margin:0 0 14px}
-.bcs-trace-head{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:11px;color:var(--ink-muted);background:none;border:none;cursor:pointer;padding:3px 7px;border-radius:var(--radius-sm);font-variant-numeric:tabular-nums;transition:background var(--duration-fast) var(--ease-out-quiet),color var(--duration-fast) var(--ease-out-quiet)}
-.bcs-trace-head:hover{background:var(--bg-hover);color:var(--ink-secondary)}
-.bcs-chev{flex:0 0 auto;color:var(--ink-faint);transition:transform var(--duration-fast) var(--ease-out-quiet)}
-.bcs-chev.open{transform:rotate(90deg)}
-.bcs-trace-body{margin:4px 0 4px 10px;border-left:1px solid var(--border-hairline);padding:6px 2px 6px 12px;display:flex;flex-direction:column;gap:6px}
-.bcs-trace-line{font-family:var(--font-mono);font-size:11px;color:var(--ink-secondary);line-height:1.55;white-space:pre-wrap;word-break:break-word;display:flex;gap:7px;align-items:baseline}
-.bcs-trace-kind{color:var(--ink-faint);text-transform:uppercase;font-size:9.5px;letter-spacing:.06em;flex:0 0 auto}
-.bcs-trace-diff{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--status-active-ink);background:var(--status-active-bg);border:1px solid var(--status-active-border);border-radius:var(--radius-xs);padding:0 5px;cursor:pointer;flex:0 0 auto}
-.bcs-artifact{display:flex;align-items:center;gap:9px;max-width:440px;margin:0 0 14px;padding:8px 11px;background:var(--bg-canvas);border:var(--hairline);border-radius:var(--radius-md);cursor:pointer;text-align:left;transition:border-color var(--duration-fast) var(--ease-out-quiet),box-shadow var(--duration-fast) var(--ease-out-quiet)}
-.bcs-artifact:hover{border-color:var(--border-strong);box-shadow:0 1px 3px rgba(23,23,23,.05)}
-.bcs-artifact-ic{display:flex;color:var(--ink-muted);flex:0 0 auto}
-.bcs-artifact-name{font-size:12.5px;font-weight:var(--weight-medium);color:var(--ink-primary);white-space:nowrap}
-.bcs-artifact-path{font-family:var(--font-mono);font-size:11px;color:var(--ink-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.bcs-artifact-sep{color:var(--ink-faint);flex:0 0 auto}
-.bcs-verify{display:flex;align-items:center;gap:8px;margin:0 0 14px;flex-wrap:wrap}
-.bcs-verify-chip{font-family:var(--font-mono);font-size:10.5px;font-weight:var(--weight-medium);border-radius:var(--radius-sm);padding:2px 8px;border:1px solid;white-space:nowrap;font-variant-numeric:tabular-nums}
-.bcs-verify[data-verdict="pass"] .bcs-verify-chip{color:var(--status-success-ink);background:var(--status-success-bg);border-color:var(--status-success-border)}
-.bcs-verify[data-verdict="fail"] .bcs-verify-chip{color:var(--status-danger-ink);background:var(--status-danger-bg);border-color:var(--status-danger-border)}
-.bcs-verify[data-verdict="needs_human"] .bcs-verify-chip{color:var(--status-warning-ink);background:var(--status-warning-bg);border-color:var(--status-warning-border)}
-.bcs-verify-tag{font-family:var(--font-mono);font-size:10px;color:var(--status-active-ink);background:var(--status-active-bg);border:1px solid var(--status-active-border);border-radius:var(--radius-xs);padding:1px 5px;white-space:nowrap}
-.bcs-verify-name{font-size:var(--text-2xs);color:var(--ink-secondary);white-space:nowrap}
-.bcs-verify-sum{font-size:var(--text-2xs);color:var(--ink-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
-.bcs-progress{max-width:560px;margin:2px 0 16px;border:var(--hairline);border-radius:var(--radius-md);background:var(--bg-surface);overflow:hidden}
-.bcs-progress-head{display:flex;align-items:center;gap:8px;width:100%;padding:8px 11px;font-size:12.5px;color:var(--ink-secondary);text-align:left;background:none;border:none;cursor:pointer;transition:background var(--duration-fast) var(--ease-out-quiet)}
-.bcs-progress-head:hover{background:var(--bg-hover)}
-.bcs-progress-head>svg{color:var(--ink-muted);flex:0 0 auto}
-.bcs-progress-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.bcs-progress-count{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--ink-muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
-.bcs-progress-body{border-top:var(--hairline);padding:6px 8px;display:flex;flex-direction:column;gap:2px;background:var(--bg-canvas)}
-.bcs-task{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:var(--radius-sm);font-size:var(--text-xs)}
-.bcs-task:hover{background:var(--bg-surface)}
-.bcs-task-status{font-family:var(--font-mono);font-size:10px;color:var(--ink-muted);background:var(--bg-surface-subtle);border:var(--hairline-subtle);border-radius:var(--radius-xs);padding:1px 5px;flex:0 0 auto;text-transform:uppercase;letter-spacing:.04em}
-.bcs-task-status[data-status="verified"],.bcs-task-status[data-status="merged"]{color:var(--status-success-ink);background:var(--status-success-bg);border-color:var(--status-success-border)}
-.bcs-task-status[data-status="in_review"]{color:var(--status-active-ink);background:var(--status-active-bg);border-color:var(--status-active-border)}
-.bcs-task-status[data-status="blocked"]{color:var(--status-danger-ink);background:var(--status-danger-bg);border-color:var(--status-danger-border)}
-.bcs-task-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-secondary);min-width:0}
-.bcs-task-btn{display:inline-flex;align-items:center;gap:4px;font-size:var(--text-2xs);font-weight:var(--weight-medium);color:var(--ink-secondary);background:var(--bg-canvas);border:var(--hairline);border-radius:var(--radius-sm);padding:3px 8px;cursor:pointer;flex:0 0 auto;transition:all var(--duration-fast) var(--ease-out-quiet)}
-.bcs-task-btn:hover:not(:disabled){border-color:var(--border-strong);background:var(--bg-hover);color:var(--ink-primary)}
-.bcs-task-btn:disabled{opacity:.45;cursor:not-allowed}
-.bcs-progress-foot{display:flex;justify-content:flex-end;padding:4px 4px 2px}
-.bcs-team-pill-wrap{display:flex;justify-content:center;margin:16px 0}
-.bcs-team-pill{display:inline-flex;align-items:center;gap:8px;padding:5px 13px;border-radius:var(--radius-pill);background:var(--bg-surface);border:var(--hairline);font-size:var(--text-xs);color:var(--ink-secondary);cursor:pointer;transition:all var(--duration-fast) var(--ease-out-quiet)}
-.bcs-team-pill:hover{background:var(--bg-hover);border-color:var(--border-strong);color:var(--ink-primary)}
-.bcs-team-pill>svg{color:var(--ink-faint)}
-.bcs-live{display:flex;align-items:center;gap:9px;margin-top:4px;padding:9px 4px 2px;border-top:1px dashed var(--border-hairline)}
-.bcs-live-text{font-size:var(--text-xs);color:var(--ink-muted)}
-.bcs-live-more{display:flex;justify-content:flex-start;padding:2px 0 0 37px;font-family:var(--font-mono);font-size:10px;color:var(--ink-faint)}
-`;
-
 export function BotChatStream({
   mode,
   project,
   activeAgent,
   agents,
   timeline,
+  streamingBotTextByAgent,
+  streamingBotThoughtByAgent,
   tasks,
+  annotations = [],
   debates,
   debateMessages,
   verifications,
@@ -220,6 +189,9 @@ export function BotChatStream({
   onOpenDiffInBrowser,
   onVerifyTask,
   onDispatchTask,
+  onMergeTask,
+  onSelectBot,
+  onInsertMention,
   onOpenGroupRoom,
 }: BotChatStreamProps): JSX.Element {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -235,11 +207,62 @@ export function BotChatStream({
     return map;
   }, [agents, activeAgent]);
 
+  const teamLead = useMemo(
+    () => agents.find((a) => a.scope === "project") ?? null,
+    [agents],
+  );
+
+  // In single-bot mode, scope verifications and artifacts strictly to the active bot
+  const scopedVerifications = useMemo(() => {
+    if (mode === "group") return verifications;
+    if (!activeAgent) return [];
+    const botTaskIds = new Set(tasks.filter((t) => t.assignedAgentId === activeAgent.id).map((t) => t.id));
+    return verifications.filter(
+      (r) =>
+        r.verifierAgentId === activeAgent.id ||
+        r.authorAgentId === activeAgent.id ||
+        (r.targetKind === "task" && botTaskIds.has(r.targetId)),
+    );
+  }, [mode, verifications, activeAgent, tasks]);
+
+  const scopedArtifacts = useMemo(() => {
+    if (mode === "group") return artifacts;
+    if (!activeAgent) return [];
+
+    const botTasks = tasks.filter((t) => t.assignedAgentId === activeAgent.id);
+    const botAnnotationIds = new Set(
+      botTasks.map((t) => t.sourceAnnotationId).filter((id): id is string => Boolean(id)),
+    );
+    const linkedPaths = new Set<string>();
+    for (const t of botTasks) {
+      if (t.handoffPath) linkedPaths.add(t.handoffPath);
+    }
+    for (const ann of annotations) {
+      if (botAnnotationIds.has(ann.id)) linkedPaths.add(ann.filePath);
+    }
+    for (const item of timeline) {
+      if (item.filePath) linkedPaths.add(item.filePath);
+    }
+
+    const timelineHaystack = timeline
+      .map((i) => `${i.title ?? ""}\n${i.content}`)
+      .join("\n")
+      .toLowerCase();
+    const taskHaystack = botTasks.map((t) => `${t.title}\n${t.specMd}`).join("\n").toLowerCase();
+
+    return artifacts.filter((a) => {
+      if (linkedPaths.has(a.relativePath)) return true;
+      if (activeAgent.scope === "project" && a.relativePath.startsWith("plans/")) return true;
+      const relLower = a.relativePath.toLowerCase();
+      return timelineHaystack.includes(relLower) || taskHaystack.includes(relLower);
+    });
+  }, [mode, artifacts, activeAgent, tasks, annotations, timeline]);
+
   const speakerFor = (agentId: string | null, isHuman: boolean, steer: boolean): SpeakerInfo => {
     if (isHuman) {
       return {
         human: true,
-        name: mode === "group" ? "Human" : steer ? "Steer → PM" : "Du",
+        name: mode === "group" ? "You" : steer ? "You (Steer)" : "You",
         meta: null,
         agent: null,
       };
@@ -255,12 +278,13 @@ export function BotChatStream({
     return { human: false, name: agent.name, meta, agent };
   };
 
+  // Grok-Bot Multi-Side Alignment:
+  // Right: You (user/steer) & Team Lead (scope === "project")
+  // Left: Specialist Engineering Bots (peer/sidekick) & Verifier (verifier)
   const sideFor = (speaker: SpeakerInfo): "left" | "right" => {
     if (speaker.human) return "right";
     if (mode === "single") return "left";
-    const { agent, meta } = speaker;
-    if (agent && (agent.scope === "verifier" || agent.scope === "project")) return "right";
-    if (meta && RIGHT_SIDE_ROLE.test(meta.role)) return "right";
+    if (speaker.agent?.scope === "project") return "right";
     return "left";
   };
 
@@ -278,7 +302,7 @@ export function BotChatStream({
           ts: d.createdAt,
           ord: ord++,
           type: "system",
-          text: `Debatte geöffnet — ${d.topic}`,
+          text: `Debate opened — ${d.topic}`,
         });
         for (const m of debateMessages[d.id] ?? []) {
           raw.push({ ts: m.createdAt, ord: ord++, type: "debate_msg", msg: m, debate: d });
@@ -290,17 +314,17 @@ export function BotChatStream({
             type: "system",
             text:
               d.status === "resolved"
-                ? `Debatte geschlossen — ${d.resolutionSummary ?? d.topic}`
-                : `Debatte eskaliert — ${d.topic}`,
+                ? `Debate resolved — ${d.resolutionSummary ?? d.topic}`
+                : `Debate escalated to Team Lead — ${d.topic}`,
           });
         }
       }
     }
 
-    for (const r of verifications) {
+    for (const r of scopedVerifications) {
       raw.push({ ts: r.createdAt, ord: ord++, type: "verify", report: r });
     }
-    for (const a of artifacts) {
+    for (const a of scopedArtifacts) {
       raw.push({ ts: a.updatedAt, ord: ord++, type: "artifact", artifact: a });
     }
 
@@ -310,6 +334,7 @@ export function BotChatStream({
     let traceBuf: TimelineItem[] = [];
     let lastTs: number | null = null;
     let lastDay = "";
+    const lastMessageBySpeaker = new Map<string, { name: string; snippet: string }>();
 
     const flushTrace = () => {
       if (traceBuf.length === 0) return;
@@ -341,13 +366,45 @@ export function BotChatStream({
             kind: "system",
             key: `sys-${item.id}`,
             ts: ev.ts,
-            text: `Übergabe → ${item.title ?? item.content}`,
+            text: `Handoff -> ${item.title ?? item.content}`,
           });
         } else if (item.role === "system" && item.kind !== "steer") {
           nodes.push({ kind: "system", key: `sys-${item.id}`, ts: ev.ts, text: item.content });
         } else {
           const isHuman = item.role === "user" || item.kind === "steer";
           const speaker = speakerFor(item.agentId, isHuman, item.kind === "steer");
+          const mentioned = extractMentionedAgents(item.content, agents);
+
+          let replyQuote: ReplyQuoteInfo | undefined;
+          if (item.kind === "steer" && teamLead) {
+            replyQuote = {
+              targetAgentId: teamLead.id,
+              label: `Steer -> @${teamLead.name}`,
+            };
+          } else if (mentioned.length > 0) {
+            const firstTarget = mentioned[0]!;
+            const prevMsg = lastMessageBySpeaker.get(firstTarget.id);
+            replyQuote = {
+              targetAgentId: firstTarget.id,
+              label: prevMsg
+                ? `${firstTarget.name}: "${prevMsg.snippet}"`
+                : `Directed to @${firstTarget.name}`,
+            };
+          } else if (speaker.agent?.parentAgentId && speaker.agent.scope === "sidekick") {
+            const parent = agentById.get(speaker.agent.parentAgentId);
+            if (parent) {
+              replyQuote = {
+                targetAgentId: parent.id,
+                label: `Subagent reporting to ${parent.name}`,
+              };
+            }
+          }
+
+          const snippet = item.content.replace(/\s+/g, " ").trim().slice(0, 76);
+          if (speaker.agent && snippet) {
+            lastMessageBySpeaker.set(speaker.agent.id, { name: speaker.name, snippet });
+          }
+
           nodes.push({
             kind: "msg",
             key: `msg-${item.id}`,
@@ -355,6 +412,10 @@ export function BotChatStream({
             side: sideFor(speaker),
             speaker,
             text: item.content,
+            replyQuote,
+            diffAgentId: item.agentId,
+            hasDiff: Boolean(item.diffPreview),
+            filePath: item.filePath,
           });
         }
         continue;
@@ -370,8 +431,11 @@ export function BotChatStream({
           ts: ev.ts,
           side: sideFor(speaker),
           speaker,
-          text: ev.msg.position + (ev.msg.evidence ? `\n\nBeleg: ${ev.msg.evidence}` : ""),
-          eyebrow: `Debatte · R${ev.msg.roundNum}`,
+          text: ev.msg.position + (ev.msg.evidence ? `\n\nEvidence: ${ev.msg.evidence}` : ""),
+          eyebrow: `Debate · R${ev.msg.roundNum}`,
+          replyQuote: {
+            label: `Debate: ${ev.debate.topic}`,
+          },
         });
       } else if (ev.type === "system") {
         nodes.push({ kind: "system", key: `sys-ev-${ev.ord}`, ts: ev.ts, text: ev.text });
@@ -384,19 +448,34 @@ export function BotChatStream({
     flushTrace();
     return nodes;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeline, debates, debateMessages, verifications, artifacts, mode, agentById, activeAgent]);
+  }, [timeline, debates, debateMessages, scopedVerifications, scopedArtifacts, mode, agentById, activeAgent, agents, teamLead]);
+
+  // Active streaming bubbles
+  const streamingEntries = useMemo(() => {
+    const candidates = mode === "single" ? (activeAgent ? [activeAgent] : []) : agents;
+    const out: Array<{ agent: AgentRecord; text: string; thought: string }> = [];
+    for (const ag of candidates) {
+      const text = streamingBotTextByAgent[ag.id] ?? "";
+      const thought = streamingBotThoughtByAgent[ag.id] ?? "";
+      if (text.trim().length > 0 || thought.trim().length > 0) {
+        out.push({ agent: ag, text, thought });
+      }
+    }
+    return out;
+  }, [mode, activeAgent, agents, streamingBotTextByAgent, streamingBotThoughtByAgent]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
-  }, [feed.length]);
+  }, [feed.length, streamingEntries.length]);
 
   const doneTasks = tasks.filter((t) => t.status === "verified" || t.status === "merged").length;
+  const streamingIds = new Set(streamingEntries.map((e) => e.agent.id));
   const workingAgents =
     mode === "single"
-      ? activeAgent?.status === "working"
+      ? activeAgent?.status === "working" && !streamingIds.has(activeAgent.id)
         ? [activeAgent]
         : []
-      : agents.filter((a) => a.status === "working");
+      : agents.filter((a) => a.status === "working" && !streamingIds.has(a.id));
 
   const runTaskAction = async (key: string, fn: () => Promise<void>) => {
     if (pendingTaskAction) return;
@@ -411,24 +490,33 @@ export function BotChatStream({
   const traceToolCalls = (items: TimelineItem[]) =>
     items.filter((i) => i.kind === "tool_call" || i.kind === "terminal").length;
 
+  const traceSubagentMerges = (items: TimelineItem[]) =>
+    items.filter((i) => isSubagentMergeTrace(i)).length;
+
+  const handleMentionAction = (agent: AgentRecord) => {
+    if (onSelectBot) {
+      onSelectBot(agent.id);
+    } else if (onInsertMention) {
+      onInsertMention(agent.name);
+    }
+  };
+
   return (
     <div className="bcs-root">
-      <style>{BCS_CSS}</style>
-
-      {feed.length === 0 && (
+      {feed.length === 0 && streamingEntries.length === 0 && (
         <div className="bcs-empty">
           <BotThinkingOrb
             activity="breathing"
             size={64}
-            label={mode === "group" ? "Team-Raum bereit" : "Bot bereit"}
+            label={mode === "group" ? "Team channel ready" : "Bot ready"}
           />
           <div className="bcs-empty-title">
-            {mode === "group" ? "Team-Raum" : (activeAgent?.name ?? "Bot")}
+            {mode === "group" ? `${project.name} · Group Chat` : (activeAgent?.name ?? "Bot")}
           </div>
           <div className="bcs-empty-sub">
             {mode === "group"
-              ? "Noch keine Team-Aktivität — Nachrichten, Debatten und Verifier-Urteile erscheinen hier chronologisch."
-              : "Noch keine Nachrichten — Timeline-Events und Antworten des Bots erscheinen hier."}
+              ? "No team messages yet — Team Lead steers, specialist replies, subagent merges, and verification verdicts appear here chronologically."
+              : "No timeline events yet — messages, tool traces, and bot-scoped artifacts appear here."}
           </div>
         </div>
       )}
@@ -452,30 +540,126 @@ export function BotChatStream({
 
         if (node.kind === "msg") {
           const { speaker } = node;
+          const mentionedBots = extractMentionedAgents(node.text, agents);
+          const referencedArtifact = node.filePath
+            ? artifacts.find((a) => a.relativePath === node.filePath) ?? null
+            : null;
+
           return (
-            <div key={node.key} className={`bcs-row ${node.side}`}>
+            <div
+              key={node.key}
+              className={`group-msg-row ${node.side === "right" ? "side-right" : "side-left"}`}
+            >
               {!speaker.human &&
                 (speaker.meta ? (
-                  <BotAvatar
-                    role={speaker.meta.role}
-                    size={28}
-                    active={speaker.agent?.status === "working"}
-                  />
+                  <button
+                    type="button"
+                    onClick={() => speaker.agent && onSelectBot?.(speaker.agent.id)}
+                    title={`Open ${speaker.name} timeline`}
+                    style={{
+                      padding: 0,
+                      border: "none",
+                      background: "transparent",
+                      borderRadius: "9999px",
+                      overflow: "hidden",
+                      cursor: onSelectBot ? "pointer" : "default",
+                      flexShrink: 0,
+                      display: "inline-flex",
+                    }}
+                  >
+                    <BotAvatar
+                      role={speaker.meta.role}
+                      size={30}
+                      active={speaker.agent?.status === "working"}
+                    />
+                  </button>
                 ) : (
-                  <span className="bcs-avatar-fallback">
+                  <span className="bcs-avatar-fallback" style={{ borderRadius: "9999px" }}>
                     {speaker.name.charAt(0).toUpperCase()}
                   </span>
                 ))}
-              <div className="bcs-msg">
+
+              <div className="group-msg-stack">
                 <div className="bcs-msg-head">
                   <span className="bcs-msg-name">{speaker.name}</span>
                   {!speaker.human && (speaker.meta || speaker.agent) && (
-                    <JobTitlePill label={roleLabel(speaker.meta, speaker.agent)} />
+                    <JobTitlePill
+                      label={roleLabel(speaker.meta, speaker.agent)}
+                      tone={speaker.agent?.scope === "project" ? "accent" : "neutral"}
+                    />
                   )}
                   {node.eyebrow && <span className="bcs-msg-eyebrow">{node.eyebrow}</span>}
                   <span className="bcs-msg-time">{timeLabel(node.ts)}</span>
+                  {!speaker.human && speaker.agent && onInsertMention && (
+                    <button
+                      type="button"
+                      className="mention-chip"
+                      onClick={() => onInsertMention(speaker.agent!.name)}
+                      title={`Mention @${speaker.agent.name} in composer`}
+                    >
+                      <AtSign size={10} strokeWidth={1.8} />
+                      <span>{speaker.agent.name}</span>
+                    </button>
+                  )}
                 </div>
-                <div className={`bcs-bubble ${speaker.human ? "human" : "bot"}`}>{node.text}</div>
+
+                {node.replyQuote && (
+                  <div
+                    className="reply-quote-bar"
+                    style={{ cursor: node.replyQuote.targetAgentId && onSelectBot ? "pointer" : "default" }}
+                    onClick={() => {
+                      if (node.replyQuote?.targetAgentId) {
+                        onSelectBot?.(node.replyQuote.targetAgentId);
+                      }
+                    }}
+                  >
+                    <CornerDownRight size={11} strokeWidth={1.7} style={{ flexShrink: 0 }} />
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{node.replyQuote.label}</span>
+                  </div>
+                )}
+
+                <div className={`bcs-bubble ${speaker.human ? "human" : "bot"}`}>
+                  {speaker.human ? (
+                    <div style={{ whiteSpace: "pre-wrap" }}>{node.text}</div>
+                  ) : (
+                    <MarkdownRenderer content={node.text} />
+                  )}
+                </div>
+
+                {(mentionedBots.length > 0 || node.hasDiff || referencedArtifact) && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+                    {mentionedBots.map((mBot) => (
+                      <button
+                        key={mBot.id}
+                        type="button"
+                        className="mention-chip"
+                        onClick={() => handleMentionAction(mBot)}
+                        title={onSelectBot ? `Jump to ${mBot.name}` : `Mention @${mBot.name}`}
+                      >
+                        @{mBot.name}
+                      </button>
+                    ))}
+                    {node.hasDiff && (
+                      <button
+                        type="button"
+                        className="bcs-trace-diff"
+                        onClick={() => onOpenDiffInBrowser(node.diffAgentId)}
+                      >
+                        View Diff
+                      </button>
+                    )}
+                    {referencedArtifact && (
+                      <button
+                        type="button"
+                        className="bcs-task-btn"
+                        onClick={() => onOpenArtifactInBrowser(referencedArtifact)}
+                      >
+                        {artifactIcon(referencedArtifact)}
+                        <span>{referencedArtifact.name}</span>
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -484,6 +668,7 @@ export function BotChatStream({
         if (node.kind === "trace") {
           const open = Boolean(expanded[node.key]);
           const toolCalls = traceToolCalls(node.items);
+          const subagentMerges = traceSubagentMerges(node.items);
           return (
             <div key={node.key} className="bcs-trace">
               <button
@@ -493,35 +678,43 @@ export function BotChatStream({
                 aria-expanded={open}
               >
                 <span>
-                  {node.items.length} {node.items.length === 1 ? "Schritt" : "Schritte"}
+                  {node.items.length} {node.items.length === 1 ? "step" : "steps"}
                   {" · "}
-                  {toolCalls} {toolCalls === 1 ? "Tool-Aufruf" : "Tool-Aufrufe"}
+                  {toolCalls} {toolCalls === 1 ? "tool call" : "tool calls"}
+                  {subagentMerges > 0
+                    ? ` · ${subagentMerges} subagent ${subagentMerges === 1 ? "merge" : "merges"}`
+                    : ""}
                 </span>
                 <ChevronRight size={11} strokeWidth={1.6} className={`bcs-chev ${open ? "open" : ""}`} />
               </button>
               {open && (
                 <div className="bcs-trace-body">
-                  {node.items.map((i) => (
-                    <div key={i.id} className="bcs-trace-line">
-                      <span className="bcs-trace-kind">{i.kind}</span>
-                      <span>
-                        {i.title ? `${i.title} — ` : ""}
-                        {i.content}
-                        {i.exitCode !== null && i.exitCode !== undefined
-                          ? ` (exit ${i.exitCode})`
-                          : ""}
-                      </span>
-                      {i.diffPreview && (
-                        <button
-                          type="button"
-                          className="bcs-trace-diff"
-                          onClick={onOpenDiffInBrowser}
-                        >
-                          Diff
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                  {node.items.map((i) => {
+                    const isSubMerge = isSubagentMergeTrace(i);
+                    return (
+                      <div key={i.id} className="bcs-trace-line">
+                        <span className="bcs-trace-kind">
+                          {isSubMerge ? "subagent merge" : i.kind}
+                        </span>
+                        <span>
+                          {i.title ? `${i.title} — ` : ""}
+                          {i.content}
+                          {i.exitCode !== null && i.exitCode !== undefined
+                            ? ` (exit ${i.exitCode})`
+                            : ""}
+                        </span>
+                        {i.diffPreview && (
+                          <button
+                            type="button"
+                            className="bcs-trace-diff"
+                            onClick={() => onOpenDiffInBrowser(i.agentId)}
+                          >
+                            Diff
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -536,13 +729,17 @@ export function BotChatStream({
               key={node.key}
               className="bcs-artifact"
               onClick={() => onOpenArtifactInBrowser(a)}
-              title={`${a.relativePath} im Browser öffnen`}
+              title={`Open ${a.relativePath} in In-App Browser`}
             >
               <span className="bcs-artifact-ic">{artifactIcon(a)}</span>
               <span className="bcs-artifact-name">{a.name}</span>
               <span className="bcs-artifact-sep">·</span>
               <span className="bcs-artifact-path">{a.relativePath}</span>
-              <ArrowUpRight size={12} strokeWidth={1.6} style={{ marginLeft: "auto", color: "var(--ink-faint)", flex: "0 0 auto" }} />
+              <ArrowUpRight
+                size={12}
+                strokeWidth={1.6}
+                style={{ marginLeft: "auto", color: "var(--ink-faint)", flex: "0 0 auto" }}
+              />
             </button>
           );
         }
@@ -563,6 +760,49 @@ export function BotChatStream({
         return null;
       })}
 
+      {/* Live Streaming Bot Bubbles */}
+      {streamingEntries.map(({ agent, text, thought }) => {
+        let meta: ResolvedBotMeta | null = null;
+        try {
+          meta = resolveBotRole(agent);
+        } catch {
+          meta = null;
+        }
+        const side = mode === "group" && agent.scope === "project" ? "side-right" : "side-left";
+        return (
+          <div key={`stream-${agent.id}`} className={`group-msg-row ${side}`}>
+            {meta ? (
+              <span style={{ borderRadius: "9999px", overflow: "hidden", display: "inline-flex", flexShrink: 0 }}>
+                <BotAvatar role={meta.role} size={30} active />
+              </span>
+            ) : (
+              <span className="bcs-avatar-fallback" style={{ borderRadius: "9999px" }}>
+                {agent.name.charAt(0).toUpperCase()}
+              </span>
+            )}
+            <div className="group-msg-stack">
+              <div className="bcs-msg-head">
+                <span className="bcs-msg-name">{agent.name}</span>
+                <JobTitlePill
+                  label={roleLabel(meta, agent)}
+                  tone={agent.scope === "project" ? "accent" : "neutral"}
+                />
+                <BotThinkingOrb activity={text ? "composing" : "solving"} size={20} shell={false} />
+                <span className="bcs-msg-time">streaming</span>
+              </div>
+              {thought.trim().length > 0 && (
+                <div className="chat-thought-pill">{thought}</div>
+              )}
+              {text.trim().length > 0 && (
+                <div className="bcs-bubble bot">
+                  <MarkdownRenderer content={text} />
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
       {tasks.length > 0 && (
         <div className="bcs-progress">
           <button
@@ -575,7 +815,7 @@ export function BotChatStream({
               <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" strokeWidth="1.4" />
               <path d="M6 1a5 5 0 0 1 0 10z" fill="currentColor" />
             </svg>
-            <span className="bcs-progress-title">{project.name} — Team-Fortschritt</span>
+            <span className="bcs-progress-title">{project.name} — Team Progress</span>
             <span className="bcs-progress-count">
               {doneTasks}/{tasks.length}
             </span>
@@ -602,10 +842,11 @@ export function BotChatStream({
                         void runTaskAction(`dispatch-${t.id}`, () => onDispatchTask(t.id))
                       }
                     >
-                      Vergeben
+                      <Play size={10} strokeWidth={1.6} />
+                      <span>Dispatch</span>
                     </button>
                   )}
-                  {t.status === "in_review" && (
+                  {(t.status === "in_review" || t.status === "blocked") && (
                     <button
                       type="button"
                       className="bcs-task-btn"
@@ -614,14 +855,32 @@ export function BotChatStream({
                         void runTaskAction(`verify-${t.id}`, () => onVerifyTask(t.id))
                       }
                     >
-                      Verify (Fresh)
+                      <ShieldCheck size={10} strokeWidth={1.6} />
+                      <span>Verify (Fresh)</span>
+                    </button>
+                  )}
+                  {t.status === "verified" && (
+                    <button
+                      type="button"
+                      className="bcs-task-btn"
+                      disabled={pendingTaskAction !== null}
+                      onClick={() =>
+                        void runTaskAction(`merge-${t.id}`, () => onMergeTask(t.id))
+                      }
+                    >
+                      <GitMerge size={10} strokeWidth={1.6} />
+                      <span>Merge</span>
                     </button>
                   )}
                 </div>
               ))}
               <div className="bcs-progress-foot">
-                <button type="button" className="bcs-task-btn" onClick={onOpenDiffInBrowser}>
-                  Diff im Browser
+                <button
+                  type="button"
+                  className="bcs-task-btn"
+                  onClick={() => onOpenDiffInBrowser(activeAgent?.id)}
+                >
+                  View Diff in Browser
                 </button>
               </div>
             </div>
@@ -632,12 +891,12 @@ export function BotChatStream({
       {mode === "single" && agents.length > 1 && onOpenGroupRoom && (
         <div className="bcs-team-pill-wrap">
           <button type="button" className="bcs-team-pill" onClick={onOpenGroupRoom}>
-            <span>{agents.length} Bots im Team</span>
+            <span>{agents.length} bots on team</span>
             <GroupAvatarCluster
               roles={agents.slice(0, 4).map((a) => resolveBotRole(a).role)}
               size={18}
             />
-            <span>Gruppenchat öffnen</span>
+            <span>Open Group Chat</span>
             <ArrowUpRight size={11} strokeWidth={1.6} />
           </button>
         </div>
@@ -653,19 +912,23 @@ export function BotChatStream({
         return (
           <div key={a.id} className="bcs-live">
             {liveMeta ? (
-              <BotAvatar role={liveMeta.role} size={28} active />
+              <span style={{ borderRadius: "9999px", overflow: "hidden", display: "inline-flex", flexShrink: 0 }}>
+                <BotAvatar role={liveMeta.role} size={28} active />
+              </span>
             ) : (
-              <span className="bcs-avatar-fallback">{a.name.charAt(0).toUpperCase()}</span>
+              <span className="bcs-avatar-fallback" style={{ borderRadius: "9999px" }}>
+                {a.name.charAt(0).toUpperCase()}
+              </span>
             )}
             <BotThinkingOrb status="working" size={20} shell={false} />
             <span className="bcs-live-text">
-              {a.name} arbeitet {a.worktreeBranch ? `auf ${a.worktreeBranch}` : "im Worktree"}…
+              {a.name} is working {a.worktreeBranch ? `on ${a.worktreeBranch}` : "in worktree"}…
             </span>
           </div>
         );
       })}
       {workingAgents.length > 3 && (
-        <div className="bcs-live-more">+{workingAgents.length - 3} weitere arbeiten</div>
+        <div className="bcs-live-more">+{workingAgents.length - 3} more active</div>
       )}
 
       <div ref={endRef} />

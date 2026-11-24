@@ -1,7 +1,6 @@
 /* ==========================================================================
-   Bot-Factory Harness — Design Tokens ("Monochrome Ink" Light + Thinking Orbs)
-   Phase 3.2 Design System
-   Reference: DESIGN.md
+   Bot-Factory Studio — Design Tokens ("Monochrome Ink" Light + Thinking Orbs)
+   Phase 3.3 Light-Mode Design System
    ========================================================================== */
 
 :root {
@@ -16,18 +15,18 @@
   --bg-hover: #f2f2f3;
   --bg-pill: #f2f2f3;
   --bg-active: #eaeaeb;
-  --bg-overlay: rgba(23, 23, 23, 0.22);
+  --bg-overlay: rgba(23, 23, 23, 0.24);
 
   /* Hairline Borders */
   --border-subtle: #f2f2f2;
   --border-hairline: #ebebeb;
   --border-strong: #d9d9dc;
 
-  /* Ink Typography Scale */
+  /* Ink Typography Scale (WCAG AA compliant on #FFFFFF / #FAFAFA) */
   --ink-primary: #171717;
   --ink-secondary: #525252;
-  --ink-muted: #8a8a8a;
-  --ink-faint: #a8a8a8;
+  --ink-muted: #666666;
+  --ink-faint: #737373;
 
   /* Primary Action (Monochrome Ink) & Warm Burnt-Orange Signature Accent */
   --action-primary-bg: #171717;
@@ -35,11 +34,11 @@
   --action-primary-active: #0a0a0a;
   --action-primary-fg: #ffffff;
 
-  /* Burnt-Orange Signature Accent (Aufwand Slider, Human Bot-Chat Bubbles, Beaver Crest) */
+  /* Burnt-Orange Signature Accent (Effort Slider, Human Bubbles, Beaver Crest) */
   --accent-orange: #d95d22;
   --accent-orange-hover: #c24e1a;
-  --accent-orange-soft: #fff5ef;
-  --accent-orange-border: #f7d5c2;
+  --accent-orange-soft: #fff7f2;
+  --accent-orange-border: #f5d3bf;
   --accent-orange-ink: #b84312;
   --human-bubble-bg: #d95d22;
   --human-bubble-fg: #ffffff;
@@ -63,7 +62,7 @@
   --status-danger-bg: #fcf4f4;
   --status-danger-border: #f1d6d6;
 
-  /* 3D Studio Stage (Three.js Light Harmony) */
+  /* 3D Studio Stage (Three.js Light Museum Harmony) */
   --stage-3d-bg: #f5f5f5;
   --stage-3d-grid: #e3e3e6;
   --stage-3d-pin-bg: #171717;
@@ -71,7 +70,6 @@
 
   /* ------------------------------------------------------------------------
      3. Thinking Orbs — "Smoke & Pearl" Shell & Semantic Shimmers
-        Engine: 2D HTML5 Canvas (Jakubantalik/thinking-orbs, theme="light")
      ------------------------------------------------------------------------ */
   --orb-ink: #171717;
   --orb-ink-soft: rgba(23, 23, 23, 0.56);
@@ -84,29 +82,29 @@
   --orb-shell-border: rgba(23, 23, 23, 0.09);
   --orb-shell-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.92);
 
-  /* Resting / Idle quiet ring ("leicht, aber vorhanden") */
+  /* Resting / Idle quiet ring */
   --orb-idle-size: 8px;
   --orb-idle-bg: #fafafa;
   --orb-idle-ring: #c9c9ce;
 
-  /* Whisper-fine semantic shimmers (never neon) */
+  /* Whisper-fine semantic shimmers */
   --orb-shimmer-neutral: rgba(23, 23, 23, 0.08);
   --orb-shimmer-active: rgba(30, 78, 121, 0.14);
   --orb-shimmer-success: rgba(22, 94, 61, 0.13);
   --orb-shimmer-warning: rgba(138, 83, 11, 0.14);
   --orb-shimmer-danger: rgba(158, 38, 38, 0.15);
 
-  /* Purpose-tuned canvas dimensions (never CSS-scaled) */
+  /* Purpose-tuned canvas dimensions */
   --orb-size-inline: 20px;
   --orb-size-focus: 64px;
 
   /* ------------------------------------------------------------------------
-     4. Typography — Neo-Grotesk Precision
+     4. Typography — Neo-Grotesk Precision (Self-Hosted Fontsource)
      ------------------------------------------------------------------------ */
-  --font-sans: "Geist", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, SFMono-Regular,
-    Menlo, Consolas, monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
 
   --text-2xs: 0.6875rem; /* 11px */
   --text-xs: 0.75rem;    /* 12px */
@@ -145,7 +143,6 @@
   --hairline-subtle: 1px solid var(--border-subtle);
   --hairline-strong: 1px solid var(--border-strong);
 
-  /* Flat by default; whisper elevation reserved for transient overlays */
   --shadow-none: none;
   --shadow-popover:
     0 1px 2px rgba(23, 23, 23, 0.04),
@@ -205,10 +202,10 @@
 }
 
 /* ==========================================================================
-   Dual Information Density ("Bewusster Kontrast")
+   Dual Information Density ("Deliberate Contrast")
    ========================================================================== */
 
-/* Chat-Tab: Editorial, airy, generous whitespace */
+/* Main Agent Chat: Editorial, airy, generous whitespace */
 [data-density="airy"] {
   --density-text: var(--text-base);
   --density-leading: var(--leading-prose);
@@ -219,7 +216,7 @@
   --density-row-h: 36px;
 }
 
-/* Bots-Tab: Precision workbench for Live-Watch, Kanban, Previews & Phase 3 */
+/* Bots Workbench: Precision workbench for Live Watch, Kanban, Previews & Phase 3 */
 [data-density="compact"] {
   --density-text: var(--text-sm);
   --density-leading: var(--leading-snug);
