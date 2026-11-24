@@ -20,8 +20,10 @@ import {
   type ReasoningEffort,
   type RpcCommand,
   type SelfModProposalRecord,
+  type SubagentMode,
   type SubscriptionTopic,
   type TaskRecord,
+  type TeamGoalRecord,
   type TimelineItem,
   type VerificationReportRecord,
 } from "@bot-factory/shared";
@@ -32,7 +34,9 @@ import {
   captureCheckpoint,
   createBotWorktree,
   listProjectArtifacts,
+  listWorktreeChangedFiles,
   makeCheckpointScopeKey,
+  mergeBotWorktree,
   provisionProjectWorkspace,
   removeBotWorktree,
   restoreCheckpoint,
@@ -46,7 +50,10 @@ import type { AcpSubprocessRuntime, PendingAcpPermissionRecord } from "../runtim
 import type { CliStreamRuntime } from "../runtimes/cliStreamRuntime";
 import type { NativeHttpRuntime } from "../runtimes/nativeHttpRuntime";
 import type { ModelRouter } from "../runtimes/router";
-import type { AgentRuntime, RuntimeSessionHandle } from "../runtimes/types";
+import type { AgentRuntime, RuntimeSessionHandle, ToolCallExecutor, ToolDefinition } from "../runtimes/types";
+import { getMainManagerTools, getTeamLeadTools } from "./agentTools";
+import { AutonomyLoop } from "./autonomyLoop";
+import { SubagentManager } from "./subagentManager";
 
 export class OrchestrationEngine {
   public readonly metaAgentId = "agent_meta_orchestrator";
@@ -55,6 +62,8 @@ export class OrchestrationEngine {
   private readonly agentTurnPrefs = new Map<string, { reasoningEffort?: ReasoningEffort; autonomyLevel?: AutonomyLevel }>();
   private readonly verifier: IndependentVerifier;
   private readonly selfMod: SelfModManager;
+  private readonly subagentManager: SubagentManager;
+  private readonly autonomyLoop: AutonomyLoop;
   private boundPort: number | null = null;
 
   constructor(
@@ -70,6 +79,74 @@ export class OrchestrationEngine {
   ) {
     this.verifier = new IndependentVerifier(runtimeCfg, db, memory, router, nativeRuntime, acpRuntime, scrubber, cliRuntime);
     this.selfMod = new SelfModManager(runtimeCfg, scrubber);
+    this.subagentManager = new SubagentManager(runtimeCfg, db, core, memory, router, scrubber, {
+      getQuietStatusProjection: () => this.getQuietStatusProjection(),
+      getProjectBoardSnapshot: (projectId) => this.getProjectBoardSnapshot(projectId),
+      runAgentTurn: (agentId, userText, opts) => this.runAgentTurn(agentId, userText, opts),
+      abortAndCloseAgentSession: (agent, mode) => this.abortAndCloseAgentSession(agent, mode),
+      revokeMcpTokensForAgent: (agentId) => this.revokeMcpTokensForAgent(agentId),
+    });
+    this.autonomyLoop = new AutonomyLoop(db, core, scrubber, {
+      getConfig: () => this.runtimeCfg.config,
+      getQuietStatusProjection: () => this.getQuietStatusProjection(),
+      getProjectBoardSnapshot: (projectId) => this.getProjectBoardSnapshot(projectId),
+      spawnPeerBot: ({ projectId, name, taskId, autonomyLevel, reasoningEffort }) =>
+        (
+          this.handleBotSpawn({
+            commandId: newId("cmd"),
+            type: "bot.spawn",
+            projectId,
+            name,
+            scope: "peer",
+            taskId,
+            autonomyLevel,
+            reasoningEffort,
+          }) as { agent: AgentRecord }
+        ).agent,
+      dispatchTask: ({ projectId, taskId, agentId, autonomous }) => {
+        this.handleTaskDispatch({
+          commandId: newId("cmd"),
+          type: "task.dispatch",
+          projectId,
+          taskId,
+          agentId,
+          autonomous,
+        });
+      },
+      runAgentTurn: (agentId, userText, opts) => this.runAgentTurn(agentId, userText, opts),
+      onGoalReportFallback: async ({ project, goal, status, summary, verifiedTaskIds, blockedReasons }) => {
+        const pm = this.db.listAgents(project.id).find((a) => a.scope === "project");
+        if (!pm) return;
+        this.autonomyLoop.markGoalReported(project.id, status, goal.goalId);
+        const reportPayload = {
+          projectId: project.id,
+          projectName: project.name,
+          pmAgentId: pm.id,
+          goalId: goal.goalId,
+          status,
+          summary,
+          verifiedTaskIds,
+          blockedReasons,
+          reportedAt: Date.now(),
+        };
+        this.core.commitCommand(newId("cmd"), "pm.report_to_manager_auto", () => ({
+          result: { ok: true, ...reportPayload },
+          applyProjections: () => {
+            this.db.addInboxNotice(
+              status === "blocked" ? "action" : "info",
+              `${project.name} Team Lead reported '${status}': ${summary.slice(0, 120)}`,
+              { projectId: project.id, agentId: pm.id },
+            );
+          },
+          events: [
+            { topic: `project:${project.id}:board`, eventType: "goal.reported", payload: reportPayload },
+            { topic: `project:${project.id}:board`, eventType: "board.updated", payload: this.getProjectBoardSnapshot(project.id) },
+            { topic: "global:status", eventType: "status.updated", payload: this.getQuietStatusProjection() },
+          ],
+          effects: [{ effectType: "meta.team_report", payload: reportPayload }],
+        }));
+      },
+    });
     this.acpRuntime.setOnSessionExit?.((sessionId) => {
       this.handleAcpSessionExit(sessionId);
     });
@@ -78,6 +155,35 @@ export class OrchestrationEngine {
     });
     this.ensureMetaOrchestrator();
     this.registerOutboxHandlers();
+  }
+
+  public getAutonomyLoop(): AutonomyLoop {
+    return this.autonomyLoop;
+  }
+
+  public getSubagentManager(): SubagentManager {
+    return this.subagentManager;
+  }
+
+  private async abortAndCloseAgentSession(agent: AgentRecord, mode: "pause" | "hard_stop"): Promise<void> {
+    if (mode === "hard_stop") {
+      this.revokeMcpTokensForAgent(agent.id);
+    }
+    const handle = this.sessionHandles.get(agent.activeSessionId ?? "");
+    if (!handle) return;
+    try {
+      await this.getRuntime(agent.runtimeType).abort(handle, mode);
+    } catch {
+      // Best-effort runtime abort
+    }
+    if (mode === "hard_stop") {
+      this.sessionHandles.delete(handle.sessionId);
+      try {
+        await this.getRuntime(agent.runtimeType).closeSession(handle);
+      } catch {
+        // Best-effort close
+      }
+    }
   }
 
   public reloadSecrets(): void {
@@ -452,18 +558,214 @@ export class OrchestrationEngine {
         const mode = eff.payload.mode === "pause" ? "pause" : "hard_stop";
         const agent = this.db.getAgent(agentId);
         if (!agent) return;
+        await this.abortAndCloseAgentSession(agent, mode);
         if (mode === "hard_stop") {
-          this.revokeMcpTokensForAgent(agentId);
-        }
-        const handle = this.sessionHandles.get(agent.activeSessionId ?? "");
-        if (handle) {
-          await this.getRuntime(agent.runtimeType).abort(handle, mode);
-          if (mode === "hard_stop") {
-            this.sessionHandles.delete(handle.sessionId);
-          }
+          await this.subagentManager.cleanupSubagentsForParent(agentId);
+          await this.cleanupUnusedWorktreeOnHardStop(agentId);
         }
       },
       { lane: "control", concurrencyKey: (eff) => `ctrl:${String(eff.payload.agentId ?? "")}` },
+    );
+
+    this.core.registerEffectHandler(
+      "pm.goal.turn",
+      async (eff) => {
+        const projectId = String(eff.payload.projectId ?? "");
+        const pmAgentId = String(eff.payload.pmAgentId ?? "");
+        const goalId = String(eff.payload.goalId ?? "");
+        const goal = String(eff.payload.goal ?? "");
+        const reasoningEffort = eff.payload.reasoningEffort as ReasoningEffort | undefined;
+        const autonomyLevel = eff.payload.autonomyLevel as AutonomyLevel | undefined;
+        const project = this.db.getProject(projectId);
+        if (!project) return;
+
+        await this.memory
+          .ingestDocument({
+            docId: `goal:${projectId}:${goalId}`,
+            namespace: `project:${project.slug}`,
+            content: `Delegated Goal (${goalId}): ${goal}`,
+            instant: true,
+          })
+          .catch(() => {});
+
+        const goalPrompt = [
+          `Delegated Goal (${goalId}) for project '${project.name}':`,
+          goal,
+          "",
+          "Use your Team Lead tools (`bf_repo_tree`, `bf_repo_read`, `bf_task_create_batch`, `bf_bot_spawn`, `bf_task_dispatch`) to inspect the codebase, create a crisp task DAG, and dispatch ready root tasks with autonomous=true. The autonomous loop will verify completed tasks and wake you when all tasks pass verification or if any task blocks so you can report via `bf_report_to_manager`.",
+        ].join("\n");
+
+        const turn = await this.runAgentTurn(pmAgentId, goalPrompt, {
+          emitTopic: `bot:${pmAgentId}:timeline`,
+          namespace: `project:${project.slug}`,
+          reasoningEffort,
+          autonomyLevel,
+        });
+        if (!turn.ok) {
+          this.recordTurnFailure({
+            agentId: pmAgentId,
+            projectId,
+            emitTopic: `bot:${pmAgentId}:timeline`,
+            eventType: "timeline.item",
+            itemKind: "status",
+            title: "PM goal turn failed",
+            error: turn.error ?? "PM goal turn failed",
+            noticeLevel: "action",
+            noticePrefix: `PM goal turn failed (${project.name})`,
+          });
+        } else {
+          this.autonomyLoop.dispatchUnblockedTasks(projectId, goalId);
+        }
+
+        this.core.emitDirectEvent(`project:${projectId}:board`, "board.updated", this.getProjectBoardSnapshot(projectId));
+        this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
+      },
+      { lane: "interactive", concurrencyKey: (eff) => `agent:${String(eff.payload.pmAgentId ?? "")}` },
+    );
+
+    this.core.registerEffectHandler(
+      "pm.goal.check",
+      async (eff) => {
+        await this.autonomyLoop.executePmGoalCheck({
+          projectId: String(eff.payload.projectId ?? ""),
+          pmAgentId: String(eff.payload.pmAgentId ?? ""),
+          goalId: String(eff.payload.goalId ?? ""),
+          outcome: (eff.payload.outcome as "all_verified" | "task_blocked" | "needs_human") ?? "all_verified",
+          taskId: typeof eff.payload.taskId === "string" ? eff.payload.taskId : undefined,
+          findings: Array.isArray(eff.payload.findings) ? eff.payload.findings.map(String) : undefined,
+          checkKey: typeof eff.payload.checkKey === "string" ? eff.payload.checkKey : undefined,
+        });
+      },
+      { lane: "interactive", concurrencyKey: (eff) => `agent:${String(eff.payload.pmAgentId ?? "")}` },
+    );
+
+    this.core.registerEffectHandler(
+      "meta.team_report",
+      async (eff) => {
+        const projectId = String(eff.payload.projectId ?? "");
+        const projectName = String(eff.payload.projectName ?? projectId);
+        const goalId = typeof eff.payload.goalId === "string" ? eff.payload.goalId : null;
+        const status = String(eff.payload.status ?? "milestone");
+        const summary = this.scrubber.scrub(String(eff.payload.summary ?? ""));
+        const verifiedTaskIds = Array.isArray(eff.payload.verifiedTaskIds)
+          ? eff.payload.verifiedTaskIds.map(String)
+          : [];
+        const blockedReasons = Array.isArray(eff.payload.blockedReasons)
+          ? eff.payload.blockedReasons.map((r) => this.scrubber.scrub(String(r)))
+          : [];
+
+        const card = {
+          id: newId("card"),
+          projectId,
+          goalId,
+          kind: status === "completed" ? "review_merge" : status === "blocked" ? "blocked" : "milestone",
+          status,
+          title:
+            status === "completed"
+              ? `Ready to Review & Merge: ${projectName}`
+              : status === "blocked"
+                ? `Attention Needed: ${projectName}`
+                : `Milestone Update: ${projectName}`,
+          subtitle: summary.slice(0, 180),
+          verifiedTaskIds,
+          blockedReasons,
+          createdAt: Date.now(),
+        };
+        this.core.emitDirectEvent("chat:meta", "chat.artifact_card", card);
+
+        const prompt = [
+          `Team Lead Report received for '${projectName}' (${projectId}):`,
+          `- Status: ${status}`,
+          goalId ? `- Goal ID: ${goalId}` : "",
+          verifiedTaskIds.length > 0 ? `- Verified Tasks: ${verifiedTaskIds.join(", ")}` : "",
+          blockedReasons.length > 0 ? `- Blocked Reasons: ${blockedReasons.join("; ")}` : "",
+          `- Summary: ${summary}`,
+          "",
+          "Present a calm, concise executive briefing for the operator summarizing the verified outcome and clear Review/Merge next steps.",
+        ]
+          .filter(Boolean)
+          .join("\n");
+
+        const turn = await this.runAgentTurn(this.metaAgentId, prompt, {
+          emitTopic: "chat:meta",
+          namespace: "global",
+          projectId: projectId || undefined,
+        });
+        if (!turn.ok) {
+          this.recordTurnFailure({
+            agentId: this.metaAgentId,
+            projectId: projectId || undefined,
+            emitTopic: "chat:meta",
+            eventType: "chat.message",
+            itemKind: "message",
+            title: "Meta-Orchestrator report briefing failed",
+            error: turn.error ?? "Meta-Orchestrator team report failed",
+            noticeLevel: "warn",
+            noticePrefix: "Meta-Orchestrator report error",
+          });
+        }
+      },
+      { lane: "interactive", concurrencyKey: () => `agent:${this.metaAgentId}` },
+    );
+
+    this.core.registerEffectHandler(
+      "subagent.run",
+      async (eff) => {
+        await this.subagentManager.executeSubagentTurn({
+          projectId: String(eff.payload.projectId ?? ""),
+          parentAgentId: String(eff.payload.parentAgentId ?? ""),
+          subagentId: String(eff.payload.subagentId ?? ""),
+          prompt: String(eff.payload.prompt ?? ""),
+        });
+      },
+      { lane: "work", concurrencyKey: (eff) => `agent:${String(eff.payload.subagentId ?? "")}` },
+    );
+
+    this.core.registerEffectHandler(
+      "bot.message.turn",
+      async (eff) => {
+        const projectId = String(eff.payload.projectId ?? "");
+        const agentId = String(eff.payload.agentId ?? "");
+        const message = String(eff.payload.message ?? "");
+        const project = this.db.getProject(projectId);
+        const agent = this.db.getAgent(agentId);
+        if (!project || !agent || agent.status === "stopped" || agent.status === "paused") return;
+
+        const turn = await this.runAgentTurn(agent.id, message, {
+          emitTopic: `bot:${agent.id}:timeline`,
+          namespace: `project:${project.slug}`,
+        });
+        if (!turn.ok) {
+          this.recordTurnFailure({
+            agentId: agent.id,
+            projectId,
+            emitTopic: `bot:${agent.id}:timeline`,
+            eventType: "timeline.item",
+            itemKind: "status",
+            title: "Bot guidance turn failed",
+            error: turn.error ?? "Bot guidance turn failed",
+            noticeLevel: "warn",
+            noticePrefix: `${agent.name} turn error`,
+          });
+        }
+      },
+      { lane: "work", concurrencyKey: (eff) => `agent:${String(eff.payload.agentId ?? "")}` },
+    );
+
+    this.core.registerEffectHandler(
+      "task.merge.run",
+      async (eff) => {
+        await this.executeTaskMerge({
+          projectId: String(eff.payload.projectId ?? ""),
+          taskId: String(eff.payload.taskId ?? ""),
+          agentId: typeof eff.payload.agentId === "string" ? eff.payload.agentId : null,
+          worktreePath: String(eff.payload.worktreePath ?? ""),
+          branch: String(eff.payload.branch ?? ""),
+          strategy: eff.payload.strategy === "merge_commit" ? "merge_commit" : "squash",
+          commitMessage: String(eff.payload.commitMessage ?? ""),
+        });
+      },
+      { lane: "control", concurrencyKey: (eff) => `merge:${String(eff.payload.projectId ?? eff.id)}` },
     );
 
     this.core.registerEffectHandler(
@@ -669,6 +971,7 @@ export class OrchestrationEngine {
       rootPath: provisioned.rootPath,
       repoPath: provisioned.repoPath,
       routingOverrides: {},
+      verifyChecks: cmd.verifyChecks ?? [],
       status: "active",
       createdAt: now,
     };
@@ -978,6 +1281,14 @@ export class OrchestrationEngine {
   private handleTaskCreate(cmd: Extract<RpcCommand, { type: "task.create" }>) {
     const project = this.db.getProject(cmd.projectId);
     if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
+    const dependsOn = [...new Set(cmd.dependsOn ?? [])];
+    for (const depId of dependsOn) {
+      const depTask = this.db.getTask(depId);
+      if (!depTask || depTask.projectId !== project.id) {
+        throw new Error(`unknown_dependency_task:${depId}`);
+      }
+    }
+
     const now = Date.now();
     const task: TaskRecord = {
       id: newId("tsk"),
@@ -992,6 +1303,8 @@ export class OrchestrationEngine {
       worktreeBranch: null,
       handoffPath: null,
       retryCount: 0,
+      dependsOn,
+      autoRetryCount: 0,
       createdAt: now,
       updatedAt: now,
     };
@@ -1017,6 +1330,13 @@ export class OrchestrationEngine {
     if (task.status !== "ready" && task.status !== "backlog") {
       throw new Error(`task_not_dispatchable:${task.status}`);
     }
+    const unmetDeps = (task.dependsOn ?? []).filter((depId) => {
+      const dep = this.db.getTask(depId);
+      return !dep || (dep.status !== "verified" && dep.status !== "merged");
+    });
+    if (unmetDeps.length > 0) {
+      throw new Error(`task_dependencies_unmet:${unmetDeps.join(",")}`);
+    }
 
     let bot: AgentRecord | null = null;
     if (cmd.agentId) {
@@ -1041,6 +1361,22 @@ export class OrchestrationEngine {
         }) as { agent: AgentRecord }).agent;
     }
 
+    let recreatedWorktree: { worktreePath: string; branch: string } | null = null;
+    if (bot.scope === "peer" && !bot.worktreePath) {
+      recreatedWorktree = createBotWorktree({
+        projectRoot: project.rootPath,
+        repoPath: project.repoPath,
+        agentId: bot.id,
+        taskId: task.id,
+      });
+      bot = {
+        ...bot,
+        worktreePath: recreatedWorktree.worktreePath,
+        worktreeBranch: recreatedWorktree.branch,
+        updatedAt: Date.now(),
+      };
+    }
+
     const updatedTask: TaskRecord = {
       ...task,
       status: "claimed",
@@ -1049,18 +1385,36 @@ export class OrchestrationEngine {
       updatedAt: Date.now(),
     };
 
-    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
-      result: { task: updatedTask, agent: bot },
-      applyProjections: () => {
-        this.db.upsertTask(updatedTask);
-        this.db.updateAgentStatus(bot!.id, "working", { lastSummary: `Claimed task: ${task.title}` });
-      },
-      events: [
-        { topic: `project:${project.id}:board`, eventType: "task.updated", payload: updatedTask },
-        { topic: "global:status", eventType: "status.updated", payload: this.getQuietStatusProjection() },
-      ],
-      effects: [{ effectType: "task.run", payload: { projectId: project.id, taskId: task.id, agentId: bot!.id } }],
-    }));
+    try {
+      const committed = this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+        result: { task: updatedTask, agent: bot },
+        applyProjections: () => {
+          if (recreatedWorktree) {
+            this.db.upsertAgent(bot!);
+          }
+          this.db.upsertTask(updatedTask);
+          this.db.updateAgentStatus(bot!.id, "working", { lastSummary: `Claimed task: ${task.title}` });
+        },
+        events: [
+          { topic: `project:${project.id}:board`, eventType: "task.updated", payload: updatedTask },
+          { topic: "global:status", eventType: "status.updated", payload: this.getQuietStatusProjection() },
+        ],
+        effects: [{ effectType: "task.run", payload: { projectId: project.id, taskId: task.id, agentId: bot!.id } }],
+      }));
+      if (cmd.autonomous) {
+        this.autonomyLoop.markTaskAutonomous(task.id, project.id);
+      }
+      return committed;
+    } catch (err) {
+      if (recreatedWorktree) {
+        try {
+          removeBotWorktree(project.repoPath, recreatedWorktree.worktreePath);
+        } catch {
+          // Best-effort cleanup
+        }
+      }
+      throw err;
+    }
   }
 
   private handleAnnotationCreate(cmd: Extract<RpcCommand, { type: "annotation.create" }>) {
@@ -1276,6 +1630,52 @@ export class OrchestrationEngine {
     }));
   }
 
+  private async cleanupUnusedWorktreeOnHardStop(agentId: string): Promise<void> {
+    const agent = this.db.getAgent(agentId);
+    if (!agent || agent.scope !== "peer" || !agent.worktreePath || !agent.projectId) return;
+    const project = this.db.getProject(agent.projectId);
+    if (!project || agent.worktreePath === project.repoPath || !existsSync(agent.worktreePath)) return;
+
+    const hasActiveOrUnmergedTask = this.db
+      .listTasks(project.id)
+      .some(
+        (t) =>
+          t.assignedAgentId === agent.id &&
+          (t.status === "claimed" || t.status === "in_review" || t.status === "verified"),
+      );
+    if (hasActiveOrUnmergedTask) return;
+
+    const changed = await listWorktreeChangedFiles(agent.worktreePath).catch(() => ["__keep__"]);
+    if (changed.length > 0) return;
+
+    const branch = agent.worktreeBranch;
+    try {
+      removeBotWorktree(project.repoPath, agent.worktreePath);
+      if (branch && branch !== "main" && branch !== "master") {
+        Bun.spawnSync(["git", "-c", "core.longpaths=true", "branch", "-D", branch], {
+          cwd: project.repoPath,
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+      }
+      this.db.runAtomicWrite(() => {
+        const fresh = this.db.getAgent(agent.id);
+        if (fresh) {
+          this.db.upsertAgent({
+            ...fresh,
+            worktreePath: null,
+            worktreeBranch: null,
+            updatedAt: Date.now(),
+          });
+        }
+      });
+    } catch {
+      // Best-effort unused worktree cleanup
+    }
+  }
+
   private async executePeerTask(projectId: string, taskId: string, agentId: string): Promise<void> {
     const project = this.db.getProject(projectId);
     const task = this.db.getTask(taskId);
@@ -1344,6 +1744,7 @@ export class OrchestrationEngine {
           this.core.emitDirectEvent(`project:${project.id}:board`, "task.updated", failure.blockedTask);
         }
         this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
+        this.autonomyLoop.onPeerTaskFailed(project.id, task.id, errMsg);
       }
       return;
     }
@@ -1369,10 +1770,16 @@ export class OrchestrationEngine {
       }
     }
 
-    // Also record a task marker file inside the isolated worktree so Git checkpoint captures a concrete diff
-    const wtNote = join(cwd, `.bf-task-${task.id}.md`);
-    writeFileSync(wtNote, `# ${task.title}\n\nCompleted by ${agent.name} (${agent.provider}/${agent.model})\n\n${summaryText}\n`, "utf8");
-    changedFiles.push(`.bf-task-${task.id}.md`);
+    const isRealCliOrAcp = agent.runtimeType !== "native_http" && process.env.BOT_FACTORY_OFFLINE_MOCK !== "1";
+    if (!isRealCliOrAcp) {
+      // Offline / native simulation fallback: record a task marker file inside the isolated worktree so Git checkpoint captures a concrete diff
+      const wtNote = join(cwd, `.bf-task-${task.id}.md`);
+      writeFileSync(wtNote, `# ${task.title}\n\nCompleted by ${agent.name} (${agent.provider}/${agent.model})\n\n${summaryText}\n`, "utf8");
+      changedFiles.push(`.bf-task-${task.id}.md`);
+    }
+
+    const gitChangedFiles = await listWorktreeChangedFiles(cwd).catch(() => []);
+    const allChangedFiles = [...new Set([...changedFiles, ...gitChangedFiles])];
 
     // Separate milestone (T3 invariant): turn finished -> now capture workspace-scoped hidden Git checkpoint!
     const nextTurn = this.db.incrementAgentTurnCounter(agent.id);
@@ -1384,13 +1791,20 @@ export class OrchestrationEngine {
       // Non-git fallback stays safe
     }
 
-    const handoffPath = writeTaskHandoff(project.rootPath, task.id, {
-      title: task.title,
-      summary: summaryText,
-      changedFiles,
-      testsRun: ["worktree-checkpoint-verified"],
-      notes: checkpointRef ? `Checkpoint ref: ${checkpointRef}` : undefined,
-    });
+    const existingTask = this.db.getTask(task.id);
+    const botWroteHandoff =
+      isRealCliOrAcp &&
+      Boolean(existingTask?.handoffPath) &&
+      existsSync(join(project.rootPath, existingTask!.handoffPath!));
+    const handoffPath = botWroteHandoff
+      ? existingTask!.handoffPath!
+      : writeTaskHandoff(project.rootPath, task.id, {
+          title: task.title,
+          summary: summaryText,
+          changedFiles: allChangedFiles,
+          testsRun: isRealCliOrAcp ? [] : ["worktree-checkpoint-verified"],
+          notes: checkpointRef ? `Checkpoint ref: ${checkpointRef}` : undefined,
+        });
 
     const persisted = this.db.runAtomicWrite(() => {
       const freshAgent = this.db.getAgent(agent.id);
@@ -1452,6 +1866,7 @@ export class OrchestrationEngine {
       this.core.emitDirectEvent(`project:${project.id}:previews`, "annotation.updated", persisted.updatedAnn);
     }
     this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
+    this.autonomyLoop.onPeerTaskCompleted(project.id, task.id);
   }
 
   private async runAgentTurn(
@@ -1588,6 +2003,43 @@ export class OrchestrationEngine {
       const projectSummary = opts.projectId ? this.buildConciseProjectSummary(opts.projectId) : "";
       const ephemeralContext = [projectSummary, memoryContext].filter(Boolean).join("\n\n");
 
+      let turnTools: ToolDefinition[] | undefined;
+      let turnToolExecutor: ToolCallExecutor | undefined;
+      if (agent.scope === "global") {
+        const mainTools = getMainManagerTools({
+          db: this.db,
+          core: this.core,
+          memory: this.memory,
+          scrubber: this.scrubber,
+          autonomyLoop: this.autonomyLoop,
+          metaAgentId: this.metaAgentId,
+          executeCommand: (cmd) => this.executeCommand(cmd),
+          getQuietStatusProjection: () => this.getQuietStatusProjection(),
+          getProjectBoardSnapshot: (pid) => this.getProjectBoardSnapshot(pid),
+        });
+        turnTools = mainTools.tools;
+        turnToolExecutor = mainTools.onToolCall;
+      } else if (agent.scope === "project" && agent.projectId) {
+        const pmProject = this.db.getProject(agent.projectId);
+        if (pmProject) {
+          const teamTools = getTeamLeadTools({
+            db: this.db,
+            core: this.core,
+            memory: this.memory,
+            scrubber: this.scrubber,
+            autonomyLoop: this.autonomyLoop,
+            pmAgent: agent,
+            project: pmProject,
+            metaAgentId: this.metaAgentId,
+            executeCommand: (cmd) => this.executeCommand(cmd),
+            getQuietStatusProjection: () => this.getQuietStatusProjection(),
+            getProjectBoardSnapshot: (pid) => this.getProjectBoardSnapshot(pid),
+          });
+          turnTools = teamTools.tools;
+          turnToolExecutor = teamTools.onToolCall;
+        }
+      }
+
       for await (const evt of runtime.sendTurn(handle, {
         userText,
         ephemeralContext: ephemeralContext || undefined,
@@ -1595,6 +2047,8 @@ export class OrchestrationEngine {
         imageDataUrl: opts.imageDataUrl,
         reasoningEffort,
         autonomyLevel,
+        tools: turnTools,
+        onToolCall: turnToolExecutor,
       })) {
         if (evt.type === "plan") {
           const item: TimelineItem = {
@@ -2000,6 +2454,75 @@ export class OrchestrationEngine {
           return { error: err instanceof Error ? err.message : String(err) };
         }
       }
+      case "bf_subagent_spawn": {
+        const name = typeof args.name === "string" ? args.name.trim() : "";
+        const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+        if (!name || !prompt) return { error: "invalid_subagent_args" };
+        const mode = args.mode !== undefined ? String(args.mode) : undefined;
+        if (mode !== undefined && mode !== "readonly" && mode !== "code") {
+          return { error: "invalid_subagent_mode" };
+        }
+        try {
+          return await this.subagentManager.spawnSubagent({
+            projectId: project.id,
+            parentAgentId: agent.id,
+            name,
+            role: typeof args.role === "string" ? args.role : undefined,
+            mode: mode as SubagentMode | undefined,
+            prompt,
+            provider: typeof args.provider === "string" && args.provider.trim() ? args.provider.trim() : undefined,
+            model: typeof args.model === "string" && args.model.trim() ? args.model.trim() : undefined,
+          });
+        } catch (err) {
+          return { error: this.scrubber.scrub(err instanceof Error ? err.message : String(err)) };
+        }
+      }
+      case "bf_subagent_status": {
+        const subagentId = typeof args.subagentId === "string" && args.subagentId.trim() ? args.subagentId.trim() : undefined;
+        try {
+          return this.subagentManager.getStatus(agent.id, subagentId);
+        } catch (err) {
+          return { error: this.scrubber.scrub(err instanceof Error ? err.message : String(err)) };
+        }
+      }
+      case "bf_subagent_wait": {
+        const subagentId = typeof args.subagentId === "string" ? args.subagentId.trim() : "";
+        if (!subagentId) return { error: "subagent_id_required" };
+        const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : undefined;
+        try {
+          return await this.subagentManager.waitForSubagent(agent.id, subagentId, timeoutMs);
+        } catch (err) {
+          return { error: this.scrubber.scrub(err instanceof Error ? err.message : String(err)) };
+        }
+      }
+      case "bf_subagent_message": {
+        const subagentId = typeof args.subagentId === "string" ? args.subagentId.trim() : "";
+        const message = typeof args.message === "string" ? args.message.trim() : "";
+        if (!subagentId || !message) return { error: "invalid_subagent_message_args" };
+        try {
+          return this.subagentManager.messageSubagent(agent.id, subagentId, message);
+        } catch (err) {
+          return { error: this.scrubber.scrub(err instanceof Error ? err.message : String(err)) };
+        }
+      }
+      case "bf_subagent_kill": {
+        const subagentId = typeof args.subagentId === "string" ? args.subagentId.trim() : "";
+        if (!subagentId) return { error: "subagent_id_required" };
+        try {
+          return await this.subagentManager.killSubagent(agent.id, subagentId);
+        } catch (err) {
+          return { error: this.scrubber.scrub(err instanceof Error ? err.message : String(err)) };
+        }
+      }
+      case "bf_subagent_apply_patch": {
+        const subagentId = typeof args.subagentId === "string" ? args.subagentId.trim() : "";
+        if (!subagentId) return { error: "subagent_id_required" };
+        try {
+          return await this.subagentManager.applySubagentPatch(agent.id, subagentId);
+        } catch (err) {
+          return { error: this.scrubber.scrub(err instanceof Error ? err.message : String(err)) };
+        }
+      }
       default:
         return { error: `unknown_mcp_tool:${toolName}` };
     }
@@ -2068,6 +2591,7 @@ export class OrchestrationEngine {
       this.core.emitDirectEvent(`project:${project.id}:board`, "task.updated", updatedTask);
     }
     this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
+    this.autonomyLoop.onVerificationCompleted(project.id, taskId, report);
   }
 
   private handleDebateOpen(cmd: Extract<RpcCommand, { type: "debate.open" }>) {
@@ -2792,10 +3316,137 @@ export class OrchestrationEngine {
     const task = this.db.getTask(cmd.taskId);
     if (!task) throw new Error(`Task not found: ${cmd.taskId}`);
     if (task.projectId !== project.id) throw new Error("task_project_mismatch");
+    if (task.status === "merged") throw new Error("task_already_merged");
     if (task.status !== "verified" && !cmd.overrideReason?.trim()) {
       throw new Error(`task_not_verified:${task.status}`);
     }
-    throw new Error("task_merge_phase3_pending");
+
+    const agent = task.assignedAgentId ? this.db.getAgent(task.assignedAgentId) : null;
+    const branch = agent?.worktreeBranch || task.worktreeBranch;
+    const worktreePath = agent?.worktreePath ?? "";
+    if (!branch || branch === "main" || (!worktreePath && !branch)) {
+      throw new Error("task_missing_worktree_for_merge");
+    }
+
+    const commitMessage =
+      cmd.commitMessage?.trim() ||
+      `feat(${project.slug}): ${task.title}${cmd.overrideReason?.trim() ? ` [override: ${this.scrubber.scrub(cmd.overrideReason.trim())}]` : ""}`;
+    const statusEvt = { topic: "global:status" as SubscriptionTopic, eventType: "status.updated", payload: null as unknown };
+
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result: { taskId: task.id, projectId: project.id, strategy: cmd.strategy, branch, queued: true },
+      applyProjections: () => {
+        this.db.addInboxNotice("info", `Merging '${task.title}' (${cmd.strategy}) into main`, {
+          projectId: project.id,
+          agentId: agent?.id,
+        });
+        statusEvt.payload = this.getQuietStatusProjection();
+      },
+      events: [statusEvt],
+      effects: [
+        {
+          effectType: "task.merge.run",
+          payload: {
+            projectId: project.id,
+            taskId: task.id,
+            agentId: agent?.id ?? null,
+            worktreePath,
+            branch,
+            strategy: cmd.strategy,
+            commitMessage,
+          },
+        },
+      ],
+    }));
+  }
+
+  private async executeTaskMerge(params: {
+    projectId: string;
+    taskId: string;
+    agentId: string | null;
+    worktreePath: string;
+    branch: string;
+    strategy: "squash" | "merge_commit";
+    commitMessage: string;
+  }): Promise<void> {
+    const project = this.db.getProject(params.projectId);
+    const task = this.db.getTask(params.taskId);
+    if (!project || !task || task.status === "merged") return;
+
+    const agent = params.agentId ? this.db.getAgent(params.agentId) : null;
+    if (agent) {
+      await this.subagentManager.cleanupSubagentsForParent(agent.id);
+      await this.abortAndCloseAgentSession(agent, "hard_stop");
+    }
+
+    const res = await mergeBotWorktree({
+      repoPath: project.repoPath,
+      worktreePath: params.worktreePath,
+      branch: params.branch,
+      strategy: params.strategy,
+      commitMessage: params.commitMessage,
+    });
+
+    if (res.ok) {
+      let mergedTask: TaskRecord | null = null;
+      this.db.runAtomicWrite(() => {
+        const freshTask = this.db.getTask(task.id);
+        if (!freshTask) return;
+        const now = Date.now();
+        mergedTask = {
+          ...freshTask,
+          status: "merged",
+          worktreeBranch: null,
+          updatedAt: now,
+        };
+        this.db.upsertTask(mergedTask);
+
+        if (agent && res.cleanedWorktree) {
+          const freshAgent = this.db.getAgent(agent.id);
+          if (freshAgent) {
+            this.db.upsertAgent({
+              ...freshAgent,
+              status: freshAgent.status === "stopped" ? "stopped" : "idle",
+              pid: null,
+              worktreePath: null,
+              worktreeBranch: null,
+              lastSummary: `Merged ${params.branch}${res.mergeCommitSha ? ` (${res.mergeCommitSha.slice(0, 7)})` : ""}`,
+              updatedAt: now,
+            });
+          }
+        }
+
+        this.db.addInboxNotice(
+          "info",
+          `Merged '${freshTask.title}' into main (${params.strategy}${res.mergeCommitSha ? ` · ${res.mergeCommitSha.slice(0, 7)}` : ""})`,
+          { projectId: project.id, agentId: agent?.id },
+        );
+      });
+
+      if (mergedTask) {
+        this.core.emitDirectEvent(`project:${project.id}:board`, "task.updated", mergedTask);
+      }
+      this.core.emitDirectEvent(`project:${project.id}:board`, "board.updated", this.getProjectBoardSnapshot(project.id));
+      this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
+      return;
+    }
+
+    const cleanErr = this.scrubber.scrub(res.error ?? "merge_failed");
+    this.db.runAtomicWrite(() => {
+      this.db.addInboxNotice(
+        "action",
+        `Merge failed for '${task.title}': ${cleanErr}${res.conflicts?.length ? ` (${res.conflicts.join(", ")})` : ""}`,
+        { projectId: project.id, agentId: agent?.id },
+      );
+    });
+    this.core.emitDirectEvent(`project:${project.id}:board`, "task.merge_failed", {
+      taskId: task.id,
+      error: cleanErr,
+      conflicts: res.conflicts ?? [],
+      preMergeRef: res.preMergeRef ?? null,
+    });
+    this.core.emitDirectEvent(`project:${project.id}:board`, "board.updated", this.getProjectBoardSnapshot(project.id));
+    this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
   }
 
   private handleProjectArchive(cmd: Extract<RpcCommand, { type: "project.archive" }>) {
@@ -2876,12 +3527,14 @@ export class OrchestrationEngine {
     const counts = this.db.getQuietStatusCounts();
     const rawPending = this.acpRuntime.listPendingPermissions?.() ?? [];
     const pendingPermissions = rawPending.map((p) => this.toPermissionRequestRecord(p));
+    const activeGoals = this.autonomyLoop.listGoals().filter((g) => g.status === "active");
     return {
       ...counts,
       inboxNotices: this.db.listInboxNotices(15),
       unknownAdmissions: this.db.listUnknownAdmissions(),
       pendingPermissionsCount: pendingPermissions.length,
       pendingPermissions,
+      ...(activeGoals.length > 0 ? { activeGoals } : {}),
     };
   }
 
@@ -2890,6 +3543,7 @@ export class OrchestrationEngine {
       status: this.getQuietStatusProjection(),
       projects: this.db.listProjects(),
       agents: this.db.listAgents(),
+      goals: this.autonomyLoop.listGoals(),
       providers: Object.entries(this.runtimeCfg.config.providers).map(([name, cfg]) => ({
         name,
         runtime: cfg.runtime,
@@ -2906,11 +3560,17 @@ export class OrchestrationEngine {
     };
   }
 
-  public getProjectBoardSnapshot(projectId: string) {
+  public getProjectBoardSnapshot(projectId: string): {
+    project: ProjectRecord | null;
+    agents: AgentRecord[];
+    tasks: TaskRecord[];
+    goals: TeamGoalRecord[];
+  } {
     return {
       project: this.db.getProject(projectId),
       agents: this.db.listAgents(projectId),
       tasks: this.db.listTasks(projectId),
+      goals: this.autonomyLoop.listGoals(projectId),
     };
   }
 

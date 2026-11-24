@@ -1,7 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import {
   newId,
+  type GitDiffFileSummary,
+  type GitDiffResponse,
   type ProjectRecord,
   type SelfModProposalRecord,
   type TaskRecord,
@@ -11,6 +13,7 @@ import {
 } from "@bot-factory/shared";
 import type { LoadedRuntimeConfig, SecretScrubber } from "../config";
 import type { StateDatabase } from "../db/database";
+import { computeWorkspaceGitDiff } from "../git/worktrees";
 import type { LocalSuperHermesMemory } from "../memory/memoryEngine";
 import type { AcpSubprocessRuntime } from "../runtimes/acpSubprocessRuntime";
 import type { CliStreamRuntime } from "../runtimes/cliStreamRuntime";
@@ -34,8 +37,14 @@ const HANDOFF_EXCERPT_MAX_CHARS = 4000;
 const SPEC_EXCERPT_MAX_CHARS = 4000;
 const STAGED_CONTENT_EXCERPT_MAX_CHARS = 4000;
 const DIFF_STAT_MAX_CHARS = 2000;
+const DIFF_EXCERPT_MAX_CHARS = 6000;
 const SUMMARY_MAX_CHARS = 4000;
 const CHECK_DETAIL_MAX_CHARS = 300;
+const DEFAULT_VERIFY_CHECK_TIMEOUT_MS = 60_000;
+const VERIFY_OUTPUT_MAX_BUFFER_CHARS = 16_384;
+const VERIFY_OUTPUT_TAIL_CHARS = 800;
+
+export type ProjectVerifyCheck = NonNullable<ProjectRecord["verifyChecks"]>[number];
 
 const VERDICT_INSTRUCTIONS =
   'Judge strictly from the evidence provided in this message. End your reply with exactly one verdict line: "VERDICT: PASS", "VERDICT: FAIL", or "VERDICT: NEEDS_HUMAN". Before that line, list every concrete issue you found as a bullet starting with "- FINDING:". If you cannot confidently confirm correctness from the evidence alone, use NEEDS_HUMAN.';
@@ -69,25 +78,302 @@ function truncate(input: string, max: number): string {
   return input.length > max ? `${input.slice(0, max)}\n… [truncated]` : input;
 }
 
-function runGitStatusShort(cwd: string): { ok: boolean; output: string } {
+function buildVerifyCheckEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  delete env.BOT_FACTORY_TOKEN;
+  return env;
+}
+
+function killProcessTreeSync(proc: ReturnType<typeof Bun.spawn>): void {
+  const pid = proc.pid;
+  if (process.platform === "win32" && pid) {
+    try {
+      Bun.spawnSync(["taskkill", "/PID", String(pid), "/T", "/F"], {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+    } catch {
+      // Fall back to direct kill below
+    }
+  }
   try {
-    const proc = Bun.spawnSync(["git", "-c", "core.longpaths=true", "status", "--short"], {
+    proc.kill("SIGKILL");
+  } catch {
+    try {
+      proc.kill();
+    } catch {
+      // Process already exited
+    }
+  }
+}
+
+async function readStreamTail(
+  stream: ReadableStream<Uint8Array> | number | null | undefined,
+  maxChars = VERIFY_OUTPUT_MAX_BUFFER_CHARS,
+): Promise<string> {
+  if (!stream || typeof stream === "number") return "";
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let acc = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) {
+        acc += decoder.decode(value, { stream: true });
+        if (acc.length > maxChars * 2) {
+          acc = acc.slice(acc.length - maxChars);
+        }
+      }
+    }
+    acc += decoder.decode();
+    return acc.length > maxChars ? acc.slice(acc.length - maxChars) : acc;
+  } catch {
+    return acc;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // Ignore lock release failure
+    }
+  }
+}
+
+/**
+ * Execute configured project verification commands inside the author worktree,
+ * enforcing per-check timeouts (killing the process tree) and SecretScrubber redaction.
+ */
+export async function runProjectVerifyChecks(
+  checks: ProjectVerifyCheck[],
+  cwd: string | null,
+  scrubber: SecretScrubber,
+): Promise<VerificationCheckResult[]> {
+  if (!checks || checks.length === 0) return [];
+  const results: VerificationCheckResult[] = [];
+
+  for (const check of checks) {
+    const checkName = `cmd:${check.name}`;
+    if (!cwd || !existsSync(cwd)) {
+      results.push({
+        name: checkName,
+        passed: false,
+        detail: `worktree/repo directory missing: ${cwd ?? "(none)"}`,
+      });
+      continue;
+    }
+    if (!check.cmd.trim() || check.cmd.includes("\0")) {
+      results.push({
+        name: checkName,
+        passed: false,
+        detail: "invalid verify check command",
+      });
+      continue;
+    }
+
+    const timeoutMs = Math.max(1, check.timeoutMs ?? DEFAULT_VERIFY_CHECK_TIMEOUT_MS);
+    const argv =
+      process.platform === "win32"
+        ? ["cmd.exe", "/d", "/s", "/c", `"${check.cmd}"`]
+        : ["/bin/sh", "-c", check.cmd];
+    const spawnOpts: Record<string, unknown> = {
+      cwd,
+      env: buildVerifyCheckEnv(),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    };
+    if (process.platform === "win32") {
+      spawnOpts.windowsVerbatimArguments = true;
+    }
+
+    let proc: ReturnType<typeof Bun.spawn>;
+    try {
+      proc = Bun.spawn(argv, spawnOpts as Parameters<typeof Bun.spawn>[1]);
+    } catch (err) {
+      results.push({
+        name: checkName,
+        passed: false,
+        detail: scrubber.scrub(`spawn_failed: ${err instanceof Error ? err.message : String(err)}`),
+      });
+      continue;
+    }
+
+    const stdoutPromise = readStreamTail(proc.stdout);
+    const stderrPromise = readStreamTail(proc.stderr);
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const outcome = await Promise.race([
+      proc.exited.then((code) => ({ timedOut: false as const, code })),
+      new Promise<{ timedOut: true; code: number }>((resolveTimeout) => {
+        timer = setTimeout(() => {
+          killProcessTreeSync(proc);
+          resolveTimeout({ timedOut: true, code: -1 });
+        }, timeoutMs);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (outcome.timedOut) {
+      await Promise.race([proc.exited, new Promise((r) => setTimeout(r, 1000))]);
+    }
+
+    const [stdoutRaw, stderrRaw] = await Promise.all([
+      Promise.race([stdoutPromise, new Promise<string>((r) => setTimeout(() => r(""), 1000))]),
+      Promise.race([stderrPromise, new Promise<string>((r) => setTimeout(() => r(""), 1000))]),
+    ]);
+
+    const combined = [stdoutRaw.trim(), stderrRaw.trim()].filter(Boolean).join("\n");
+    const scrubbed = scrubber.scrub(combined);
+    const tail =
+      scrubbed.length > VERIFY_OUTPUT_TAIL_CHARS
+        ? `…${scrubbed.slice(scrubbed.length - VERIFY_OUTPUT_TAIL_CHARS)}`
+        : scrubbed;
+
+    const detail = outcome.timedOut
+      ? `timed out after ${timeoutMs}ms${tail ? `: ${tail}` : ""}`
+      : `exit ${outcome.code}${tail ? `: ${tail}` : " (no output)"}`;
+
+    results.push({
+      name: checkName,
+      passed: !outcome.timedOut && outcome.code === 0,
+      detail,
+    });
+  }
+
+  return results;
+}
+
+async function runGitAsync(
+  args: string[],
+  cwd: string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  try {
+    const proc = Bun.spawn(["git", "-c", "core.longpaths=true", "-c", "core.quotePath=false", ...args], {
       cwd,
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
     });
-    if (proc.exitCode !== 0) {
-      return {
-        ok: false,
-        output: (proc.stderr.toString().trim() || `git_status_failed(${proc.exitCode})`).slice(0, 300),
-      };
-    }
-    return { ok: true, output: proc.stdout.toString().trim() };
+    const [code, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    return { code, stdout, stderr: stderr.trim() };
   } catch (err) {
-    return { ok: false, output: `git_spawn_failed: ${err instanceof Error ? err.message : String(err)}` };
+    return { code: 1, stdout: "", stderr: `git_spawn_failed: ${err instanceof Error ? err.message : String(err)}` };
   }
+}
+
+async function computeBranchCommitsDiff(
+  worktreePath: string,
+  baseRepoPath: string,
+  scrub: (text: string) => string,
+): Promise<GitDiffResponse> {
+  const empty: GitDiffResponse = { branch: "main", filesChanged: 0, insertions: 0, deletions: 0, files: [] };
+  const [wtHead, repoHead, branchRes] = await Promise.all([
+    runGitAsync(["rev-parse", "--verify", "HEAD"], worktreePath),
+    runGitAsync(["rev-parse", "--verify", "HEAD"], baseRepoPath),
+    runGitAsync(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath),
+  ]);
+  if (wtHead.code !== 0 || repoHead.code !== 0) return empty;
+  const wtSha = wtHead.stdout.trim();
+  const repoSha = repoHead.stdout.trim();
+  if (!wtSha || !repoSha || wtSha === repoSha) return empty;
+
+  const mergeBaseRes = await runGitAsync(["merge-base", repoSha, wtSha], worktreePath);
+  const baseSha = mergeBaseRes.code === 0 ? mergeBaseRes.stdout.trim() : repoSha;
+  if (!baseSha || baseSha === wtSha) return empty;
+
+  const range = `${baseSha}..${wtSha}`;
+  const [nameStatusRes, numstatRes, diffRes] = await Promise.all([
+    runGitAsync(["diff", "--name-status", "-z", range], worktreePath),
+    runGitAsync(["diff", "--numstat", range], worktreePath),
+    runGitAsync(["diff", "--unified=3", range], worktreePath),
+  ]);
+  if (nameStatusRes.code !== 0) return empty;
+
+  const stats = new Map<string, { added: number; removed: number }>();
+  for (const line of numstatRes.stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const [rawA, rawR, ...rest] = line.split("\t");
+    if (!rawA || !rawR || rest.length === 0) continue;
+    const p = rest.join("\t").trim().replace(/^"|"$/g, "").replace(/\\/g, "/");
+    if (p) {
+      stats.set(p, {
+        added: rawA === "-" ? 0 : Number.parseInt(rawA, 10) || 0,
+        removed: rawR === "-" ? 0 : Number.parseInt(rawR, 10) || 0,
+      });
+    }
+  }
+
+  const patches = new Map<string, string>();
+  const chunks = diffRes.stdout.replace(/\r\n/g, "\n").split(/^diff --git /m);
+  for (const chunk of chunks) {
+    if (!chunk.trim()) continue;
+    const full = `diff --git ${chunk}`.trimEnd();
+    const lines = full.split("\n");
+    let target = "";
+    for (const line of lines) {
+      if (line.startsWith("@@ ")) break;
+      if (line.startsWith("rename to ")) target = line.slice("rename to ".length);
+      else if (line.startsWith("+++ b/")) target = line.slice("+++ b/".length);
+      else if (!target && line.startsWith("--- a/")) target = line.slice("--- a/".length);
+    }
+    target = target.replace(/^"|"$/g, "").replace(/\\/g, "/");
+    if (target) patches.set(target, full);
+  }
+
+  const parts = nameStatusRes.stdout.split("\0").filter(Boolean);
+  const files: GitDiffFileSummary[] = [];
+  let insertions = 0;
+  let deletions = 0;
+  for (let i = 0; i < parts.length && files.length < 40; i += 1) {
+    const code = parts[i] ?? "";
+    let filePath = "";
+    if (code.startsWith("R") || code.startsWith("C")) {
+      filePath = (parts[i + 2] ?? "").replace(/\\/g, "/");
+      i += 2;
+    } else {
+      filePath = (parts[i + 1] ?? "").replace(/\\/g, "/");
+      i += 1;
+    }
+    if (!filePath) continue;
+    const st = stats.get(filePath) ?? { added: 0, removed: 0 };
+    insertions += st.added;
+    deletions += st.removed;
+    const status: GitDiffFileSummary["status"] = code.startsWith("A")
+      ? "added"
+      : code.startsWith("D")
+        ? "deleted"
+        : code.startsWith("R")
+          ? "renamed"
+          : "modified";
+    files.push({
+      path: filePath,
+      status,
+      added: st.added,
+      removed: st.removed,
+      patch: scrub(patches.get(filePath) ?? ""),
+    });
+  }
+
+  const branch = branchRes.code === 0 && branchRes.stdout.trim() !== "HEAD" ? branchRes.stdout.trim() : "main";
+  return { branch, filesChanged: files.length, insertions, deletions, files };
+}
+
+function extractHandoffChangedFiles(handoffContent: string): string[] {
+  const sectionMatch = /## Changed Files\s*\n([\s\S]*?)(?:\n## |\s*$)/i.exec(handoffContent);
+  if (!sectionMatch?.[1]) return [];
+  const out: string[] = [];
+  for (const rawLine of sectionMatch[1].split(/\r?\n/)) {
+    const m = /^\s*[-*]\s*`([^`]+)`/.exec(rawLine);
+    if (m?.[1]) {
+      out.push(m[1].trim().replace(/\\/g, "/"));
+    }
+  }
+  return out;
 }
 
 export class IndependentVerifier {
@@ -123,11 +409,20 @@ export class IndependentVerifier {
     const checks: VerificationCheckResult[] = [handoff.result, this.checkSecretScan(handoff.content, handoff.result.passed)];
 
     const worktreeBase = author?.worktreePath ?? project.repoPath;
-    const worktree = this.checkWorktreeEvidence(worktreeBase, handoff.content);
+    const worktree = await this.checkWorktreeEvidence({
+      basePath: worktreeBase,
+      project,
+      task,
+      handoffContent: handoff.content,
+    });
     checks.push(worktree.result);
 
     for (const custom of this.checkCustomPaths(customChecks ?? [], worktreeBase)) {
       checks.push(custom);
+    }
+
+    for (const cmdCheck of await runProjectVerifyChecks(project.verifyChecks ?? [], worktreeBase, this.scrubber)) {
+      checks.push(cmdCheck);
     }
 
     const objectiveChecksPassed = checks.every((c) => c.passed);
@@ -147,6 +442,7 @@ export class IndependentVerifier {
       `## Task Spec\n${truncate(task.specMd ?? "", SPEC_EXCERPT_MAX_CHARS) || "(empty spec)"}\n\n` +
       `## Handoff Excerpt\n${this.scrubber.scrub(truncate(handoff.content, HANDOFF_EXCERPT_MAX_CHARS)) || "(handoff missing or empty)"}\n\n` +
       `## Worktree Change Evidence\n${this.scrubber.scrub(worktree.diffStat || "(git status unavailable)")}\n\n` +
+      `## Worktree Git Diff\n${this.scrubber.scrub(worktree.diffExcerpt || "(no worktree diff)")}\n\n` +
       `## Objective Check Results\n${checks
         .map((c) => `- ${c.name}: ${c.passed ? "PASS" : "FAIL"} — ${truncate(c.detail, CHECK_DETAIL_MAX_CHARS)}`)
         .join("\n")}\n\n` +
@@ -339,10 +635,62 @@ export class IndependentVerifier {
     };
   }
 
-  private checkWorktreeEvidence(
-    basePath: string | null,
-    handoffContent: string,
-  ): { result: VerificationCheckResult; diffStat: string } {
+  private isVerifiedDocOnlyChange(project: ProjectRecord, task: TaskRecord, handoffContent: string): boolean {
+    const annotation = task.sourceAnnotationId ? this.db.getAnnotation(task.sourceAnnotationId) : null;
+    const annPathNorm = annotation?.filePath.replace(/\\/g, "/") ?? "";
+    const handoffRelNorm = task.handoffPath?.replace(/\\/g, "/") ?? "";
+    const handoffJsonNorm = handoffRelNorm.replace(/\.md$/i, ".json");
+    const handoffChangedFiles = extractHandoffChangedFiles(handoffContent);
+    const specDocPaths = Array.from((task.specMd ?? "").matchAll(/(?:plans|handoffs)\/[A-Za-z0-9_.\-/]+/g)).map(
+      (m) => m[0],
+    );
+
+    const docOnlyTargeted = Boolean(
+      (annotation?.targetType === "doc" && /^(plans|handoffs)\//.test(annPathNorm)) ||
+        /\bdocs?[- ]?only\b|\bno repo (?:files|changes)\b/i.test(`${task.specMd ?? ""}\n${handoffContent}`) ||
+        specDocPaths.length > 0,
+    );
+    if (!docOnlyTargeted) return false;
+
+    const candidates = new Set<string>([
+      ...(annotation?.targetType === "doc" && annPathNorm ? [annPathNorm] : []),
+      ...handoffChangedFiles,
+      ...specDocPaths,
+    ]);
+    if (handoffRelNorm) candidates.delete(handoffRelNorm);
+    if (handoffJsonNorm) candidates.delete(handoffJsonNorm);
+
+    for (const relPath of candidates) {
+      const inside = isPathStrictlyWithinRoot(project.rootPath, relPath);
+      if (!inside.ok) continue;
+      const relFromRoot = relative(resolve(project.rootPath), inside.absTarget).replace(/\\/g, "/");
+      if (!relFromRoot.startsWith("plans/") && !relFromRoot.startsWith("handoffs/")) continue;
+      if (relFromRoot === handoffRelNorm || relFromRoot === handoffJsonNorm) continue;
+      try {
+        const st = statSync(inside.absTarget);
+        if (!st.isFile() || st.size === 0) continue;
+        if (handoffChangedFiles.includes(relFromRoot) || st.mtimeMs > task.createdAt) {
+          return true;
+        }
+        const content = readFileSync(inside.absTarget, "utf8");
+        if (content.includes(task.id)) {
+          return true;
+        }
+      } catch {
+        // Ignore unreadable candidate
+      }
+    }
+
+    return false;
+  }
+
+  private async checkWorktreeEvidence(params: {
+    basePath: string | null;
+    project: ProjectRecord;
+    task: TaskRecord;
+    handoffContent: string;
+  }): Promise<{ result: VerificationCheckResult; diffStat: string; diffExcerpt: string }> {
+    const { basePath, project, task, handoffContent } = params;
     if (!basePath || !existsSync(basePath)) {
       return {
         result: {
@@ -351,30 +699,74 @@ export class IndependentVerifier {
           detail: `author worktree/repo path missing: ${basePath ?? "(none)"}`,
         },
         diffStat: "",
+        diffExcerpt: "",
       };
     }
-    const git = runGitStatusShort(basePath);
+
+    const insideGit = await runGitAsync(["rev-parse", "--is-inside-work-tree"], basePath);
     const mentionsCheckpoint = /refs\/bot-factory\/checkpoints\//.test(handoffContent);
-    if (git.ok) {
+    if (insideGit.code !== 0) {
+      const reason = insideGit.stderr || `not_a_git_repo(${insideGit.code})`;
       return {
         result: {
           name: "worktree_evidence",
-          passed: true,
-          detail: `git status --short:\n${truncate(git.output, DIFF_STAT_MAX_CHARS) || "(clean worktree)"}`,
+          passed: mentionsCheckpoint,
+          detail: mentionsCheckpoint
+            ? `non-git fallback accepted via checkpoint ref citation (${reason})`
+            : `non-git worktree without checkpoint ref citation (${reason})`,
         },
-        diffStat: truncate(git.output, DIFF_STAT_MAX_CHARS),
+        diffStat: "",
+        diffExcerpt: "",
       };
     }
-    // Non-git fallback: pass ONLY if handoff explicitly cites a workspace-scoped checkpoint ref.
+
+    let diff = await computeWorkspaceGitDiff(basePath, (t) => this.scrubber.scrub(t));
+    if (diff.filesChanged === 0 && resolve(basePath) !== resolve(project.repoPath) && existsSync(project.repoPath)) {
+      const branchDiff = await computeBranchCommitsDiff(basePath, project.repoPath, (t) => this.scrubber.scrub(t));
+      if (branchDiff.filesChanged > 0) {
+        diff = branchDiff;
+      }
+    }
+
+    if (diff.filesChanged === 0) {
+      if (this.isVerifiedDocOnlyChange(project, task, handoffContent)) {
+        return {
+          result: {
+            name: "worktree_evidence",
+            passed: true,
+            detail: "doc-only change verified under plans/ or handoffs/ (no repo code changes required)",
+          },
+          diffStat: "(doc-only change under plans/ or handoffs/)",
+          diffExcerpt: "(doc-only change — no repo diff)",
+        };
+      }
+      return {
+        result: {
+          name: "worktree_evidence",
+          passed: false,
+          detail: "worktree has zero changed files (fail-closed)",
+        },
+        diffStat: "(clean worktree — 0 changed files)",
+        diffExcerpt: "(empty diff)",
+      };
+    }
+
+    const summaryHeader = `Branch: ${diff.branch} | Files: ${diff.filesChanged} | +${diff.insertions}/-${diff.deletions}`;
+    const fileList = diff.files.map((f) => `- ${f.path} (${f.status}, +${f.added}/-${f.removed})`);
+    const diffStat = truncate([summaryHeader, ...fileList].join("\n"), DIFF_STAT_MAX_CHARS);
+    const diffPatches = diff.files
+      .map((f) => `### ${f.path} (${f.status}, +${f.added}/-${f.removed})\n${f.patch || "(no text patch / binary)"}`)
+      .join("\n\n");
+    const diffExcerpt = truncate(this.scrubber.scrub(diffPatches), DIFF_EXCERPT_MAX_CHARS);
+
     return {
       result: {
         name: "worktree_evidence",
-        passed: mentionsCheckpoint,
-        detail: mentionsCheckpoint
-          ? `non-git fallback accepted via checkpoint ref citation (${git.output})`
-          : `non-git worktree without checkpoint ref citation (${git.output})`,
+        passed: true,
+        detail: diffStat,
       },
-      diffStat: "",
+      diffStat,
+      diffExcerpt,
     };
   }
 

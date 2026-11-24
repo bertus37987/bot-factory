@@ -222,6 +222,13 @@ export const AnnotationAnchorSchema = z.discriminatedUnion("kind", [
 ]);
 export type AnnotationAnchor = z.infer<typeof AnnotationAnchorSchema>;
 
+export const VerifyCheckSchema = z.object({
+  name: z.string().min(1),
+  cmd: z.string().min(1),
+  timeoutMs: z.number().int().positive().optional(),
+});
+export type VerifyCheck = z.infer<typeof VerifyCheckSchema>;
+
 export interface ProjectRecord {
   id: string;
   slug: string;
@@ -229,7 +236,7 @@ export interface ProjectRecord {
   rootPath: string;
   repoPath: string;
   routingOverrides: Record<string, RouteTarget>;
-  verifyChecks?: Array<{ name: string; cmd: string; timeoutMs?: number }>;
+  verifyChecks?: VerifyCheck[];
   status: "active" | "paused" | "archived";
   createdAt: number;
 }
@@ -471,6 +478,18 @@ export interface MemoryL1Snapshot {
   gaugeHeader: string;
 }
 
+export const TeamGoalStatusSchema = z.enum(["active", "completed", "blocked"]);
+export type TeamGoalStatus = z.infer<typeof TeamGoalStatusSchema>;
+
+export interface TeamGoalRecord {
+  goalId: string;
+  projectId: string;
+  goal: string;
+  status: TeamGoalStatus;
+  taskIds: string[];
+  updatedAt: number;
+}
+
 export interface QuietStatusProjection {
   activeProjects: number;
   runningBots: number;
@@ -487,6 +506,7 @@ export interface QuietStatusProjection {
   }>;
   pendingPermissionsCount?: number;
   pendingPermissions?: PermissionRequestRecord[];
+  activeGoals?: TeamGoalRecord[];
   inboxNotices: Array<{
     id: string;
     level: "info" | "warn" | "action";
@@ -524,6 +544,7 @@ export const RpcCommandSchema = z.discriminatedUnion("type", [
     slug: z.string().optional(),
     externalRepoPath: z.string().optional(),
     seedDemoArtifacts: z.boolean().optional(),
+    verifyChecks: z.array(VerifyCheckSchema).optional(),
   }),
   z.object({
     commandId: z.string(),
@@ -580,6 +601,7 @@ export const RpcCommandSchema = z.discriminatedUnion("type", [
     title: z.string().min(1),
     specMd: z.string().default(""),
     priority: z.number().int().min(1).max(5).default(3),
+    dependsOn: z.array(z.string().min(1)).optional(),
   }),
   z.object({
     commandId: z.string(),
@@ -587,6 +609,7 @@ export const RpcCommandSchema = z.discriminatedUnion("type", [
     projectId: z.string(),
     taskId: z.string(),
     agentId: z.string().optional(),
+    autonomous: z.boolean().optional(),
   }),
   z.object({
     commandId: z.string(),

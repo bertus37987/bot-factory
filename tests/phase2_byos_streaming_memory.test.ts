@@ -911,13 +911,13 @@ process.stdin.on("data", (chunk) => {
     app.db.runAtomicWrite(() => app.db.upsertTask({ ...app.db.getTask(tMerge.id)!, status: "verified" }));
     expect(() =>
       app.engine.executeCommand({
-        commandId: "mem_t_merge_stub",
+        commandId: "mem_t_merge_no_worktree",
         type: "task.merge",
         projectId: project.id,
         taskId: tMerge.id,
         strategy: "squash",
       }),
-    ).toThrow("task_merge_phase3_pending");
+    ).toThrow("task_missing_worktree_for_merge");
 
     const notice = app.engine.getQuietStatusProjection().inboxNotices[0];
     if (notice) {

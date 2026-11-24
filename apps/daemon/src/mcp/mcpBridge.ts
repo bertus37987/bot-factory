@@ -192,6 +192,82 @@ export const MCP_TOOLS: McpToolDef[] = [
       required: ["debateId", "position"],
     },
   },
+  {
+    name: "bf_subagent_spawn",
+    description: "Spawn a depth-1 sidekick subagent to assist the current peer bot (readonly analysis or isolated code worktree).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Short human-readable name for the subagent." },
+        role: { type: "string", description: "Optional specialty role description (e.g. researcher, tester, refactorer)." },
+        mode: {
+          type: "string",
+          enum: ["readonly", "code"],
+          description: "'readonly' shares parent worktree at spec autonomy; 'code' uses an isolated child worktree.",
+        },
+        prompt: { type: "string", description: "Initial assignment prompt for the subagent." },
+        provider: { type: "string", description: "Optional provider override." },
+        model: { type: "string", description: "Optional model override (requires provider)." },
+      },
+      required: ["name", "prompt"],
+    },
+  },
+  {
+    name: "bf_subagent_status",
+    description: "Get status and latest summary/output for one subagent or all subagents spawned by this bot.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subagentId: { type: "string", description: "Optional subagent ID; omit to list all subagents owned by this bot." },
+      },
+    },
+  },
+  {
+    name: "bf_subagent_wait",
+    description: "Wait until a subagent finishes its active turn or timeoutMs elapses.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subagentId: { type: "string", description: "ID of the subagent to wait for." },
+        timeoutMs: { type: "number", description: "Maximum milliseconds to wait (default 60000)." },
+      },
+      required: ["subagentId"],
+    },
+  },
+  {
+    name: "bf_subagent_message",
+    description: "Send a follow-up instruction or question to an existing subagent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subagentId: { type: "string", description: "ID of the subagent to message." },
+        message: { type: "string", description: "Follow-up prompt/message for the subagent." },
+      },
+      required: ["subagentId", "message"],
+    },
+  },
+  {
+    name: "bf_subagent_kill",
+    description: "Terminate a subagent and clean up its child worktree if any.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subagentId: { type: "string", description: "ID of the subagent to stop." },
+      },
+      required: ["subagentId"],
+    },
+  },
+  {
+    name: "bf_subagent_apply_patch",
+    description: "Extract changes from a finished 'code' subagent's child worktree, apply them cleanly to the parent worktree, and clean up.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subagentId: { type: "string", description: "ID of the 'code' subagent whose patch should be applied." },
+      },
+      required: ["subagentId"],
+    },
+  },
 ];
 
 const TOOL_NAMES = new Set(MCP_TOOLS.map((t) => t.name));
@@ -335,6 +411,11 @@ export async function handleMcpJsonRpcRequest(
 export function makeDaemonCallTool(config: BridgeConfig): CallToolFn {
   return async (name, args) => {
     const url = `${config.daemonUrl.replace(/\/+$/, "")}/api/mcp/${name}`;
+    const requestedWaitMs =
+      name === "bf_subagent_wait" && typeof args.timeoutMs === "number" && Number.isFinite(args.timeoutMs)
+        ? Math.max(0, Math.min(300_000, args.timeoutMs))
+        : 0;
+    const fetchTimeoutMs = Math.max(DAEMON_FETCH_TIMEOUT_MS, requestedWaitMs + 5_000);
     let res: Response;
     try {
       res = await fetch(url, {
@@ -348,7 +429,7 @@ export function makeDaemonCallTool(config: BridgeConfig): CallToolFn {
           agentId: config.agentId,
           args,
         }),
-        signal: AbortSignal.timeout(DAEMON_FETCH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(fetchTimeoutMs),
       });
     } catch (err) {
       throw new Error(

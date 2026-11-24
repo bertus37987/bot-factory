@@ -440,15 +440,15 @@ describe("6. MCP Bridge (handleMcpJsonRpcRequest)", () => {
     });
   });
 
-  it("lists all 8 bf_* tools on tools/list", async () => {
+  it("lists all 14 bf_* tools on tools/list", async () => {
     const resp = await handleMcpJsonRpcRequest(
       { jsonrpc: "2.0", id: 2, method: "tools/list" },
       noopCall,
     );
     expect(resp?.error).toBeUndefined();
     const result = resp?.result as { tools: Array<{ name: string }> };
-    expect(result.tools).toHaveLength(8);
-    expect(MCP_TOOLS).toHaveLength(8);
+    expect(result.tools).toHaveLength(14);
+    expect(MCP_TOOLS).toHaveLength(14);
     const names = result.tools.map((t) => t.name);
     expect(names).toEqual([
       "bf_task_list",
@@ -459,6 +459,12 @@ describe("6. MCP Bridge (handleMcpJsonRpcRequest)", () => {
       "bf_fix_tasks_list",
       "bf_fix_task_resolve",
       "bf_debate_post",
+      "bf_subagent_spawn",
+      "bf_subagent_status",
+      "bf_subagent_wait",
+      "bf_subagent_message",
+      "bf_subagent_kill",
+      "bf_subagent_apply_patch",
     ]);
   });
 

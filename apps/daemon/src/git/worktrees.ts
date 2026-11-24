@@ -498,6 +498,21 @@ function shortWorktreeId(agentId: string, taskId: string): string {
   return createHash("sha1").update(entropy).digest("hex").slice(0, 8);
 }
 
+function gitCommitEnv(extra?: Record<string, string>): Record<string, string> {
+  return {
+    GIT_AUTHOR_NAME: "Bot Factory",
+    GIT_AUTHOR_EMAIL: "bot-factory@local",
+    GIT_COMMITTER_NAME: "Bot Factory",
+    GIT_COMMITTER_EMAIL: "bot-factory@local",
+    ...extra,
+  };
+}
+
+function subagentBaseRefName(branch: string): string {
+  const hash = createHash("sha1").update(branch).digest("hex").slice(0, 12);
+  return `refs/bot-factory/subagent-base/${hash}`;
+}
+
 export function createBotWorktree(params: {
   projectRoot: string;
   repoPath: string;
@@ -520,15 +535,459 @@ export function createBotWorktree(params: {
 export function removeBotWorktree(repoPath: string, worktreePath: string): void {
   let removeError: Error | null = null;
   if (existsSync(worktreePath)) {
-    const res = runGitSync(["worktree", "remove", "--force", worktreePath], repoPath, { allowFail: true });
-    if (res.code !== 0) {
-      removeError = new Error(`git_worktree_remove_failed(${res.code}): ${res.stderr || res.stdout}`);
+    const sab = process.platform === "win32" ? new Int32Array(new SharedArrayBuffer(4)) : null;
+    const maxAttempts = process.platform === "win32" ? 5 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const res = runGitSync(["worktree", "remove", "--force", worktreePath], repoPath, { allowFail: true });
+      if (res.code === 0 || !existsSync(worktreePath)) {
+        removeError = null;
+        break;
+      }
+      const msg = res.stderr || res.stdout;
+      removeError = new Error(`git_worktree_remove_failed(${res.code}): ${msg}`);
+      if (sab && /permission denied|ebusy|eperm|eacces|used by another process/i.test(msg) && attempt + 1 < maxAttempts) {
+        Atomics.wait(sab, 0, 0, 75);
+        continue;
+      }
+      break;
     }
   }
   runGitSync(["worktree", "prune"], repoPath, { allowFail: true });
   if (removeError && existsSync(worktreePath)) {
     throw removeError;
   }
+}
+
+const SUBAGENT_SNAPSHOT_MAX_UNTRACKED_BYTES = 10 * 1024 * 1024;
+const GIT_ARG_BATCH_SIZE = 50;
+
+/**
+ * List changed, staged, and untracked non-sensitive files inside a git worktree.
+ */
+export async function listWorktreeChangedFiles(worktreePath: string): Promise<string[]> {
+  if (!worktreePath || !existsSync(worktreePath)) return [];
+  const res = await runGitRaw(
+    ["--no-optional-locks", "status", "--porcelain", "-z", "-uall"],
+    worktreePath,
+    { allowFail: true },
+  );
+  if (res.code !== 0) return [];
+  return parsePorcelainStatusZ(res.stdout)
+    .map((entry) => entry.path)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+async function runGitPathBatches(
+  baseArgs: string[],
+  paths: string[],
+  cwd: string,
+  opts?: { env?: Record<string, string>; allowFail?: boolean },
+): Promise<void> {
+  for (let i = 0; i < paths.length; i += GIT_ARG_BATCH_SIZE) {
+    const batch = paths.slice(i, i + GIT_ARG_BATCH_SIZE);
+    if (batch.length === 0) continue;
+    await runGit([...baseArgs, "--", ...batch], cwd, opts);
+  }
+}
+
+async function unstageSensitivePaths(cwd: string, env?: Record<string, string>): Promise<void> {
+  const staged = await runGitRaw(["diff", "--cached", "--name-only", "-z"], cwd, { env, allowFail: true });
+  if (staged.code !== 0 || !staged.stdout) return;
+  const sensitive = staged.stdout
+    .split("\0")
+    .map((p) => p.trim().replace(/\\/g, "/"))
+    .filter((p) => p.length > 0 && isSensitiveRepoRelPath(p));
+  if (sensitive.length > 0) {
+    await runGitPathBatches(["rm", "-r", "--cached", "--ignore-unmatch", "-q"], sensitive, cwd, {
+      env,
+      allowFail: true,
+    });
+  }
+}
+
+async function captureParentSnapshotCommit(parentWorktreePath: string, parentHeadSha: string): Promise<string> {
+  const statusRes = await runGitRaw(
+    ["--no-optional-locks", "status", "--porcelain", "-z", "-uall"],
+    parentWorktreePath,
+    { allowFail: true },
+  );
+  if (statusRes.code !== 0 || !statusRes.stdout) {
+    return parentHeadSha;
+  }
+
+  const entries = parsePorcelainStatusZ(statusRes.stdout);
+  if (entries.length === 0) {
+    return parentHeadSha;
+  }
+
+  const gitDirOut = await runGit(["rev-parse", "--absolute-git-dir"], parentWorktreePath);
+  const gitDir = resolve(parentWorktreePath, gitDirOut.stdout);
+  const realIndexPath = join(gitDir, "index");
+  const tmpIndexPath = join(tmpdir(), `bf-subagent-idx-${newId("idx")}-${process.pid}.index`);
+  const env = gitCommitEnv({ GIT_INDEX_FILE: tmpIndexPath });
+
+  try {
+    if (existsSync(realIndexPath)) {
+      copyFileSync(realIndexPath, tmpIndexPath);
+    } else {
+      await runGit(["read-tree", parentHeadSha], parentWorktreePath, { env });
+    }
+
+    // Update tracked/staged entries first, then stage safe non-sensitive untracked files.
+    await runGit(["add", "-u"], parentWorktreePath, { env });
+    const safeUntracked: string[] = [];
+    for (const entry of entries) {
+      if (entry.status !== "untracked") continue;
+      const safe = isPathStrictlyWithinRoot(parentWorktreePath, entry.path);
+      if (!safe.ok) continue;
+      try {
+        const st = statSync(safe.absTarget);
+        if (st.isFile() && st.size <= SUBAGENT_SNAPSHOT_MAX_UNTRACKED_BYTES) {
+          safeUntracked.push(entry.path);
+        }
+      } catch {
+        // Ignore vanished/unreadable untracked files
+      }
+    }
+    if (safeUntracked.length > 0) {
+      await runGitPathBatches(["add"], safeUntracked, parentWorktreePath, { env });
+    }
+    await unstageSensitivePaths(parentWorktreePath, env);
+
+    const treeSha = (await runGit(["write-tree"], parentWorktreePath, { env })).stdout;
+    const headTreeSha = (await runGit(["rev-parse", `${parentHeadSha}^{tree}`], parentWorktreePath)).stdout;
+    if (treeSha === headTreeSha) {
+      return parentHeadSha;
+    }
+
+    return (
+      await runGit(
+        ["-c", "commit.gpgsign=false", "commit-tree", treeSha, "-p", parentHeadSha, "-m", "chore(bf): parent snapshot for subagent"],
+        parentWorktreePath,
+        { env },
+      )
+    ).stdout;
+  } finally {
+    try {
+      if (existsSync(tmpIndexPath)) unlinkSync(tmpIndexPath);
+    } catch {
+      // Best-effort temp index cleanup
+    }
+  }
+}
+
+/**
+ * Create an isolated child git worktree for a depth-1 coding subagent without
+ * mutating the parent worktree's HEAD, index, or working directory.
+ */
+export async function createSubagentWorktree(params: {
+  projectRoot: string;
+  parentWorktreePath: string;
+  subagentId: string;
+}): Promise<{ worktreePath: string; branch: string; baseCommitSha: string }> {
+  const inside = await runGit(["rev-parse", "--is-inside-work-tree"], params.parentWorktreePath, { allowFail: true });
+  if (inside.code !== 0) {
+    throw new Error(`not_a_git_worktree: ${params.parentWorktreePath}`);
+  }
+  const headRes = await runGit(["rev-parse", "--verify", "HEAD"], params.parentWorktreePath, { allowFail: true });
+  if (headRes.code !== 0) {
+    throw new Error("parent_worktree_has_no_commits");
+  }
+  const parentHeadSha = headRes.stdout;
+
+  const worktreesRoot = join(params.projectRoot, "worktrees");
+  mkdirSync(worktreesRoot, { recursive: true });
+  let shortId = shortWorktreeId(params.subagentId, "sub");
+  let worktreePath = join(worktreesRoot, `sub-${shortId}`);
+  let branch = `bf/sub-${shortId}`;
+  while (
+    existsSync(worktreePath) ||
+    (await runGit(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], params.parentWorktreePath, { allowFail: true }))
+      .code === 0
+  ) {
+    shortId = shortWorktreeId(params.subagentId, "sub");
+    worktreePath = join(worktreesRoot, `sub-${shortId}`);
+    branch = `bf/sub-${shortId}`;
+  }
+
+  const startPoint = await captureParentSnapshotCommit(params.parentWorktreePath, parentHeadSha);
+  await runGit(["worktree", "add", "-b", branch, worktreePath, startPoint], params.parentWorktreePath);
+  const baseCommitSha = (await runGit(["rev-parse", "HEAD"], worktreePath)).stdout;
+  await runGit(["update-ref", subagentBaseRefName(branch), baseCommitSha], worktreePath, { allowFail: true });
+
+  return { worktreePath, branch, baseCommitSha };
+}
+
+/**
+ * Clean up a subagent's child worktree, base tracking ref, and branch.
+ */
+export async function cleanupSubagentWorktree(params: {
+  repoPath: string;
+  worktreePath?: string | null;
+  branch?: string | null;
+}): Promise<void> {
+  if (params.worktreePath) {
+    removeBotWorktree(params.repoPath, params.worktreePath);
+  }
+  if (params.branch) {
+    await runGit(["update-ref", "-d", subagentBaseRefName(params.branch)], params.repoPath, { allowFail: true });
+    await runGit(["branch", "-D", params.branch], params.repoPath, { allowFail: true });
+  }
+}
+
+/**
+ * Capture the subagent's changes inside its child worktree, verify and apply
+ * the patch atomically onto the parent worktree, and clean up on clean apply.
+ */
+export async function extractAndApplySubagentPatch(params: {
+  repoPath: string;
+  parentWorktreePath: string;
+  childWorktreePath: string;
+  childBranch: string;
+  skipCleanup?: boolean;
+}): Promise<{ ok: boolean; patch: string; changedFiles: string[]; error?: string }> {
+  if (!params.childWorktreePath || !existsSync(params.childWorktreePath)) {
+    return { ok: false, patch: "", changedFiles: [], error: `child_worktree_missing: ${params.childWorktreePath}` };
+  }
+  if (!params.parentWorktreePath || !existsSync(params.parentWorktreePath)) {
+    return { ok: false, patch: "", changedFiles: [], error: `parent_worktree_missing: ${params.parentWorktreePath}` };
+  }
+
+  const baseRef = subagentBaseRefName(params.childBranch);
+  const baseCheck = await runGit(["rev-parse", "--verify", baseRef], params.childWorktreePath, { allowFail: true });
+  const diffBase = baseCheck.code === 0 ? baseRef : "HEAD";
+
+  // Intent-to-add only non-sensitive untracked files so secrets/node_modules never enter the patch.
+  const statusRes = await runGitRaw(
+    ["--no-optional-locks", "status", "--porcelain", "-z", "-uall"],
+    params.childWorktreePath,
+    { allowFail: true },
+  );
+  if (statusRes.code === 0 && statusRes.stdout) {
+    const untrackedSafe = parsePorcelainStatusZ(statusRes.stdout)
+      .filter((entry) => entry.status === "untracked")
+      .map((entry) => entry.path);
+    if (untrackedSafe.length > 0) {
+      await runGitPathBatches(["add", "-N"], untrackedSafe, params.childWorktreePath);
+    }
+  }
+
+  const nameRes = await runGitRaw(["diff", "--name-only", "-z", diffBase], params.childWorktreePath, { allowFail: true });
+  const rawNames =
+    nameRes.code === 0 && nameRes.stdout
+      ? nameRes.stdout
+          .split("\0")
+          .map((p) => p.trim().replace(/\\/g, "/"))
+          .filter(Boolean)
+      : [];
+  const sensitiveNames = rawNames.filter((p) => isSensitiveRepoRelPath(p));
+  const changedFiles = [...new Set(rawNames.filter((p) => !isSensitiveRepoRelPath(p)))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+
+  if (changedFiles.length === 0) {
+    if (!params.skipCleanup) {
+      await cleanupSubagentWorktree({
+        repoPath: params.repoPath,
+        worktreePath: params.childWorktreePath,
+        branch: params.childBranch,
+      });
+    }
+    return { ok: true, patch: "", changedFiles: [] };
+  }
+
+  const diffArgs =
+    sensitiveNames.length > 0
+      ? ["diff", "--binary", diffBase, "--", ".", ...sensitiveNames.map((p) => `:!${p}`)]
+      : ["diff", "--binary", diffBase];
+  const diffRes = await runGitRaw(diffArgs, params.childWorktreePath, { allowFail: true });
+  if (diffRes.code !== 0) {
+    return { ok: false, patch: "", changedFiles: [], error: diffRes.stderr || "git_diff_failed" };
+  }
+
+  const patch = diffRes.stdout;
+  if (!patch.trim()) {
+    if (!params.skipCleanup) {
+      await cleanupSubagentWorktree({
+        repoPath: params.repoPath,
+        worktreePath: params.childWorktreePath,
+        branch: params.childBranch,
+      });
+    }
+    return { ok: true, patch: "", changedFiles: [] };
+  }
+
+  const tmpPatchPath = join(tmpdir(), `bf-subagent-${newId("patch")}-${process.pid}.patch`);
+  try {
+    writeFileSync(tmpPatchPath, patch, "utf8");
+    const checkRes = await runGit(["apply", "--check", tmpPatchPath], params.parentWorktreePath, { allowFail: true });
+    if (checkRes.code !== 0) {
+      return {
+        ok: false,
+        patch,
+        changedFiles: [],
+        error: checkRes.stderr || checkRes.stdout || "git_apply_check_failed",
+      };
+    }
+
+    const applyRes = await runGit(["apply", tmpPatchPath], params.parentWorktreePath, { allowFail: true });
+    if (applyRes.code !== 0) {
+      return {
+        ok: false,
+        patch,
+        changedFiles: [],
+        error: applyRes.stderr || applyRes.stdout || "git_apply_failed",
+      };
+    }
+  } finally {
+    try {
+      if (existsSync(tmpPatchPath)) unlinkSync(tmpPatchPath);
+    } catch {
+      // Best-effort temp patch cleanup
+    }
+  }
+
+  if (!params.skipCleanup) {
+    await cleanupSubagentWorktree({
+      repoPath: params.repoPath,
+      worktreePath: params.childWorktreePath,
+      branch: params.childBranch,
+    });
+  }
+  return { ok: true, patch, changedFiles };
+}
+
+/**
+ * Merge a verified bot worktree branch back into the project's base repository,
+ * creating a pre-merge hidden safety ref and aborting cleanly on conflict.
+ */
+export async function mergeBotWorktree(params: {
+  repoPath: string;
+  worktreePath: string;
+  branch: string;
+  strategy: "squash" | "merge_commit";
+  commitMessage: string;
+}): Promise<{
+  ok: boolean;
+  mergeCommitSha?: string;
+  preMergeRef?: string;
+  conflicts?: string[];
+  cleanedWorktree: boolean;
+  error?: string;
+}> {
+  if (!params.repoPath || !existsSync(params.repoPath)) {
+    return { ok: false, cleanedWorktree: false, error: "repo_path_missing" };
+  }
+
+  const baseStatus = await runGitRaw(["--no-optional-locks", "status", "--porcelain"], params.repoPath, {
+    allowFail: true,
+  });
+  if (baseStatus.code !== 0) {
+    return { ok: false, cleanedWorktree: false, error: baseStatus.stderr || "base_repo_git_error" };
+  }
+  if (baseStatus.stdout.trim().length > 0) {
+    return { ok: false, cleanedWorktree: false, error: "base_repo_dirty" };
+  }
+
+  const env = gitCommitEnv();
+
+  // Persist any uncommitted non-sensitive changes in the bot worktree onto its branch before merging.
+  if (params.worktreePath && existsSync(params.worktreePath)) {
+    const wtStatus = await runGitRaw(["--no-optional-locks", "status", "--porcelain"], params.worktreePath, {
+      allowFail: true,
+    });
+    if (wtStatus.code !== 0) {
+      return { ok: false, cleanedWorktree: false, error: wtStatus.stderr || "bot_worktree_git_error" };
+    }
+    if (wtStatus.stdout.trim().length > 0) {
+      await runGit(["add", "-A"], params.worktreePath, { env });
+      await unstageSensitivePaths(params.worktreePath, env);
+      const cachedDiff = await runGit(["diff", "--cached", "--quiet"], params.worktreePath, {
+        env,
+        allowFail: true,
+      });
+      if (cachedDiff.code === 1) {
+        await runGit(
+          ["-c", "commit.gpgsign=false", "commit", "-m", "chore(bf): commit bot worktree changes before merge"],
+          params.worktreePath,
+          { env },
+        );
+      }
+    }
+  } else {
+    const branchExists = await runGit(["show-ref", "--verify", "--quiet", `refs/heads/${params.branch}`], params.repoPath, {
+      allowFail: true,
+    });
+    if (branchExists.code !== 0) {
+      return { ok: false, cleanedWorktree: false, error: "worktree_and_branch_missing" };
+    }
+  }
+
+  const baseHead = (await runGit(["rev-parse", "HEAD"], params.repoPath)).stdout;
+  const shortId = createHash("sha1")
+    .update(`${params.branch}:${baseHead}:${Date.now()}:${randomUUID()}`)
+    .digest("hex")
+    .slice(0, 8);
+  const preMergeRef = `refs/bot-factory/pre-merge/${shortId}`;
+  await runGit(["update-ref", preMergeRef, baseHead], params.repoPath);
+
+  const commitMsg = params.commitMessage.trim() || `Merge ${params.branch}`;
+
+  const abortAndInspectConflicts = async (fallbackErr: string) => {
+    const unmerged = await runGit(["diff", "--name-only", "--diff-filter=U"], params.repoPath, { allowFail: true });
+    const conflicts = unmerged.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    await runGit(["merge", "--abort"], params.repoPath, { allowFail: true });
+    await runGit(["reset", "--hard", baseHead], params.repoPath, { allowFail: true });
+    await runGit(["clean", "-fd"], params.repoPath, { allowFail: true });
+    return {
+      ok: false as const,
+      preMergeRef,
+      conflicts,
+      cleanedWorktree: false,
+      error: conflicts.length > 0 || /conflict/i.test(fallbackErr) ? "merge_conflict" : fallbackErr || "merge_failed",
+    };
+  };
+
+  if (params.strategy === "squash") {
+    const squashRes = await runGit(["merge", "--squash", params.branch], params.repoPath, { env, allowFail: true });
+    if (squashRes.code !== 0) {
+      return await abortAndInspectConflicts(squashRes.stderr || squashRes.stdout);
+    }
+    const hasStaged = await runGit(["diff", "--cached", "--quiet"], params.repoPath, { env, allowFail: true });
+    const commitArgs =
+      hasStaged.code === 0
+        ? ["-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", commitMsg]
+        : ["-c", "commit.gpgsign=false", "commit", "-m", commitMsg];
+    const commitRes = await runGit(commitArgs, params.repoPath, { env, allowFail: true });
+    if (commitRes.code !== 0) {
+      return await abortAndInspectConflicts(commitRes.stderr || commitRes.stdout);
+    }
+  } else {
+    const mergeRes = await runGit(
+      ["-c", "commit.gpgsign=false", "merge", "--no-ff", params.branch, "-m", commitMsg],
+      params.repoPath,
+      { env, allowFail: true },
+    );
+    if (mergeRes.code !== 0) {
+      return await abortAndInspectConflicts(mergeRes.stderr || mergeRes.stdout);
+    }
+  }
+
+  const mergeCommitSha = (await runGit(["rev-parse", "HEAD"], params.repoPath)).stdout;
+  if (params.worktreePath) {
+    removeBotWorktree(params.repoPath, params.worktreePath);
+  }
+  await runGit(["branch", "-D", params.branch], params.repoPath, { allowFail: true });
+
+  return {
+    ok: true,
+    mergeCommitSha,
+    preMergeRef,
+    cleanedWorktree: true,
+  };
 }
 
 // --- Workspace-scoped hidden-ref checkpoints ---
@@ -1025,7 +1484,7 @@ export async function computeWorkspaceGitDiff(
   const empty: GitDiffResponse = { branch: "main", filesChanged: 0, insertions: 0, deletions: 0, files: [] };
   if (!repoOrWorktreePath || !existsSync(repoOrWorktreePath)) return empty;
 
-  const statusRes = await runGitRaw(["--no-optional-locks", "status", "--porcelain", "-z"], repoOrWorktreePath, {
+  const statusRes = await runGitRaw(["--no-optional-locks", "status", "--porcelain", "-z", "-uall"], repoOrWorktreePath, {
     allowFail: true,
   });
   const [branchRes, numstat, unifiedPatches] = await Promise.all([
