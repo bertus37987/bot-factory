@@ -1,19 +1,11 @@
 .bots-center-shell,
 .bots-inbox-drawer,
 .bots-topbar {
-  --bots-panel: #10100f;
-  --bots-chat: #1c1c1a;
-  --bots-selected: #25221f;
-  --bots-user: #874422;
-  --bots-user-ink: #fff8f2;
-}
-
-[data-theme="light"] :is(.bots-center-shell, .bots-inbox-drawer, .bots-topbar) {
-  --bots-panel: #faf8f6;
-  --bots-chat: #f2f0ee;
-  --bots-selected: #f0e5dd;
-  --bots-user: #8a4624;
-  --bots-user-ink: #fff8f2;
+  --bots-panel: var(--studio-panel);
+  --bots-chat: var(--studio-message);
+  --bots-selected: var(--studio-selected);
+  --bots-user: var(--studio-outgoing);
+  --bots-user-ink: var(--studio-outgoing-ink);
 }
 
 .side-drawer.bots-inbox-drawer,
@@ -22,7 +14,7 @@
 }
 
 .bots-inbox-drawer .bot-roster-row {
-  border-radius: 11px;
+  border-radius: var(--studio-row-radius);
   min-height: 52px;
 }
 
@@ -209,7 +201,7 @@
 .bots-center-shell .bots-continuation { margin-top: -9px; }
 .bots-center-shell .bots-continuation.side-left { padding-inline-start: 40px; }
 .bots-center-shell .bots-continuation .bcs-bubble { border-radius: 16px; }
-.bots-center-shell .pc-card { border-radius: 20px; }
+.bots-center-shell .pc-card { border-radius: var(--studio-composer-radius); }
 
 .bots-compose-destination {
   padding: 0 5px 6px;

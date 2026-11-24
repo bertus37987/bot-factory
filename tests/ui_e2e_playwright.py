@@ -11,6 +11,11 @@ def require_env(name: str) -> str:
     return val
 
 
+def capture_studio(page, name):
+    if directory := os.environ.get("BF_UI_CAPTURE_DIR"):
+        page.screenshot(path=os.path.join(directory, f"{name}.png"), animations="disabled")
+
+
 def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, held_acks):
     bots = page.locator(".bots-center-shell")
     drawer_toggle = page.get_by_role("button", name="Toggle sidebar")
@@ -317,6 +322,43 @@ def main() -> int:
         expect(assistant_turn).not_to_be_empty()
         expect(assistant_row.locator(".bear-eye-rig")).to_be_visible()
         assert_all_images_loaded(page, require_bear_avatar=True)
+        expect(assistant_turn).to_have_css("background-color", "rgb(28, 28, 26)")
+        capture_studio(page, "main-agent-vanta")
+        theme_toggle_btn.click()
+        expect(assistant_turn).to_have_css("background-color", "rgb(242, 240, 238)")
+        capture_studio(page, "main-agent-light")
+        theme_toggle_btn.click()
+
+        page.get_by_role("button", name="Quick Jump", exact=True).click()
+        palette = page.get_by_role("dialog", name="Quick Jump Palette")
+        expect(palette).to_be_visible()
+        expect(palette.get_by_role("textbox")).to_be_focused()
+        capture_studio(page, "studio-quick-jump")
+        page.keyboard.press("Escape")
+        expect(palette).to_have_count(0)
+
+        page.set_viewport_size({"width": 390, "height": 760})
+        expect(chat_input).to_be_visible()
+        assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
+        capture_studio(page, "main-agent-mobile")
+        page.set_viewport_size({"width": 1440, "height": 900})
+
+        conversation = chat_pane.get_by_role("region", name="Main Agent conversation")
+        chat_input.fill("Implementation review\n" + "\n".join(f"Review point {i}" for i in range(60)))
+        chat_input.press("Enter")
+        expect(user_bubble).to_contain_text("Review point 59")
+        conversation.evaluate("el => { el.scrollTop = 0; }")
+        jump = chat_pane.get_by_role("button", name="Jump to Latest")
+        expect(jump).to_be_visible()
+        chat_input.fill("Keep my place while this response arrives.")
+        chat_input.press("Enter")
+        expect(user_bubble).to_contain_text("Keep my place")
+        expect(assistant_turn).to_contain_text("Keep my place")
+        assert conversation.evaluate("el => el.scrollTop < 56")
+        jump.click()
+        expect(jump).to_have_count(0)
+        expect(conversation).to_be_focused()
+        assert conversation.evaluate("el => el.scrollHeight - el.clientHeight - el.scrollTop < 56")
 
         # 4. Open Docs, Image, 3D Model, and Diff in 2-row In-App Browser (V2 Inline Edit + Comment->Chat)
         sidebar.locator("button.drawer-item", has_text="roadmap.md").click()
@@ -423,6 +465,7 @@ def main() -> int:
             raise AssertionError(f"Expected 3D canvas non-zero bounding box, got {box}")
         expect(browser_shell.locator(".model3d-preset-toolbar")).to_be_visible()
         expect(browser_shell.locator(".iab-3d-hud")).to_contain_text("GLB loaded")
+        capture_studio(page, "studio-browser")
 
         # 4e. Diff viewer
         sidebar.locator("button.drawer-item", has_text="Git Diff").click()
@@ -514,6 +557,7 @@ def main() -> int:
         expect(bots_shell.locator(".todo-board-root")).to_be_visible()
         expect(bots_shell.locator(".todo-board-header")).to_be_visible()
         expect(bots_shell.locator(".todo-board-progress-track")).to_be_visible()
+        capture_studio(page, "studio-task-board")
         expect(bots_shell.locator(".kanban-grid")).to_have_count(0)
 
         quick_add_input = bots_shell.locator('[data-testid="todo-quick-add-input"]')
@@ -556,6 +600,7 @@ def main() -> int:
         page.locator('nav.icon-rail button[data-inbox-trigger="true"]').click()
         inbox_dialog = page.get_by_role("dialog", name="Escalation Inbox")
         expect(inbox_dialog).to_be_visible()
+        capture_studio(page, "studio-inbox")
         inbox_dialog.get_by_role("button", name="Close escalation inbox").click()
         expect(inbox_dialog).to_have_count(0)
 
@@ -585,6 +630,7 @@ def main() -> int:
         page.locator('nav.icon-rail button[aria-label="Settings"]').click()
         settings_dialog = page.get_by_role("dialog", name="Studio Settings & Open BYOS")
         expect(settings_dialog).to_be_visible()
+        capture_studio(page, "studio-settings")
 
         settings_dialog.locator(".settings-tabs-bar button.subview-tab", has_text="API Keys").click()
         openai_card = settings_dialog.locator(".task-card").filter(

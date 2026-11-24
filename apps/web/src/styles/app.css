@@ -3822,3 +3822,138 @@ kbd {
     animation: none;
   }
 }
+
+/* Rounded Studio surfaces. Keep status colors and technical interiors separate. */
+.chat-stream-frame {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+}
+
+.chat-stream-frame > .chat-stream {
+  display: block;
+  overflow-x: hidden;
+}
+
+.chat-stream-content {
+  min-width: 0;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--density-gap);
+}
+
+.chat-jump-latest.btn {
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--studio-panel);
+  box-shadow: var(--shadow-popover);
+}
+
+.chat-root .chat-bubble-human {
+  background: var(--studio-outgoing);
+  color: var(--studio-outgoing-ink);
+  border: 0;
+  border-radius: var(--studio-message-radius) 6px var(--studio-message-radius) var(--studio-message-radius);
+}
+
+.chat-root .chat-prose-assistant.role-orchestrator {
+  background: var(--studio-message);
+  color: var(--ink-primary);
+  border: 0;
+  border-radius: 6px var(--studio-message-radius) var(--studio-message-radius) var(--studio-message-radius);
+  box-shadow: none;
+}
+
+.chat-root .pc-card {
+  background: var(--studio-panel);
+  border-radius: var(--studio-composer-radius);
+}
+
+.chat-root :is(.inline-preview-card, .delivery-card),
+.bcs-root .bcs-artifact {
+  background: var(--studio-panel);
+  border-radius: var(--studio-row-radius);
+}
+
+.chat-root .delivery-card.verified { border-color: var(--status-success-border); }
+.chat-root .delivery-card.blocked { border-color: var(--status-warning-border); }
+.chat-root .inline-preview-card:hover,
+.bcs-root .bcs-artifact:hover { background: var(--studio-selected); }
+
+.chat-root .delivery-card-actions .btn { min-height: 28px; }
+.chat-root .delivery-card-actions .btn.accent {
+  color: var(--status-success-ink);
+  background: var(--status-success-bg);
+  border-color: var(--status-success-border);
+}
+
+.side-drawer,
+.modal-header,
+.escalation-header { background: var(--studio-panel); }
+
+.side-drawer .drawer-item,
+.palette-card .palette-item { border-radius: var(--studio-row-radius); }
+
+.side-drawer .drawer-item.active,
+.palette-card .palette-item.selected { background: var(--studio-selected); }
+
+.palette-card,
+.modal-card,
+.escalation-inbox,
+.auth-gate-card {
+  border-radius: var(--studio-panel-radius);
+}
+
+.palette-card {
+  background: var(--studio-panel);
+}
+
+.palette-card .palette-search-row {
+  margin: 8px;
+  border: var(--hairline);
+  border-radius: var(--studio-row-radius);
+  background: var(--bg-canvas);
+}
+
+.palette-card .palette-search-row:focus-within {
+  border-color: var(--accent-orange-ink);
+}
+
+.palette-card .palette-list {
+  max-height: min(380px, calc(100dvh - 150px));
+}
+
+.modal-card :is(.field-input, .field-textarea),
+.escalation-cmd { border-radius: var(--studio-row-radius); }
+
+.modal-card .settings-section .task-card,
+.checkpoints-panel :is(.checkpoints-merge-card, .checkpoints-item-card),
+.escalation-card {
+  background: var(--studio-panel);
+  border-radius: var(--studio-row-radius);
+}
+
+.escalation-card.urgent {
+  background: var(--studio-panel);
+  border-color: var(--status-warning-border);
+}
+
+.toast-item { border-radius: var(--studio-row-radius); }
+
+.chat-stream:focus-visible,
+.iab-quickopen button:focus-visible,
+.palette-card .palette-item:focus-visible {
+  outline: 2px solid var(--accent-orange-ink);
+  outline-offset: -2px;
+}
+
+@media (max-width: 699px) {
+  .chat-root .chat-layout { padding-inline: 10px; }
+  .chat-root .chat-assistant-row { max-width: 100%; }
+  .modal-backdrop { padding: 24px 12px; }
+  .modal-card { max-height: calc(100dvh - 48px); }
+}

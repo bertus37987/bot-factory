@@ -21,6 +21,8 @@ recovered on top of `a785bba`; it supersedes the Phase 5 UI status in
 
 The [Bots UX spec](./BOTS_UX.md) records the team organization decision
 and the interaction model for the Bots inbox.
+The [Studio theme note](./STUDIO_STYLE.md) describes how the palette and
+rounded treatment extend to the rest of Studio.
 
 The [research archive](./research/antigravity-studio-v2/README.md) contains
 the implementation plan, both source-cited browser research briefs, the

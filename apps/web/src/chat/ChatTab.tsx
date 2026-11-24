@@ -7,7 +7,7 @@ import {
   ShieldAlert,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type {
   GitDiffResponse,
   ProjectRecord,
@@ -20,6 +20,7 @@ import { BotAvatar, JobTitlePill } from "../components/BotAvatars";
 import { BrowserPaneIcon, DiffBranchIcon, DocTabIcon } from "../components/BotFactoryIcons";
 import { BotThinkingOrb } from "../components/BotThinkingOrb";
 import { MarkdownRenderer } from "../components/MarkdownRenderer";
+import { useFollowLatest } from "../components/useFollowLatest";
 import {
   PrecisionComposer,
   type AutonomyLevel,
@@ -118,14 +119,9 @@ export function ChatTab({
   const [busy, setBusy] = useState(false);
   const [mergingTaskId, setMergingTaskId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const streamRef = useRef<HTMLDivElement | null>(null);
+  const { viewportRef, contentRef, following, jumpToLatest } = useFollowLatest();
 
   const isStreaming = streamingText.length > 0 || streamingThought.length > 0;
-
-  useEffect(() => {
-    const el = streamRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length, cards.length, streamingText, streamingThought, busy]);
 
   const timeline = useMemo<StreamEntry[]>(() => {
     const combined: StreamEntry[] = [
@@ -190,7 +186,10 @@ export function ChatTab({
           </div>
         )}
 
-        <div className="chat-stream" ref={streamRef}>
+        <div className="chat-stream-frame">
+        {/* biome-ignore lint/a11y/noNoninteractiveTabindex: The scrollable transcript needs a keyboard entry point. */}
+        <div className="chat-stream" ref={viewportRef} tabIndex={0} role="region" aria-label="Main Agent conversation">
+          <div className="chat-stream-content" ref={contentRef}>
           {isEmpty && (
             <div className="chat-empty">
               <div className="chat-empty-emblem">
@@ -428,6 +427,13 @@ export function ChatTab({
               <span>Main Agent is thinking…</span>
             </div>
           )}
+          </div>
+        </div>
+        {!following && (
+          <button className="btn xs chat-jump-latest" type="button" onClick={jumpToLatest}>
+            Jump to Latest
+          </button>
+        )}
         </div>
 
         <PrecisionComposer

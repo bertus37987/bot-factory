@@ -19,6 +19,16 @@
   --bg-active: #1f1f29;
   --bg-overlay: rgba(0, 0, 0, 0.74);
 
+  --studio-panel: #10100f;
+  --studio-message: #1c1c1a;
+  --studio-selected: #25221f;
+  --studio-outgoing: #874422;
+  --studio-outgoing-ink: #fff8f2;
+  --studio-row-radius: 11px;
+  --studio-panel-radius: 14px;
+  --studio-message-radius: 18px;
+  --studio-composer-radius: 20px;
+
   /* Hairline Borders */
   --border-subtle: #14141b;
   --border-hairline: #1e1e27;
@@ -250,6 +260,11 @@
    ========================================================================== */
 [data-theme="light"] {
   color-scheme: light;
+
+  --studio-panel: #faf8f6;
+  --studio-message: #f2f0ee;
+  --studio-selected: #f0e5dd;
+  --studio-outgoing: #8a4624;
 
   --bg-canvas: #ffffff;
   --bg-surface: #fafafa;

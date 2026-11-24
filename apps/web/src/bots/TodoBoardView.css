@@ -302,8 +302,8 @@
   align-items: center;
   gap: 2px;
   padding: 3px;
-  border-radius: var(--radius-md);
-  background: var(--bg-surface-subtle);
+  border-radius: var(--studio-row-radius);
+  background: var(--studio-panel);
   border: 1px solid var(--border-hairline);
 }
 
@@ -331,7 +331,7 @@
 }
 
 .todo-board-tab.is-active {
-  background: var(--bg-canvas);
+  background: var(--studio-selected);
   color: var(--ink-primary);
   border-color: var(--border-hairline);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
@@ -391,8 +391,8 @@
   flex-direction: column;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: var(--radius-lg);
-  background: var(--bg-canvas);
+  border-radius: var(--studio-panel-radius);
+  background: var(--studio-panel);
   border: 1px solid var(--border-hairline);
   transition:
     border-color var(--duration-fast) var(--ease-out-quiet),
@@ -725,7 +725,7 @@
 .todo-board-rows-card {
   display: flex;
   flex-direction: column;
-  border-radius: var(--radius-lg);
+  border-radius: var(--studio-panel-radius);
   border: 1px solid var(--border-hairline);
   background: var(--bg-canvas);
   overflow: hidden;
@@ -749,7 +749,7 @@
 }
 
 .todo-board-row.is-expanded {
-  background: var(--bg-surface);
+  background: var(--studio-selected);
 }
 
 .todo-board-row.is-highlight {
