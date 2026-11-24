@@ -965,38 +965,8 @@ kbd {
 }
 
 /* ==========================================================================
-   BotAvatars (Studio 3D Matte Bears + 60fps Eye Rig) & JobTitlePill
+   BotAvatars (Studio matte bears and SVG eye rigs) & JobTitlePill
    ========================================================================== */
-
-@keyframes bear-blink {
-  0%,
-  91%,
-  100% {
-    transform: scaleY(1);
-  }
-  94.5% {
-    transform: scaleY(0.08);
-  }
-  97.5% {
-    transform: scaleY(1);
-  }
-}
-
-@keyframes bear-idle-glance {
-  0%,
-  68%,
-  100% {
-    transform: translate3d(0, 0, 0);
-  }
-  74%,
-  84% {
-    transform: translate3d(1.1px, -0.4px, 0);
-  }
-  90%,
-  95% {
-    transform: translate3d(-0.9px, 0, 0);
-  }
-}
 
 @keyframes bear-work-scan {
   0%,
@@ -1021,22 +991,6 @@ kbd {
   88% {
     transform: translateX(88px);
     opacity: 0;
-  }
-}
-
-@keyframes bear-aura-pulse {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 1.5px color-mix(in srgb, var(--bear-accent, var(--accent-orange)) 75%, transparent),
-      0 0 10px 1px color-mix(in srgb, var(--bear-accent, var(--accent-orange)) 28%, transparent);
-    opacity: 0.85;
-  }
-  50% {
-    box-shadow:
-      0 0 0 2.5px color-mix(in srgb, var(--bear-accent, var(--accent-orange)) 95%, transparent),
-      0 0 16px 3px color-mix(in srgb, var(--bear-accent, var(--accent-orange)) 46%, transparent);
-    opacity: 1;
   }
 }
 
@@ -1077,41 +1031,22 @@ kbd {
 .bear-eye-group {
   transform-box: fill-box;
   transform-origin: center;
-  animation: bear-blink 4.6s ease-in-out infinite;
-  will-change: transform;
 }
 
 .bear-eye-glance {
   transform-box: fill-box;
   transform-origin: center;
-  animation: bear-idle-glance 7.2s ease-in-out infinite;
-  will-change: transform;
-}
-
-.bear-avatar-wrap[data-status="working"] .bear-eye-glance {
-  animation: bear-work-scan 2.4s ease-in-out infinite;
-}
-
-.bear-avatar-wrap[data-status="waiting"] .bear-eye-group {
-  animation: bear-blink 3.4s ease-in-out infinite;
 }
 
 .bear-shades-gleam {
-  animation: bear-shades-sweep 4.2s ease-in-out infinite;
-  will-change: transform, opacity;
+  opacity: 0;
 }
 
-.bear-avatar-wrap[data-status="working"] .bear-shades-gleam {
-  animation-duration: 2.1s;
-}
-
-.bear-active-aura {
-  position: absolute;
-  inset: -2px;
-  border-radius: 9999px;
-  pointer-events: none;
-  z-index: 3;
-  animation: bear-aura-pulse 2.2s var(--ease-organic) infinite;
+.bear-portrait-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .bear-waiting-dot {
@@ -1661,15 +1596,15 @@ kbd {
 }
 
 .pc-send {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
   background: var(--action-primary-bg);
   color: var(--action-primary-fg);
   display: flex;
   align-items: center;
   justify-content: center;
-  border: none;
+  border: 1px solid transparent;
   cursor: pointer;
   flex: 0 0 auto;
   transition: background var(--duration-fast) var(--ease-out-quiet);
@@ -1680,8 +1615,24 @@ kbd {
 }
 
 .pc-send:disabled {
-  background: var(--border-strong);
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--ink-muted);
   cursor: not-allowed;
+}
+
+.pc-card .pc-bar { padding-inline-end: 51px; min-height: 48px; }
+.pc-send-slot { position: absolute; bottom: 6px; right: 7px; }
+.pc-sending {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  padding: 4px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--studio-panel);
+  border: var(--hairline);
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
 }
 
 .pc-pop {
@@ -3817,7 +3768,6 @@ kbd {
   .bear-eye-group,
   .bear-eye-glance,
   .bear-shades-gleam,
-  .bear-active-aura,
   .skeleton-bar {
     animation: none;
   }
@@ -3956,4 +3906,124 @@ kbd {
   .chat-root .chat-assistant-row { max-width: 100%; }
   .modal-backdrop { padding: 24px 12px; }
   .modal-card { max-height: calc(100dvh - 48px); }
+}
+
+.workspace-layout-controls {
+  display: flex;
+  gap: 3px;
+  margin: 0;
+  padding: 3px;
+  border: var(--hairline);
+  border-radius: var(--studio-row-radius);
+  background: var(--studio-panel);
+}
+
+.workspace-layout-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  min-height: 29px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+
+.workspace-layout-button:hover,
+.workspace-layout-button[aria-pressed="true"] {
+  background: var(--studio-selected);
+  color: var(--ink-primary);
+}
+
+.workspace-layout-button[aria-pressed="true"] { border-color: var(--border-strong); }
+.workspace-layout-button:focus-visible,
+.pc-send:focus-visible { outline: 2px solid var(--accent-orange-ink); outline-offset: 2px; }
+
+.split-main-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 60px;
+  padding: 8px 14px;
+  border-bottom: var(--hairline);
+  font-size: var(--text-sm);
+}
+
+.world-container.split-active .world-pane.focused { box-shadow: none; }
+.world-pane.focused .pc-card { border-color: var(--ink-muted); }
+
+.attachment-actions { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; margin: 0; padding: 0; border: 0; }
+.attachment-action.btn { min-height: 30px; border-radius: var(--studio-row-radius); white-space: normal; text-align: start; }
+.attachment-action span { overflow-wrap: anywhere; }
+.attachment-action svg { flex-shrink: 0; }
+.attachment-unavailable { color: var(--ink-secondary); font-size: var(--text-xs); }
+
+.agent-profile { position: relative; flex-shrink: 0; }
+.agent-profile-trigger {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--studio-row-radius);
+  background: transparent;
+  cursor: pointer;
+}
+.agent-profile-trigger:is(:hover, [aria-expanded="true"]) { background: var(--studio-selected); }
+.agent-profile-trigger:focus-visible { outline: 2px solid var(--accent-orange-ink); }
+.agent-profile-card {
+  position: absolute;
+  inset: calc(100% + 5px) auto auto 0;
+  z-index: var(--z-popover);
+  width: min(238px, calc(100vw - 72px));
+  padding: 12px;
+  border: var(--hairline-strong);
+  border-radius: var(--studio-panel-radius);
+  background: var(--studio-panel);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--text-xs);
+}
+.agent-profile-card dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 8px 0 0; }
+.agent-profile-card dt { color: var(--ink-secondary); }
+.agent-profile-card dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.split-main-header:has(.agent-profile-card) { position: relative; z-index: 6; }
+.workspace-browser-open .toast-stack { top: 76px; bottom: auto; }
+
+@keyframes bear-acknowledge {
+  0%, 100% { transform: none; }
+  45% { transform: translateY(-1px) rotate(-4deg); }
+}
+
+@keyframes bear-working-lean {
+  0%, 55%, 100% { transform: none; }
+  72% { transform: translateY(-.7px) rotate(3deg); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :where(.bear-avatar-wrap[data-live][data-status="working"]) > .bear-portrait-stage {
+    animation: bear-working-lean 5.4s var(--ease-organic) infinite;
+  }
+  .bear-avatar-wrap[data-live][data-status="working"] .bear-eye-glance { animation: bear-work-scan 5.4s ease-in-out infinite; }
+  .bear-avatar-wrap[data-live][data-status="working"] .bear-shades-gleam { animation: bear-shades-sweep 5.6s ease-in-out infinite; }
+  :is(.agent-profile-trigger, .bot-roster-row, .subagent-node):focus-visible [data-live] .bear-portrait-stage {
+    animation: bear-acknowledge 480ms var(--ease-out-quiet);
+  }
+  @media (hover: hover) {
+    :is(.agent-profile-trigger, .bot-roster-row, .subagent-node):hover [data-live] .bear-portrait-stage {
+      animation: bear-acknowledge 480ms var(--ease-out-quiet);
+    }
+  }
+}
+
+@media (max-width: 699px) {
+  .workspace-layout-button { min-height: 35px; }
+  .pc-send { width: 42px; height: 42px; }
+  .pc-card .pc-bar { padding-inline-end: 55px; }
+  .main-header-project { display: none; }
+  .app-shell-v3 .toast-stack { top: 68px; bottom: auto; max-width: calc(100% - 65px); }
 }

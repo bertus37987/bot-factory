@@ -14,7 +14,6 @@ import { useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import {
   BotAvatar,
   GroupAvatarCluster,
-  JobTitlePill,
   ROLE_META,
   resolveBotRole,
   type ResolvedBotMeta,
@@ -75,22 +74,6 @@ function sepLabel(ts: number): string {
   const yesterday = new Date(now.getTime() - 86_400_000);
   if (dayStamp(d) === dayStamp(yesterday)) return `Yesterday ${t}`;
   return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${t}`;
-}
-
-function roleLabel(meta: ResolvedBotMeta | null, agent: AgentRecord | null): string {
-  if (meta) return meta.jobTitle;
-  switch (agent?.scope) {
-    case "project":
-      return "Team Lead";
-    case "verifier":
-      return "Verifier";
-    case "peer":
-      return "Peer";
-    case "sidekick":
-      return "Subagent";
-    default:
-      return "Bot";
-  }
 }
 
 function artifactIcon(a: ArtifactEntry): JSX.Element {
@@ -648,8 +631,6 @@ export function BotChatStream({
                     <BotAvatar
                       role={speaker.meta.role}
                       size={30}
-                      active={speaker.agent?.status === "working"}
-                      agentStatus={speaker.agent?.status}
                       seed={speaker.agent?.id ?? speaker.meta.role}
                     />
                   </button>
@@ -662,17 +643,6 @@ export function BotChatStream({
               <div className="group-msg-stack">
                 {!grouped && <div className="bcs-msg-head">
                   <span className="bcs-msg-name">{speaker.name}</span>
-                  {!speaker.human && (speaker.meta || speaker.agent) && (
-                    <JobTitlePill
-                      label={roleLabel(speaker.meta, speaker.agent)}
-                      role={speaker.meta?.role}
-                      tone={
-                        speaker.meta?.role === "orchestrator" || speaker.agent?.scope === "project"
-                          ? "accent"
-                          : "neutral"
-                      }
-                    />
-                  )}
                   {node.eyebrow && <span className="bcs-msg-eyebrow">{node.eyebrow}</span>}
                   <time className="bcs-msg-time" dateTime={new Date(node.ts).toISOString()}>{timeLabel(node.ts)}</time>
                   {!speaker.human && speaker.agent && onInsertMention && (
@@ -866,8 +836,8 @@ export function BotChatStream({
                 <BotAvatar
                   role={meta.role}
                   size={30}
-                  active
-                  agentStatus={agent.status}
+                  live
+                  status="working"
                   seed={agent.id}
                 />
               </span>
@@ -879,11 +849,6 @@ export function BotChatStream({
             <div className="group-msg-stack">
               <div className="bcs-msg-head">
                 <span className="bcs-msg-name">{agent.name}</span>
-                <JobTitlePill
-                  label={roleLabel(meta, agent)}
-                  role={meta?.role}
-                  tone={agent.scope === "project" ? "accent" : "neutral"}
-                />
                 <BotThinkingOrb activity={text ? "composing" : "solving"} size={20} shell={false} />
                 <span className="bcs-msg-time">streaming</span>
               </div>
@@ -1016,7 +981,7 @@ export function BotChatStream({
                 <BotAvatar
                   role={liveMeta.role}
                   size={28}
-                  active
+                  live
                   agentStatus={a.status}
                   seed={a.id}
                 />

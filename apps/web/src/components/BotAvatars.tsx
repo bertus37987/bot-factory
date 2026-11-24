@@ -10,9 +10,9 @@ import bearVerifierImg from "../assets/bears/bear-verifier.png";
 import eyeAnchorsRaw from "../assets/bears/eyeAnchors.json";
 
 /* --------------------------------------------------------------------------
- * Bot-Factory Studio — Blender Studio-Rendered 3D Matte Bears + 60fps Eye Rig
+ * Bot-Factory Studio — Blender-rendered matte bears with SVG eye rigs
  * Role-matched 256x256 RGBA portraits overlaid with synchronized SVG eye rigs
- * anchored from eyeAnchors.json for idle blinking, working scans, waiting
+ * anchored from eyeAnchors.json for working scans, waiting
  * alertness, happy "done" arcs, and diagonal lens gleam on Research shades.
  * ------------------------------------------------------------------------ */
 
@@ -151,7 +151,8 @@ export function mapAgentStatusToBearStatus(
   ) {
     return "waiting";
   }
-  if (agentStatus === "error" || agentStatus === "stopped") return "error";
+  if (agentStatus === "error") return "error";
+  if (agentStatus === "stopped") return "idle";
   return active ? "working" : "idle";
 }
 
@@ -288,6 +289,7 @@ export interface BotAvatarProps {
   role: BotRoleKind;
   size?: number;
   active?: boolean;
+  live?: boolean;
   badgeCount?: number;
   status?: BearAvatarStatus;
   agentStatus?: AgentRecord["status"];
@@ -299,6 +301,7 @@ export function BotAvatar({
   role,
   size = 32,
   active = false,
+  live = false,
   badgeCount,
   status,
   agentStatus,
@@ -307,7 +310,7 @@ export function BotAvatar({
 }: BotAvatarProps): JSX.Element {
   const meta = ROLE_META[role];
   const asset = BEAR_ASSETS[role];
-  const effectiveStatus = status ?? mapAgentStatusToBearStatus(agentStatus, active);
+  const effectiveStatus = live ? status ?? mapAgentStatusToBearStatus(agentStatus, active) : "idle";
   const badgeSize = Math.max(13, Math.round(size * 0.4));
   const badgeLabel =
     badgeCount !== undefined && badgeCount > 0 ? (badgeCount > 9 ? "9+" : `${badgeCount}`) : null;
@@ -315,7 +318,6 @@ export function BotAvatar({
   const wrapStyle = {
     width: size,
     height: size,
-    "--bear-accent": meta.accentVar,
   } as CSSProperties;
 
   return (
@@ -323,17 +325,16 @@ export function BotAvatar({
       className={`bear-avatar-wrap bf-beaver-wrap ${className ?? ""}`.trim()}
       data-role={role}
       data-status={effectiveStatus}
+      data-live={live || undefined}
       role="img"
       aria-label={`${meta.displayName} · ${meta.jobTitle}`}
       title={`${meta.displayName} · ${meta.jobTitle}`}
       style={wrapStyle}
     >
-      <img src={asset.src} alt="" draggable={false} className="bear-avatar-img" />
-      <BearEyeRig role={role} status={effectiveStatus} seed={seed} />
-
-      {(active || effectiveStatus === "working") && (
-        <span className="bear-active-aura" aria-hidden="true" />
-      )}
+      <span className="bear-portrait-stage">
+        <img src={asset.src} alt="" draggable={false} className="bear-avatar-img" />
+        <BearEyeRig role={role} status={effectiveStatus} seed={seed} />
+      </span>
 
       {effectiveStatus === "waiting" && badgeLabel === null && (
         <span className="bear-waiting-dot" aria-hidden="true" />

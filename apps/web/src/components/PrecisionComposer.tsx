@@ -10,7 +10,6 @@ import {
   SendArrowIcon,
   SlashKeyIcon,
 } from "./BotFactoryIcons";
-import { BotThinkingOrb } from "./BotThinkingOrb";
 import { ReasoningEffortControl, type ReasoningEffort } from "./ReasoningEffortSlider";
 import "./PrecisionComposer.css";
 
@@ -676,19 +675,19 @@ export function PrecisionComposer({
 
           <ContextRingGauge percent={contextPercent} tooltip={contextTooltip} />
 
+        </div>
+        <div className="pc-send-slot">
+          {sending && <span className="pc-sending" role="status">Sending...</span>}
           <button
             type="button"
             className="pc-send"
-            title={mode === "steer" ? "Send steer" : "Send message"}
-            aria-label={mode === "steer" ? "Send steer" : "Send message"}
+            title={mode === "steer" ? "Send to Team Lead" : "Send message"}
+            aria-label={mode === "steer" ? "Send to Team Lead" : "Send message"}
+            aria-busy={sending}
             disabled={!canSend}
             onClick={() => void submit()}
           >
-            {isBusy ? (
-              <BotThinkingOrb activity="composing" size={20} shell={false} />
-            ) : (
-              <SendArrowIcon size={14} />
-            )}
+            <SendArrowIcon size={18} />
           </button>
         </div>
       </div>

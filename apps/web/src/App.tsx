@@ -24,9 +24,10 @@ import { BotsTab, type BotsSubView } from "./bots/BotsTab";
 import { TeamSwitcher } from "./bots/TeamSwitcher";
 import { BrowserWorkspaceShell } from "./browser/BrowserWorkspaceShell";
 import { InAppBrowser, type BrowserTab, type BrowserTabKind } from "./browser/InAppBrowser";
-import type { BrowserDockMode, ComposerAttachment } from "./browser/types";
+import type { AttachmentDestination, BrowserDockMode, ComposerAttachment } from "./browser/types";
 import { ChatTab } from "./chat/ChatTab";
 import { useBotFactory } from "./client/useBotFactory";
+import { AgentProfile } from "./components/AgentProfile";
 import { BotAvatar, GroupAvatarCluster, JobTitlePill, resolveBotRole } from "./components/BotAvatars";
 import {
   AgentChatApertureIcon,
@@ -507,28 +508,40 @@ export function App() {
     botsSubView === "chat_single" && activeAgent
       ? `bots:${activeAgent.id}`
       : `bots:group:${activeProject?.id ?? "none"}`;
-  const activeAttachmentTarget = (splitChatOpen ? focusedChatPane === "bots" : world === "bots")
-    ? botsTargetKey
-    : chatTargetKey;
+  const attachmentDestinations: AttachmentDestination[] = [];
+  if (splitChatOpen || world === "chat") {
+    attachmentDestinations.push({ key: chatTargetKey, label: "Main Agent" });
+  }
+  if (botsVisible && activeProject && (botsSubView === "chat_group" || botsSubView === "chat_single")) {
+    attachmentDestinations.push({
+      key: botsTargetKey,
+      label: botsSubView === "chat_single" && activeAgent
+        ? `${activeProject.name} / ${activeAgent.name} (Team Lead draft)`
+        : `${activeProject.name} team`,
+    });
+  }
+  const attachmentDestinationsRef = useRef(attachmentDestinations);
+  attachmentDestinationsRef.current = attachmentDestinations;
 
   const handleImportAttachment = useCallback(
-    (att: ComposerAttachment) => {
+    (att: ComposerAttachment, destinationKey?: string): boolean => {
+      const destination = attachmentDestinationsRef.current.find((item) => item.key === destinationKey);
+      if (!destination) {
+        pushToast("That conversation is no longer open. Choose a destination again.", "error");
+        return false;
+      }
       setComposerAttachmentsByTarget((prev) => {
-        const current = prev[activeAttachmentTarget] ?? [];
+        const current = prev[destination.key] ?? [];
         const deduped = current.filter((item) => item.id !== att.id);
         return {
           ...prev,
-          [activeAttachmentTarget]: [...deduped, att],
+          [destination.key]: [...deduped, att],
         };
       });
-      if (browserOpen && browserDockMode === "fullscreen") {
-        pushToast(
-          `Attached "${att.label}" to ${activeAttachmentTarget === "chat" ? "Main Agent" : "Team"} composer`,
-          "info",
-        );
-      }
+      pushToast(`Added "${att.label}" to ${destination.label} draft`, "info");
+      return true;
     },
-    [activeAttachmentTarget, browserOpen, browserDockMode, pushToast],
+    [pushToast],
   );
 
   const removeComposerAttachment = useCallback((targetKey: string, id: string) => {
@@ -738,6 +751,12 @@ export function App() {
       : "idle";
 
   const activeBotMeta = activeAgent ? resolveBotRole(activeAgent) : null;
+  const mainStatus = bf.streamingChatText || bf.streamingChatThought ? "working" : metaAgent?.status;
+  const mainProfile = (
+    <AgentProfile name="Main Agent" role="orchestrator" job="Orchestrator" status={mainStatus}
+      model={effectiveChatTarget ? `${effectiveChatTarget.provider}/${effectiveChatTarget.model}` : undefined}
+      seed="main-agent" />
+  );
 
   if (bf.authRequired) {
     return (
@@ -813,7 +832,7 @@ export function App() {
   }
 
   return (
-    <div className={`app-shell-v3${world === "bots" ? " bots-inbox-active" : ""}`}>
+    <div className={`app-shell-v3${world === "bots" ? " bots-inbox-active" : ""}${browserOpen ? " workspace-browser-open" : ""}`}>
       {/* Far-Left 44px Custom Icon Rail */}
       <nav className="icon-rail" aria-label="Primary navigation">
         <div className="icon-rail-top">
@@ -1154,7 +1173,7 @@ export function App() {
                               <BotAvatar
                                 role={meta.role}
                                 size={30}
-                                active={bot.status === "working" || bot.status === "debating"}
+                                live
                                 agentStatus={bot.status}
                                 seed={bot.id}
                               />
@@ -1199,6 +1218,7 @@ export function App() {
                                         onClick={() => selectRosterBot(sub.id)}
                                       >
                                         <BotAvatar
+                                          live
                                           role="cub"
                                           size={22}
                                           active={sub.status === "working"}
@@ -1292,43 +1312,23 @@ export function App() {
               {world === "bots" && !splitChatOpen && (
                 <TeamSwitcher projects={bf.projects} agents={bf.agents} project={activeProject} onSelect={selectBotsTeam} />
               )}
-              {splitChatOpen ? (
+              {splitChatOpen ? null : world === "chat" ? (
                 <>
-                  <BotAvatar
-                    role="orchestrator"
-                    size={24}
-                    active={bf.quietStatus.runningBots > 0}
-                    seed="main-agent"
-                  />
-                  <span className="center-header-title">
-                    Main Agent ⇄ {activeProject?.name ?? "Engineering Teams"}
-                  </span>
-                  <JobTitlePill
-                    label={`Focus: ${focusedChatPane === "chat" ? "Main Agent" : "Team"}`}
-                    role={focusedChatPane === "chat" ? "orchestrator" : "team_lead"}
-                  />
-                </>
-              ) : world === "chat" ? (
-                <>
-                  <BotAvatar
-                    role="orchestrator"
-                    size={24}
-                    active={bf.quietStatus.runningBots > 0}
-                    seed="main-agent"
-                  />
+                  {mainProfile}
                   <span className="center-header-title">Main Agent</span>
-                  <JobTitlePill label="Quiet Mode" role="orchestrator" />
-                  {activeProject && <span className="mono-tag">{activeProject.name}</span>}
+                  {activeProject && <span className="mono-tag main-header-project">{activeProject.name}</span>}
                 </>
               ) : botsSubView === "chat_group" && activeProject ? (
                 <span className="center-header-title">Group Chat</span>
               ) : botsSubView === "chat_single" && activeAgent && activeBotMeta ? (
                 <>
-                  <BotAvatar
+                  <AgentProfile
+                    key={activeAgent.id}
+                    name={activeAgent.name}
                     role={activeBotMeta.role}
-                    size={26}
-                    active={activeAgent.status === "working" || activeAgent.status === "debating"}
-                    agentStatus={activeAgent.status}
+                    job={activeBotMeta.jobTitle}
+                    status={activeAgent.status}
+                    model={`${activeAgent.provider}/${activeAgent.model}`}
                     seed={activeAgent.id}
                   />
                   <span className="center-header-title">{activeAgent.name}</span>
@@ -1364,22 +1364,23 @@ export function App() {
                 </button>
               )}
 
-              <button
+              <fieldset className="workspace-layout-controls" aria-label="Workspace layout">
+              {!narrowChat && <button
                 type="button"
                 data-testid="split-chat-toggle-btn"
-                className={`btn xs ${splitChatOpen ? "active-outline" : ""}`}
+                className="workspace-layout-button"
                 onClick={() => setSplitChatOpen((s) => !s)}
-                title={narrowChat ? "Split Chat needs a wider window" : "Split Chat: Main Agent + Engineering Teams (Ctrl+Shift+S)"}
-                disabled={narrowChat}
+                title="Split workspace (Ctrl+Shift+S)"
+                aria-label="Split workspace"
                 aria-pressed={splitChatOpen}
               >
                 <Columns2 size={14} strokeWidth={1.6} />
                 <span>Split</span>
-              </button>
+              </button>}
 
               <button
                 type="button"
-                className={`btn xs ${browserOpen ? "active-outline" : ""}`}
+                className="workspace-layout-button"
                 onClick={toggleBrowserSidebar}
                 title="Toggle In-App Browser"
                 aria-label="Browser"
@@ -1388,6 +1389,7 @@ export function App() {
                 <BrowserPaneIcon size={14} />
                 <span>Browser</span>
               </button>
+              </fieldset>
             </div>
           </header>
 
@@ -1402,6 +1404,12 @@ export function App() {
               }`.trim()}
               style={splitChatOpen ? { width: `${splitPercent}%` } : undefined}
             >
+              {splitChatOpen && (
+                <div className="split-main-header">
+                  {mainProfile}
+                  <strong>Main Agent</strong>
+                </div>
+              )}
               <ChatTab
                 messages={bf.chatMessages}
                 cards={bf.chatCards}
@@ -1565,6 +1573,7 @@ export function App() {
                   // Ignore storage write errors.
                 }
               }}
+              attachmentDestinations={attachmentDestinations}
               onImportToChat={handleImportAttachment}
               onArtifactSaved={(filePath) => {
                 if (activeProject) {

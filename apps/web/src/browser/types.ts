@@ -24,6 +24,11 @@ export interface ComposerAttachment {
   region?: { x: number; y: number; w: number; h: number };
 }
 
+export interface AttachmentDestination {
+  key: string;
+  label: string;
+}
+
 export interface BrowserTab {
   id: string;
   kind: BrowserTabKind;
@@ -44,7 +49,8 @@ export interface InAppBrowserProps {
   expanded: boolean;
   dockMode?: BrowserDockMode;
   onChangeDockMode?: (mode: BrowserDockMode) => void;
-  onImportToChat?: (attachment: ComposerAttachment) => void;
+  attachmentDestinations?: AttachmentDestination[];
+  onImportToChat?: (attachment: ComposerAttachment, destinationKey?: string) => boolean;
   onArtifactSaved?: (filePath: string) => void;
   onStartFloatDrag?: (e: ReactPointerEvent<HTMLElement>) => void;
   onSelectTab: (tabId: string) => void;

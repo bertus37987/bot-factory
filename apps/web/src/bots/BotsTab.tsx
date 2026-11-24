@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, type JSX } from "react";
 import type { ProviderSummary, RpcCommandInput } from "../client/useBotFactory";
+import { AgentProfile } from "../components/AgentProfile";
 import { BotAvatar, resolveBotRole } from "../components/BotAvatars";
 import {
   PrecisionComposer,
@@ -323,6 +324,17 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
     >
       {compactSplit && <div className="bots-inbox-header">
         <TeamSwitcher projects={projects} agents={agents} project={activeProject} onSelect={onSelectProject} />
+        {activeSubView === "chat_single" && activeAgent && (
+          <AgentProfile
+            key={activeAgent.id}
+            name={activeAgent.name}
+            role={resolveBotRole(activeAgent).role}
+            job={resolveBotRole(activeAgent).jobTitle}
+            status={activeAgent.status}
+            model={`${activeAgent.provider}/${activeAgent.model}`}
+            seed={activeAgent.id}
+          />
+        )}
         <div className="bots-room-label">
           {activeSubView === "chat_single" && activeAgent ? (
             <><strong>{activeAgent.name}</strong><small>{activeAgent.model}</small></>

@@ -147,12 +147,11 @@ export function SlashKeyIcon({ size, className }: BotFactoryIconProps) {
   );
 }
 
-/** Send / steer arrow (up-right). */
+/** Send / steer arrow. */
 export function SendArrowIcon({ size, className }: BotFactoryIconProps) {
   return (
     <IconFrame size={size} className={className}>
-      <path d="M5.5 18.5 L18.5 5.5" />
-      <path d="M10.5 5.5 H18.5 V13.5" />
+      <path d="M12 19V5 M6 11l6-6 6 6" />
     </IconFrame>
   );
 }

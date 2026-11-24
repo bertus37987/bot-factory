@@ -16,7 +16,7 @@ import type {
   TimelineItem,
 } from "@bot-factory/shared";
 import type { ArtifactCardEvent, ProviderSummary } from "../client/useBotFactory";
-import { BotAvatar, JobTitlePill } from "../components/BotAvatars";
+import { BotAvatar } from "../components/BotAvatars";
 import { BrowserPaneIcon, DiffBranchIcon, DocTabIcon } from "../components/BotFactoryIcons";
 import { BotThinkingOrb } from "../components/BotThinkingOrb";
 import { MarkdownRenderer } from "../components/MarkdownRenderer";
@@ -253,7 +253,6 @@ export function ChatTab({
                       <div className="chat-assistant-body">
                         <div className="chat-turn-meta">
                           <span className="chat-speaker-name">Main Agent</span>
-                          <JobTitlePill label="Orchestrator" role="orchestrator" />
                           {memoryRecalledActive && (
                             <button
                               type="button"
@@ -399,11 +398,10 @@ export function ChatTab({
           {isStreaming && (
             <div className="chat-turn assistant msg-side-left">
               <div className="chat-assistant-row">
-                <BotAvatar role="orchestrator" size={30} active status="working" seed="main-agent" />
+                <BotAvatar role="orchestrator" size={30} live status="working" seed="main-agent" />
                 <div className="chat-assistant-body">
                   <div className="chat-turn-meta">
                     <span className="chat-speaker-name">Main Agent</span>
-                    <JobTitlePill label="Orchestrator" role="orchestrator" />
                     <BotThinkingOrb activity="composing" size={20} shell={false} />
                     <span className="chat-turn-time">Streaming…</span>
                   </div>
@@ -422,7 +420,7 @@ export function ChatTab({
 
           {busy && !isStreaming && (
             <div className="chat-thinking-row">
-              <BotAvatar role="orchestrator" size={24} active status="working" seed="main-agent" />
+              <BotAvatar role="orchestrator" size={24} seed="main-agent" />
               <BotThinkingOrb activity="composing" size={20} shell={false} />
               <span>Main Agent is thinking…</span>
             </div>

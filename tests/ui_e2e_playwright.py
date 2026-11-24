@@ -76,7 +76,7 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
     assert len(steer_outbox) == 1
 
     bots.get_by_role("button", name="ui-mockup.svg").click()
-    page.locator(".iab-image-toolbar").get_by_role("button", name="Add to Chat").click()
+    page.locator(".iab-image-toolbar").get_by_role("button", name="Add to Studio Research team").click()
     chips = bots.get_by_test_id("pc-attachments")
     expect(chips).to_contain_text("ui-mockup.svg")
     page.get_by_role("button", name="Close browser").click()
@@ -84,6 +84,7 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
     composer.fill("Which findings should we include in the release brief?")
     composer.press("Enter")
     expect(bots.locator(".bcs-bubble.human")).to_contain_text("release brief")
+    expect(bots.get_by_role("status").filter(has_text="Sending...")).to_be_visible()
     team.click()
     search.fill("playwright")
     search.press("Enter")
@@ -129,6 +130,7 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
     page.emulate_media(reduced_motion="reduce")
     page.set_viewport_size({"width": 390, "height": 760})
     expect(page.locator(".split-active")).to_have_count(0)
+    expect(page.get_by_test_id("split-chat-toggle-btn")).to_have_count(0)
     expect(team).to_be_visible()
     expect(composer).to_be_visible()
     team.click()
@@ -210,6 +212,8 @@ def main() -> int:
         page.set_default_timeout(12_000)
         steer_outbox = []
         held_acks = []
+        held_main_reply = []
+        defer_main_reply = True
 
         def route_commands(socket):
             server = socket.connect_to_server()
@@ -236,6 +240,14 @@ def main() -> int:
                 data = json.loads(message)
                 if data.get("kind") == "ack" and data.get("commandId") in hold_commands:
                     held_acks.append((socket, message))
+                elif (
+                    defer_main_reply
+                    and data.get("topic") == "chat:meta"
+                    and data.get("eventType") == "chat.message"
+                    and data["data"].get("role") == "assistant"
+                    and "Hello Main Agent, verify workspace status for Playwright." in data["data"]["content"]
+                ):
+                    held_main_reply.append((socket, message))
                 else:
                     socket.send(message)
 
@@ -315,12 +327,22 @@ def main() -> int:
         expect(user_bubble).to_be_visible()
         expect(user_bubble).to_contain_text(user_prompt)
 
+        main_portrait = page.get_by_role("button", name="Main Agent profile").locator(".bear-portrait-stage")
+        expect(main_portrait).to_have_css("animation-name", "bear-working-lean")
+        page.emulate_media(reduced_motion="reduce")
+        expect(main_portrait).to_have_css("animation-name", "none")
+        page.emulate_media(reduced_motion="no-preference")
+        defer_main_reply = False
+        for socket, reply in held_main_reply:
+            socket.send(reply)
+
         assistant_row = chat_pane.locator(".chat-turn.assistant.msg-side-left").last
         expect(assistant_row).to_be_visible()
         assistant_turn = assistant_row.locator(".chat-prose-assistant.role-orchestrator")
         expect(assistant_turn).to_be_visible()
         expect(assistant_turn).not_to_be_empty()
         expect(assistant_row.locator(".bear-eye-rig")).to_be_visible()
+        expect(assistant_row.locator(".bear-portrait-stage")).to_have_css("animation-name", "none")
         assert_all_images_loaded(page, require_bear_avatar=True)
         expect(assistant_turn).to_have_css("background-color", "rgb(28, 28, 26)")
         capture_studio(page, "main-agent-vanta")
@@ -409,7 +431,7 @@ def main() -> int:
         expect(doc_comment_dialog).to_be_visible()
         doc_comment_text = "Verify roadmap V2 inline comment chip."
         doc_comment_dialog.locator("textarea").fill(doc_comment_text)
-        doc_comment_dialog.get_by_role("button", name="Add to Chat").click()
+        doc_comment_dialog.get_by_role("button", name="Add to Main Agent").click()
         expect(doc_comment_dialog).to_have_count(0)
 
         doc_chip = chat_pane.locator('[data-testid="pc-attachments"] .pc-att-chip').first
@@ -438,8 +460,7 @@ def main() -> int:
         img_toolbar = browser_shell.locator(".iab-image-toolbar")
         expect(img_toolbar).to_be_visible()
         expect(img_toolbar).to_contain_text("Comment")
-        expect(img_toolbar).to_contain_text("Add to Chat")
-        img_toolbar.get_by_role("button", name="Add to Chat").click()
+        img_toolbar.get_by_role("button", name="Add to Main Agent").click()
 
         img_chip = chat_pane.locator('[data-testid="pc-attachments"] .pc-att-chip').first
         expect(img_chip).to_be_visible()
@@ -451,8 +472,12 @@ def main() -> int:
         if not isinstance(thumb_nw, (int, float)) or thumb_nw <= 0:
             raise AssertionError(f"Expected composer thumbnail naturalWidth > 0, got {thumb_nw}")
         assert_all_images_loaded(page, require_bear_avatar=True)
-        img_chip.locator(".pc-att-remove").click()
+        expect(chat_input).to_have_value("")
+        attachment_send = chat_pane.get_by_role("button", name="Send message")
+        expect(attachment_send).to_be_enabled()
+        attachment_send.click()
         expect(chat_pane.locator('[data-testid="pc-attachments"]')).to_have_count(0)
+        expect(chat_pane.locator(".chat-bubble-human").last).to_contain_text("ui-mockup.svg")
 
         # 4d. 3D Model viewer (hero-monolith.glb) — lazy Three.js chunk + canvas mount
         sidebar.locator("button.drawer-item", has_text="hero-monolith.glb").click()
@@ -511,8 +536,33 @@ def main() -> int:
         expect(page.locator(".world-container.split-active")).to_be_visible()
         expect(page.locator(".world-pane.split-left .chat-root")).to_be_visible()
         expect(page.locator(".world-pane.split-right .bots-center-shell")).to_be_visible()
-        expect(page.locator(".center-header")).to_contain_text("Main Agent")
-        expect(page.locator(".center-header")).to_contain_text("Playwright Smoke Project")
+        expect(page.locator(".split-main-header")).to_contain_text("Main Agent")
+        expect(page.locator(".split-right .bots-team-trigger")).to_contain_text("Playwright Smoke Project")
+        expect(page.get_by_text("Focus: Team", exact=True)).to_have_count(0)
+        profile_btn = page.get_by_role("button", name="Main Agent profile")
+        profile_btn.hover()
+        expect(profile_btn.locator(".bear-portrait-stage")).to_have_css("animation-name", "bear-acknowledge")
+        profile_btn.click()
+        expect(page.get_by_role("region", name="Main Agent details")).to_contain_text("Orchestrator")
+        capture_studio(page, "workspace-profile-split")
+        page.keyboard.press("Escape")
+        expect(profile_btn).to_be_focused()
+        expect(profile_btn).to_have_attribute("aria-expanded", "false")
+        page.emulate_media(reduced_motion="reduce")
+        expect(profile_btn.locator(".bear-portrait-stage")).to_have_css("animation-name", "none")
+        page.emulate_media(reduced_motion="no-preference")
+
+        page.get_by_role("button", name="Browser", exact=True).first.click()
+        sidebar.locator("button.drawer-item", has_text="ui-mockup.svg").click()
+        split_image_actions = browser_shell.locator(".iab-image-toolbar")
+        expect(split_image_actions.get_by_role("button", name="Add to Main Agent")).to_be_visible()
+        split_image_actions.get_by_role("button", name="Add to Playwright Smoke Project team").click()
+        expect(page.locator(".split-right .pc-att-chip")).to_contain_text("ui-mockup.svg")
+        expect(page.locator(".split-left .pc-att-chip")).to_have_count(0)
+        expect(page.locator(".split-right").get_by_role("button", name="Send to Team Lead")).to_be_enabled()
+        capture_studio(page, "workspace-attachment-actions")
+        page.locator(".split-right .pc-att-remove").click()
+        browser_shell.locator(".iab-close").click()
         split_btn.click()
         expect(split_btn).to_have_attribute("aria-pressed", "false")
         expect(page.locator(".world-container.split-active")).to_have_count(0)

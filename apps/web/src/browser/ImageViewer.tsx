@@ -10,8 +10,9 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, type JSX } from "react";
 import type { AnnotationAnchor, AnnotationRecord } from "@bot-factory/shared";
+import { AttachmentActions, AttachmentDestinations } from "./AttachmentActions";
 import type { ComposerAttachment, ImageZoomMode } from "./types";
 
 export interface ImageViewerProps {
@@ -24,7 +25,7 @@ export interface ImageViewerProps {
   focusNonce?: number;
   artifactVersion?: number;
   onPickAnchor?: (anchor: AnnotationAnchor) => void;
-  onImportToChat?: (attachment: ComposerAttachment) => void;
+  onImportToChat?: (attachment: ComposerAttachment, destinationKey?: string) => boolean;
   onArtifactSaved?: (filePath: string) => void;
 }
 
@@ -458,54 +459,70 @@ export function ImageViewer({
     }
   };
 
-  const handleAddSnapshotToChat = async () => {
-    const thumbnailDataUrl = await exportOffscreenDataUrl({ maxEdge: 720, mime: "image/png" });
-    const label = filePath.split("/").pop() ?? filePath;
-    if (onImportToChat) {
-      onImportToChat({
-        id: `att_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        kind: "image_comment",
-        filePath,
-        label,
-        comment: shapes.length > 0 || customImageDataUrl ? "Edited image preview" : "Image preview",
-        thumbnailDataUrl,
-      });
-      showTempStatus("success", "Added to chat composer");
-    } else if (onPickAnchor) {
-      onPickAnchor({ kind: "image", filePath, pin: { x: 0.5, y: 0.5 } });
+  const destinations = useContext(AttachmentDestinations);
+  const [addingAttachment, setAddingAttachment] = useState(false);
+  const handleAddSnapshotToChat = async (destinationKey?: string) => {
+    setAddingAttachment(true);
+    try {
+      const thumbnailDataUrl = await exportOffscreenDataUrl({ maxEdge: 720, mime: "image/png" });
+      const label = filePath.split("/").pop() ?? filePath;
+      if (onImportToChat) {
+        const added = onImportToChat({
+          id: `att_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          kind: "image_comment",
+          filePath,
+          label,
+          comment: shapes.length > 0 || customImageDataUrl ? "Edited image preview" : "Image preview",
+          thumbnailDataUrl,
+        }, destinationKey);
+        if (added && !destinations) showTempStatus("success", "Added to chat composer");
+      } else if (onPickAnchor) {
+        onPickAnchor({ kind: "image", filePath, pin: { x: 0.5, y: 0.5 } });
+      }
+    } catch (err) {
+      showTempStatus("error", err instanceof Error ? err.message : String(err));
+    } finally {
+      setAddingAttachment(false);
     }
   };
 
-  const submitCommentPopover = async () => {
+  const submitCommentPopover = async (destinationKey?: string) => {
     if (!pendingComment) return;
     const trimmed = commentText.trim();
     if (!trimmed) return;
-    const thumbnailDataUrl = await exportOffscreenDataUrl({
-      highlightRect: pendingComment.rect,
-      highlightPin: pendingComment.pin,
-      maxEdge: 480,
-      mime: "image/png",
-    });
-    const label = filePath.split("/").pop() ?? filePath;
-    if (onImportToChat) {
-      onImportToChat({
-        id: `att_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        kind: "image_comment",
-        filePath,
-        label,
-        comment: trimmed,
-        thumbnailDataUrl,
-        ...(pendingComment.rect ? { region: pendingComment.rect } : {}),
+    setAddingAttachment(true);
+    try {
+      const thumbnailDataUrl = await exportOffscreenDataUrl({
+        highlightRect: pendingComment.rect,
+        highlightPin: pendingComment.pin,
+        maxEdge: 480,
+        mime: "image/png",
       });
-    } else if (onPickAnchor) {
-      onPickAnchor(
-        pendingComment.rect
-          ? { kind: "image", filePath, rect: pendingComment.rect }
-          : { kind: "image", filePath, pin: pendingComment.pin ?? { x: 0.5, y: 0.5 } },
-      );
+      const label = filePath.split("/").pop() ?? filePath;
+      if (onImportToChat) {
+        if (!onImportToChat({
+          id: `att_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          kind: "image_comment",
+          filePath,
+          label,
+          comment: trimmed,
+          thumbnailDataUrl,
+          ...(pendingComment.rect ? { region: pendingComment.rect } : {}),
+        }, destinationKey)) return;
+      } else if (onPickAnchor) {
+        onPickAnchor(
+          pendingComment.rect
+            ? { kind: "image", filePath, rect: pendingComment.rect }
+            : { kind: "image", filePath, pin: pendingComment.pin ?? { x: 0.5, y: 0.5 } },
+        );
+      }
+      setPendingComment(null);
+      setCommentText("");
+    } catch (err) {
+      showTempStatus("error", err instanceof Error ? err.message : String(err));
+    } finally {
+      setAddingAttachment(false);
     }
-    setPendingComment(null);
-    setCommentText("");
   };
 
   const maxFitWidth = Math.max(120, viewportSize.w - 48);
@@ -1115,7 +1132,7 @@ export function ImageViewer({
                   value={commentText}
                   onChange={(e) => setCommentText(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                    if (!destinations && e.key === "Enter" && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       void submitCommentPopover();
                     } else if (e.key === "Escape") {
@@ -1135,15 +1152,7 @@ export function ImageViewer({
                   }}
                 />
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
-                  <button
-                    type="button"
-                    className="btn xs primary"
-                    disabled={!commentText.trim()}
-                    onClick={() => void submitCommentPopover()}
-                  >
-                    <MessageSquare size={11} strokeWidth={1.6} />
-                    <span>Add to Chat</span>
-                  </button>
+                  <AttachmentActions destinations={destinations} disabled={addingAttachment || !commentText.trim()} onAdd={(key) => void submitCommentPopover(key)} />
                 </div>
               </div>
             )}
@@ -1284,21 +1293,7 @@ export function ImageViewer({
             <span>{saving ? "Saving..." : "Save"}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => void handleAddSnapshotToChat()}
-            style={{
-              ...microBtnStyle(false),
-              background: "var(--accent-orange)",
-              borderColor: "var(--accent-orange)",
-              color: "#FFFFFF",
-              fontWeight: "var(--weight-semibold)",
-            }}
-            title="Attach current image preview to chat composer"
-          >
-            <MessageSquare size={12} strokeWidth={1.7} />
-            <span>Add to Chat</span>
-          </button>
+          <AttachmentActions destinations={destinations} disabled={addingAttachment} onAdd={(key) => void handleAddSnapshotToChat(key)} />
         </div>
       )}
     </div>
