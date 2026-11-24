@@ -55,6 +55,7 @@ export interface PrecisionComposerProps {
 }
 
 const SLASH_COMMANDS: { cmd: string; desc: string }[] = [
+  { cmd: "/goal", desc: "Set the goal, then describe the outcome" },
   { cmd: "/plan", desc: "Draft an implementation plan first" },
   { cmd: "/verify", desc: "Run fresh cross-family verification" },
   { cmd: "/preview", desc: "Open project preview in In-App Browser" },
@@ -195,6 +196,7 @@ export function PrecisionComposer({
   const [resizingHeight, setResizingHeight] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const highlightRef = useRef<HTMLPreElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
 
@@ -256,6 +258,28 @@ export function PrecisionComposer({
     ? `${selectedTarget.provider}/${selectedTarget.model}`
     : activeModelLabel;
 
+  const highlightedText = useMemo(() => {
+    const re = /(^|\s)(\/(?:goal|plan|verify|preview|spawn-bot|diff))(?=\s|$)/g;
+    const parts: (string | JSX.Element)[] = [];
+    let last = 0;
+    let match: RegExpExecArray | null;
+    let key = 0;
+    while ((match = re.exec(text)) !== null) {
+      const leading = match[1];
+      const token = match[2];
+      const tokenStart = match.index + leading.length;
+      parts.push(text.slice(last, tokenStart));
+      parts.push(
+        <span key={`cmd-${key++}`} className="pc-command-token">
+          {token}
+        </span>,
+      );
+      last = tokenStart + token.length;
+    }
+    parts.push(text.slice(last));
+    return parts;
+  }, [text]);
+
   const slashFilter = text.startsWith("/") && !text.includes(" ") ? text.slice(1).toLowerCase() : null;
   const slashItems = useMemo(
     () =>
@@ -272,11 +296,11 @@ export function PrecisionComposer({
 
   const pickSlash = (cmd: string) => {
     setOpenPop(null);
-    if (onSlashAction) {
+    if (cmd === "/goal" || !onSlashAction) {
+      setText(`${cmd} `);
+    } else {
       onSlashAction(cmd);
       setText("");
-    } else {
-      setText(`${cmd} `);
     }
     textareaRef.current?.focus();
   };
@@ -435,6 +459,11 @@ export function PrecisionComposer({
           </div>
         )}
 
+        <div className="pc-input-layer">
+          <pre ref={highlightRef} className="pc-input-highlight" aria-hidden="true">
+            {highlightedText}
+            {"\n"}
+          </pre>
         <textarea
           ref={textareaRef}
           className="pc-input pc-input-resizable"
@@ -446,6 +475,9 @@ export function PrecisionComposer({
           onChange={(e) => {
             setText(e.target.value);
             if (openPop === "slash" && !e.target.value.startsWith("/")) setOpenPop(null);
+          }}
+          onScroll={(e) => {
+            if (highlightRef.current) highlightRef.current.scrollTop = e.currentTarget.scrollTop;
           }}
           onKeyDown={(e) => {
             if (slashOpen && slashItems.length > 0) {
@@ -478,6 +510,7 @@ export function PrecisionComposer({
             }
           }}
         />
+        </div>
 
         <div className="pc-bar">
           <span className="pc-anchor">
@@ -553,7 +586,7 @@ export function PrecisionComposer({
               <SlashKeyIcon size={15} />
             </button>
             {slashOpen && (
-              <div className="pc-pop" role="menu">
+              <div className="pc-pop pc-pop-slash" role="menu">
                 <div className="pc-pop-sec">Commands</div>
                 {slashItems.length === 0 && (
                   <div className="pc-pop-desc" style={{ padding: "4px 9px 8px" }}>

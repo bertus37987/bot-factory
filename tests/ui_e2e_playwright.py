@@ -16,6 +16,10 @@ def capture_studio(page, name):
         page.screenshot(path=os.path.join(directory, f"{name}.png"), animations="disabled")
 
 
+def open_bot_controls(scope):
+    scope.locator(".bot-control-tab").click()
+
+
 def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, held_acks):
     bots = page.locator(".bots-center-shell")
     close_panel = page.locator(".drawer-close-btn")
@@ -30,6 +34,7 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
 
     # Truthful team seats: five members render three portraits + a compact overflow seat.
     for bot_name in ("Vega", "Nox", "Iris"):
+        open_bot_controls(bots)
         bots.locator('button[title="Spawn a new project bot"]').click()
         spawn_dialog = page.get_by_role("dialog", name="Spawn Project Bot")
         spawn_dialog.get_by_placeholder("e.g. Forge-2").fill(bot_name)
@@ -64,6 +69,7 @@ def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, hel
     expect(second_cluster.locator(".bf-group-empty-cell")).to_have_count(0)
     expect(second_cluster.locator(".bear-avatar-wrap")).to_have_count(1)
     expect(sidebar).not_to_contain_text("Atlas")
+    open_bot_controls(bots)
     expect(bots.get_by_label("Bot control target").locator("option")).to_have_count(1)
     composer.fill("Draft for the research team")
 
@@ -291,7 +297,7 @@ def main() -> int:
         expect(shell).to_be_visible()
         rail = page.locator(".icon-rail")
         expect(rail).to_be_visible()
-        for label in ("Main", "Teams", "Tasks", "Split", "Browser", "Search", "Inbox", "Memory", "Settings", "Theme"):
+        for label in ("Main", "Teams", "Split", "Browser", "Search", "Inbox", "Memory", "Settings", "Theme"):
             expect(rail).to_contain_text(label)
         expect(page.locator(".center-header")).to_contain_text("Main Agent")
         expect(page.locator(".hydration-shell")).to_have_count(0)
@@ -592,7 +598,7 @@ def main() -> int:
         page.locator('nav.icon-rail button[aria-label="Engineering Teams"]').click()
         bots_shell = page.locator(".bots-center-shell")
         expect(bots_shell).to_be_visible()
-        expect(bots_shell.locator(".group-target-strip")).to_be_visible()
+        expect(bots_shell.locator(".bot-control-tab")).to_be_visible()
         expect(bots_shell.locator(".bcs-root")).to_be_visible()
         feed_items = bots_shell.locator(".group-msg-row, .bcs-artifact, .bcs-system, .bcs-verify, .bcs-trace")
         if feed_items.count() == 0:
@@ -605,6 +611,7 @@ def main() -> int:
             raise AssertionError("Legacy 'Debates & Verifier' entry must not exist in Engineering Teams sidebar")
 
         # Click + Bot to open BotSpawnModal and spawn peer bot "Atlas"
+        open_bot_controls(bots_shell)
         bots_shell.locator('button[title="Spawn a new project bot"]').click()
         spawn_dialog = page.get_by_role("dialog", name="Spawn Project Bot")
         expect(spawn_dialog).to_be_visible()
@@ -676,8 +683,7 @@ def main() -> int:
         expect(inbox_dialog).to_have_count(0)
 
         # 7. Switch to Main Agent rail, open Memory L1 Studio -> edit + save USER.md -> verify saved
-        page.locator('nav.icon-rail button[aria-label="Main Agent"]').click()
-        sidebar.locator("button.drawer-item", has_text="Memory Studio").click()
+        page.locator('nav.icon-rail button[aria-label="Memory Studio"]').click()
         memory_dialog = page.get_by_role("dialog", name="Memory Studio — L1 Prompt Files & L2 Live Facts")
         expect(memory_dialog).to_be_visible()
         expect(memory_dialog.locator("button.subview-tab.active")).to_contain_text("USER.md")
@@ -691,7 +697,7 @@ def main() -> int:
         # Re-open Memory Studio to confirm persisted state round-trip
         memory_dialog.get_by_role("button", name="Close Memory Studio").click()
         expect(memory_dialog).to_have_count(0)
-        sidebar.locator("button.drawer-item", has_text="Memory Studio").click()
+        page.locator('nav.icon-rail button[aria-label="Memory Studio"]').click()
         memory_dialog = page.get_by_role("dialog", name="Memory Studio — L1 Prompt Files & L2 Live Facts")
         expect(memory_dialog.locator(".memory-studio-l1-col textarea")).to_have_value(l1_text)
         memory_dialog.get_by_role("button", name="Close Memory Studio").click()

@@ -30,6 +30,7 @@ import { useEffect, useMemo, useState, type JSX } from "react";
 import type { ProviderSummary, RpcCommandInput } from "../client/useBotFactory";
 import { AgentProfile } from "../components/AgentProfile";
 import { BotAvatar, resolveBotRole } from "../components/BotAvatars";
+import { BearPawControlIcon } from "../components/BotFactoryIcons";
 import {
   PrecisionComposer,
   type AutonomyLevel,
@@ -137,6 +138,7 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
     setMentions((prev) => ({ ...prev, [conversationKey]: name }));
   const chatOpen = activeSubView === "chat_group" || activeSubView === "chat_single";
   const [controlTargetId, setControlTargetId] = useState<string | null>(null);
+  const [controlDockOpen, setControlDockOpen] = useState(false);
 
   const [uiError, setUiError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState(false);
@@ -452,25 +454,38 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
             </div>
           )}
 
-          <div className="group-target-strip">
-            {activeSubView === "chat_single" && (
-              <button
-                type="button"
-                className="btn xs"
-                onClick={() => onSelectSubView("chat_group")}
-                title="Back to multi-bot Group Chat"
-              >
-                <ArrowLeft size={11} strokeWidth={1.6} />
-                <span>Group Chat</span>
-              </button>
-            )}
-
-            <div className="group-target-actions">
+          <div className={`bot-control-dock ${controlDockOpen ? "open" : ""}`}>
+            <button
+              type="button"
+              className="bot-control-tab"
+              aria-label="Open bot controls"
+              aria-expanded={controlDockOpen}
+              title="Bot controls"
+              onClick={() => setControlDockOpen((open) => !open)}
+            >
+              <BearPawControlIcon size={16} />
+              <span className="bots-visually-hidden">Bot controls</span>
+            </button>
+            <div className="bot-control-panel" role="group" aria-label="Bot controls panel">
+              <div className="bot-control-panel-head">
+                <span>Bot controls</span>
+                {activeSubView === "chat_single" && (
+                  <button
+                    type="button"
+                    className="btn xs ghost"
+                    onClick={() => onSelectSubView("chat_group")}
+                    title="Back to multi-bot Group Chat"
+                  >
+                    <ArrowLeft size={11} strokeWidth={1.6} />
+                    <span>Group</span>
+                  </button>
+                )}
+              </div>
               {controlTargetAgent && (
-                <>
+                <div className="bot-control-target-block">
                   {activeSubView === "chat_group" ? (
                     <label className="bots-control-label">
-                      Bot controls
+                      Control target
                       <select
                         className="todo-board-select"
                         aria-label="Bot control target"
@@ -485,57 +500,59 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
                       </select>
                     </label>
                   ) : (
-                    <span className="bots-control-label">Controls: {controlTargetAgent.name}</span>
+                    <span className="bots-control-label">Target: {controlTargetAgent.name}</span>
                   )}
-                  {(controlTargetAgent.status === "paused" ||
-                    controlTargetAgent.status === "stopped" ||
-                    controlTargetAgent.status === "error") && (
+                  <div className="bot-control-actions">
+                    {(controlTargetAgent.status === "paused" ||
+                      controlTargetAgent.status === "stopped" ||
+                      controlTargetAgent.status === "error") && (
+                      <button
+                        type="button"
+                        className="btn xs"
+                        disabled={busyAction}
+                        onClick={() => void handleBotControl(controlTargetAgent, "bot.resume")}
+                        title={`Resume ${controlTargetAgent.name}`}
+                      >
+                        <RotateCw size={11} strokeWidth={1.6} />
+                        <span>Resume</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="btn xs"
-                      disabled={busyAction}
-                      onClick={() => void handleBotControl(controlTargetAgent, "bot.resume")}
-                      title={`Resume ${controlTargetAgent.name}`}
+                      disabled={
+                        busyAction ||
+                        controlTargetAgent.status === "paused" ||
+                        controlTargetAgent.status === "stopped"
+                      }
+                      onClick={() => void handleBotControl(controlTargetAgent, "bot.pause")}
+                      title={`Pause ${controlTargetAgent.name}`}
                     >
-                      <RotateCw size={11} strokeWidth={1.6} />
-                      <span>Resume</span>
+                      <Pause size={11} strokeWidth={1.6} />
+                      <span>Pause</span>
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className="btn xs"
-                    disabled={
-                      busyAction ||
-                      controlTargetAgent.status === "paused" ||
-                      controlTargetAgent.status === "stopped"
-                    }
-                    onClick={() => void handleBotControl(controlTargetAgent, "bot.pause")}
-                    title={`Pause ${controlTargetAgent.name}`}
-                  >
-                    <Pause size={11} strokeWidth={1.6} />
-                    <span>Pause</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn xs danger"
-                    disabled={busyAction || controlTargetAgent.status === "stopped"}
-                    onClick={() => void handleBotControl(controlTargetAgent, "bot.stop")}
-                    title={`Hard-stop ${controlTargetAgent.name}`}
-                  >
-                    <OctagonX size={11} strokeWidth={1.6} />
-                    <span>Stop</span>
-                  </button>
-                </>
+                    <button
+                      type="button"
+                      className="btn xs danger"
+                      disabled={busyAction || controlTargetAgent.status === "stopped"}
+                      onClick={() => void handleBotControl(controlTargetAgent, "bot.stop")}
+                      title={`Hard-stop ${controlTargetAgent.name}`}
+                    >
+                      <OctagonX size={11} strokeWidth={1.6} />
+                      <span>Stop</span>
+                    </button>
+                  </div>
+                </div>
               )}
               <button
                 type="button"
-                className="btn xs"
+                className="btn xs bot-control-spawn"
                 disabled={busyAction}
                 onClick={onOpenBotSpawnModal}
                 title="Spawn a new project bot"
               >
                 <Plus size={11} strokeWidth={1.6} />
-                <span>Bot</span>
+                <span>Spawn bot</span>
               </button>
             </div>
           </div>

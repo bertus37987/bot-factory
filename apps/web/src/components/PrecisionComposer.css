@@ -226,3 +226,72 @@
     max-width: 160px;
   }
 }
+
+/* Rich slash-command rendering inside the composer. */
+.pc-input-layer {
+  position: relative;
+}
+.pc-input-highlight,
+.pc-input-layer .pc-input {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.pc-input-highlight {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  margin: 0;
+  padding: 13px 16px 6px;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: var(--ink-primary);
+  pointer-events: none;
+}
+.pc-input-layer .pc-input {
+  position: relative;
+  z-index: 1;
+  color: transparent;
+  caret-color: var(--ink-primary);
+}
+.pc-input-layer .pc-input::selection {
+  background: color-mix(in srgb, var(--accent-orange) 30%, transparent);
+}
+.pc-input-layer .pc-input::placeholder {
+  color: var(--ink-faint);
+}
+.pc-command-token {
+  display: inline-block;
+  padding: 0 5px 1px;
+  margin: -1px 1px 0 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent-orange) 18%, transparent);
+  color: var(--accent-orange-ink);
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+.pc-pop-slash {
+  min-width: 292px;
+  padding: 7px;
+}
+.pc-pop-slash .pc-pop-item {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: start;
+  row-gap: 2px;
+  padding: 9px 10px;
+  border-radius: 10px;
+}
+.pc-pop-slash .pc-pi-cmd {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--accent-orange-ink);
+}
+.pc-pop-slash .pc-pi-sub {
+  margin-left: 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: normal;
+}

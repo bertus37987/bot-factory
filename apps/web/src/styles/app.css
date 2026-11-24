@@ -2436,30 +2436,8 @@ kbd {
   flex-shrink: 0;
 }
 
-.group-target-strip {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-  padding: 7px 14px;
-  background: var(--bg-surface);
-  border-bottom: var(--hairline);
-  flex-shrink: 0;
-}
 
-.group-target-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px;
-  min-width: 0;
-  max-width: 100%;
-}
-
-.world-container.split-active .goal-banner,
-.world-container.split-active .group-target-strip {
+.world-container.split-active .goal-banner {
   padding: 6px 10px;
   gap: 5px;
 }
@@ -2474,32 +2452,6 @@ kbd {
   max-width: 100%;
 }
 
-.group-target-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  border-radius: var(--radius-pill);
-  border: var(--hairline);
-  background: var(--bg-canvas);
-  font-size: var(--text-2xs);
-  color: var(--ink-secondary);
-  white-space: nowrap;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-}
-
-.group-target-chip > span:not(.mono-tag) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.group-target-chip .mono-tag {
-  flex-shrink: 0;
-}
 
 /* Classic Messenger Multi-Role Group & Single Chat Primitives */
 .group-msg-row {
@@ -4029,4 +3981,66 @@ kbd {
   .rail-mode-btn, .rail-util-btn { width: 50px; min-height: 41px; }
   .rail-label { font-size: 9px; }
   .side-drawer { left: 58px; }
+}
+
+/* Conversation-first project drawer. */
+.drawer-project-accordion {
+  display: grid;
+  gap: 3px;
+}
+.drawer-project-row {
+  min-height: 38px;
+}
+.drawer-item-meta {
+  margin-left: auto;
+  flex: none;
+  color: var(--ink-faint);
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.drawer-thread-list {
+  display: grid;
+  gap: 3px;
+  margin: 1px 0 5px 15px;
+  padding-left: 9px;
+  border-left: 1px solid color-mix(in srgb, var(--ink-muted) 24%, transparent);
+}
+.drawer-thread-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 42px;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.drawer-thread-item:hover {
+  background: var(--bg-hover);
+}
+.drawer-thread-item.active {
+  background: var(--studio-selected);
+}
+.drawer-thread-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.drawer-thread-copy small {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 10px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drawer-files-section {
+  opacity: 0.9;
 }

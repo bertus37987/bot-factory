@@ -22,8 +22,9 @@ focus visible, respect reduced motion, and test with the offline runtime.
 
 ## Seamless navigation and one-click workspace actions
 
-- Use the labeled destination rail for Main, Teams, Tasks, Split, Browser,
-  Search, Inbox, Memory, Settings and Theme. Destinations open their
+- Use the labeled destination rail for Main, Teams, Split, Browser, Search,
+  Inbox, Memory, Settings and Theme. Tasks are a workspace surface inside a
+  team, not a separate top-level destination. Destinations open their
   contextual panel; the panel close control must never cover header content.
   Split remains available only when the viewport can support it.
 - Label split panes locally. Focus is a keyboard and composer cue, not a
@@ -34,3 +35,12 @@ focus visible, respect reduced motion, and test with the offline runtime.
 - Use live bear motion for real activity or a brief hover/focus response.
   Older messages and team clusters stay still. Click the live header
   portrait to read the agent's role, status, and model.
+
+- Prefer the handcrafted Bot-Factory geometric icon set for shell
+  navigation. Use familiar control glyphs only where recognition matters
+  (pause, stop, close); do not fill the shell with generic stock icons.
+- Slash commands are composer content, not low-resolution popup labels.
+  Recognized commands render as bold warm tokens inline in the composer,
+  and the command menu uses larger command typography with readable
+  descriptions. `/goal` remains inline so the operator can write the goal
+  after the token; action commands still execute directly.

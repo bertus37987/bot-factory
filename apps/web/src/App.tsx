@@ -1,20 +1,15 @@
 import {
   Bell,
-  Brain,
   ChevronDown,
   ChevronRight,
-  Columns2,
   Folder,
   FolderPlus,
   GitBranch,
   Kanban,
   Layers,
   Lock,
-  Moon,
   Plus,
   Search,
-  Settings,
-  Sun,
   WifiOff,
   X,
 } from "lucide-react";
@@ -34,6 +29,12 @@ import {
   BotsLatticeIcon,
   BrowserPaneIcon,
   CodeTabIcon,
+  InboxSignalIcon,
+  MemoryCoreIcon,
+  SearchApertureIcon,
+  SettingsFactoryIcon,
+  SplitPanelsIcon,
+  ThemeEclipseIcon,
   Cube3DTabIcon,
   DiffBranchIcon,
   DocTabIcon,
@@ -174,6 +175,7 @@ export function App() {
   const [memoryStudioOpen, setMemoryStudioOpen] = useState(false);
 
   const [expandedSubagentParents, setExpandedSubagentParents] = useState<Record<string, boolean>>({});
+  const [expandedProjectIds, setExpandedProjectIds] = useState<Record<string, boolean>>({});
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   const [unlockToken, setUnlockToken] = useState("");
@@ -869,23 +871,6 @@ export function App() {
             {bf.quietStatus.runningBots > 0 && <span className="rail-badge">{bf.quietStatus.runningBots}</span>}
           </button>
 
-          <button
-            type="button"
-            className={`rail-mode-btn ${world === "bots" && botsSubView === "board" ? "active" : ""}`}
-            onClick={() => {
-              setWorld("bots");
-              handleSelectSubView("board");
-              setFocusedChatPane("bots");
-              setDrawerOpen(true);
-            }}
-            title="Task Board"
-            aria-label="Task Board"
-            aria-current={world === "bots" && botsSubView === "board" ? "page" : undefined}
-          >
-            <Kanban size={16} strokeWidth={1.6} />
-            <span className="rail-label">Tasks</span>
-          </button>
-
           {!narrowChat && (
             <button
               type="button"
@@ -896,7 +881,7 @@ export function App() {
               aria-label="Split workspace"
               aria-pressed={splitChatOpen}
             >
-              <Columns2 size={15} strokeWidth={1.6} />
+              <SplitPanelsIcon size={16} />
               <span className="rail-label">Split</span>
             </button>
           )}
@@ -926,7 +911,7 @@ export function App() {
             title="Quick Jump (Ctrl+K)"
             aria-label="Quick Jump"
           >
-            <Search size={15} strokeWidth={1.6} />
+            <SearchApertureIcon size={16} />
             <span className="rail-label">Search</span>
           </button>
 
@@ -939,7 +924,7 @@ export function App() {
             aria-label="Escalation Inbox"
             aria-pressed={inboxOpen}
           >
-            <Bell size={15} strokeWidth={1.6} />
+            <InboxSignalIcon size={16} />
             <span className="rail-label">Inbox</span>
             {inboxAlertCount > 0 && (
               <span className={`rail-badge ${bf.pendingPermissions.length > 0 ? "danger" : ""}`}>
@@ -960,7 +945,7 @@ export function App() {
             title="Memory Studio"
             aria-label="Memory Studio"
           >
-            <Brain size={15} strokeWidth={1.6} />
+            <MemoryCoreIcon size={16} />
             <span className="rail-label">Memory</span>
           </button>
         </div>
@@ -978,7 +963,7 @@ export function App() {
             title="Settings & BYOS Keys"
             aria-label="Settings"
           >
-            <Settings size={15} strokeWidth={1.6} />
+            <SettingsFactoryIcon size={16} />
             <span className="rail-label">Settings</span>
           </button>
           <button
@@ -989,20 +974,9 @@ export function App() {
             title={theme === "vanta" ? "Switch to Light Mode" : "Switch to Vanta Black"}
             aria-label={theme === "vanta" ? "Switch to Light theme" : "Switch to Vanta Black theme"}
           >
-            {theme === "vanta" ? <Sun size={15} strokeWidth={1.6} /> : <Moon size={15} strokeWidth={1.6} />}
+            <ThemeEclipseIcon size={16} />
             <span className="rail-label">Theme</span>
           </button>
-          <BotThinkingOrb
-            activity={brandActivity}
-            size={20}
-            label={
-              !bf.connected
-                ? "Reconnecting to daemon…"
-                : bf.quietStatus.runningBots > 0
-                  ? `${bf.quietStatus.runningBots} bots running`
-                  : "Bot-Factory connected (127.0.0.1)"
-            }
-          />
         </div>
       </nav>
 
@@ -1022,8 +996,7 @@ export function App() {
           {world === "chat" ? (
             <>
               <div className="drawer-header">
-                <span className="drawer-title">Bot-Factory</span>
-                <span className="mono-tag">127.0.0.1</span>
+                <span className="drawer-title">Conversations</span>
               </div>
 
               <div className="drawer-scroll">
@@ -1039,73 +1012,77 @@ export function App() {
                 <div className="drawer-section">
                   <div className="section-eyebrow">
                     <span>Projects</span>
-                    <span className="mono-tag">{bf.projects.length}</span>
                   </div>
                   {bf.projects.length === 0 && (
                     <div className="drawer-empty-hint">No projects yet. Create one to start.</div>
                   )}
                   {bf.projects.map((p) => {
                     const isActive = activeProject?.id === p.id;
-                    const teamCount = bf.agents.filter((a) => a.projectId === p.id && a.scope !== "sidekick").length;
+                    const expanded = expandedProjectIds[p.id] ?? isActive;
+                    const members = bf.agents.filter((a) => a.projectId === p.id && a.scope !== "sidekick");
+                    const roles = members.map((a) => resolveBotRole(a).role);
                     return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className={`drawer-item ${isActive ? "active" : ""}`}
-                        onClick={() => setSelectedProjectId(p.id)}
-                      >
-                        <Folder size={14} strokeWidth={1.6} color="var(--ink-muted)" />
-                        <span className="drawer-item-label">{p.name}</span>
-                        <span className="mono-tag">{teamCount}</span>
-                      </button>
+                      <div key={p.id} className="drawer-project-accordion">
+                        <button
+                          type="button"
+                          className={`drawer-item drawer-project-row ${isActive ? "active" : ""}`}
+                          aria-expanded={expanded}
+                          onClick={() => {
+                            setSelectedProjectId(p.id);
+                            setExpandedProjectIds((prev) => ({ ...prev, [p.id]: isActive ? !expanded : true }));
+                          }}
+                        >
+                          {expanded ? <ChevronDown size={12} strokeWidth={1.7} /> : <ChevronRight size={12} strokeWidth={1.7} />}
+                          <span className="drawer-item-label">{p.name}</span>
+                          <span className="drawer-item-meta">{members.length} {members.length === 1 ? "bear" : "bears"}</span>
+                        </button>
+                        {expanded && (
+                          <div className="drawer-thread-list">
+                            <button
+                              type="button"
+                              className={`drawer-thread-item ${isActive && focusedChatPane === "chat" ? "active" : ""}`}
+                              onClick={() => {
+                                setSelectedProjectId(p.id);
+                                setWorld("chat");
+                                setFocusedChatPane("chat");
+                                if (window.matchMedia("(max-width: 999px)").matches) setDrawerOpen(false);
+                              }}
+                            >
+                              <BotAvatar role="orchestrator" size={22} seed={`${p.id}-main`} />
+                              <span className="drawer-thread-copy">
+                                <span>Main Agent</span>
+                                <small>Decisions and delivery</small>
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`drawer-thread-item ${isActive && focusedChatPane === "bots" ? "active" : ""}`}
+                              onClick={() => {
+                                setSelectedProjectId(p.id);
+                                setSelectedAgentId(null);
+                                setBotsSubView("chat_group");
+                                setWorld("bots");
+                                setFocusedChatPane("bots");
+                                if (window.matchMedia("(max-width: 999px)").matches) setDrawerOpen(false);
+                              }}
+                            >
+                              <GroupAvatarCluster roles={roles.length > 0 ? roles : ["team_lead"]} totalCount={members.length} size={22} />
+                              <span className="drawer-thread-copy">
+                                <span>Team Chat</span>
+                                <small>{members.length} {members.length === 1 ? "bot" : "bots"} in channel</small>
+                              </span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
 
-                {activeProject && (
-                  <div className="drawer-section">
+                {activeProject && activeArtifacts.length > 0 && (
+                  <div className="drawer-section drawer-files-section">
                     <div className="section-eyebrow">
-                      <span>Engineering Teams</span>
-                      <span className="mono-tag">{projectAgents.length}</span>
-                    </div>
-                    <button
-                      type="button"
-                      className="drawer-item"
-                      onClick={() => {
-                        setBotsSubView("chat_group");
-                        setWorld("bots");
-                        setFocusedChatPane("bots");
-                      }}
-                    >
-                      <BotsLatticeIcon size={14} />
-                      <span className="drawer-item-label">{activeProject.name} Team</span>
-                      <span className="mono-tag">{activeTasks.length} tasks</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="drawer-item"
-                      onClick={() => {
-                        setMemoryStudioOpen(true);
-                        void bf.fetchMemoryStudio(activeProject.id).catch((err) => {
-                          pushToast(err instanceof Error ? err.message : String(err), "error");
-                        });
-                      }}
-                    >
-                      <Brain size={14} strokeWidth={1.6} />
-                      <span className="drawer-item-label">Memory Studio</span>
-                      <span className="mono-tag">{contextBudget.percent}%</span>
-                    </button>
-                  </div>
-                )}
-
-                {activeProject && (
-                  <div className="drawer-section">
-                    <div className="section-eyebrow">
-                      <span>Browser Files</span>
-                      <span className="mono-tag">
-                        {activeArtifacts.length +
-                          (activeRepoFiles.some((f) => f.relativePath === "README.md") ? 1 : 0)}
-                      </span>
+                      <span>Files</span>
                     </div>
                     {activeArtifacts.map((art) => (
                       <button
@@ -1122,24 +1099,6 @@ export function App() {
                           <DocTabIcon size={14} />
                         )}
                         <span className="drawer-item-label">{art.name}</span>
-                      </button>
-                    ))}
-                    {activeRepoFiles.slice(0, 6).map((rf) => (
-                      <button
-                        key={rf.relativePath}
-                        type="button"
-                        className="drawer-item"
-                        onClick={() =>
-                          openBrowserTab({
-                            projectId: activeProject.id,
-                            kind: "code",
-                            target: rf.relativePath,
-                            label: rf.name,
-                          })
-                        }
-                      >
-                        <CodeTabIcon size={14} />
-                        <span className="drawer-item-label">{rf.relativePath}</span>
                       </button>
                     ))}
                     <button
@@ -1387,9 +1346,7 @@ export function App() {
                   <span className="center-header-title">Main Agent</span>
                   {activeProject && <span className="mono-tag main-header-project">{activeProject.name}</span>}
                 </>
-              ) : botsSubView === "chat_group" && activeProject ? (
-                <span className="center-header-title">Group Chat</span>
-              ) : botsSubView === "chat_single" && activeAgent && activeBotMeta ? (
+              ) : botsSubView === "chat_group" && activeProject ? null : botsSubView === "chat_single" && activeAgent && activeBotMeta ? (
                 <>
                   <AgentProfile
                     key={activeAgent.id}
