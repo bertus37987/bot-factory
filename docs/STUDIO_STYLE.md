@@ -30,12 +30,15 @@ focus visible, respect reduced motion, and test with the offline runtime.
   simultaneous panes.
 - Show the named draft destination on the artifact action itself. A click
   only adds context; the composer has a separate, explicit send action.
-- Use the vector Feltworks bear crew: one simple plush squircle bear blank,
-  capsule eyes, muted role-dyed felt, and one functional factory module per
-  role. Live bears blink and glance subtly; working bears move with more
-  energy, and hover/focus produces a brief plush acknowledgement. Older
-  messages and team clusters stay still. Click the live header portrait to
-  read the agent's role, status, and model.
+- Use the vector Feltworks bear crew: low-detail plush bears with distinct
+  head/ear proportions, muted role-dyed felt, visible fur tufts, capsule
+  eyes, and role-specific workwear (spectacles, hardhat, beret, spyglass,
+  inspector lens, radio cap, or beanie). Live bears blink and glance on
+  seeded individual timing; each role has its own working motion, and
+  hover/focus produces a brief plush acknowledgement. Older messages and
+  team clusters stay still. Empty bot timelines introduce the bot as a
+  large bear portrait rather than a generic thinking orb. Click the live
+  header portrait to read the agent's role, status, and model.
 
 - Prefer the handcrafted Bot-Factory geometric icon set for shell
   navigation. Use familiar control glyphs only where recognition matters

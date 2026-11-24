@@ -551,11 +551,23 @@ export function BotChatStream({
       )}
       {feed.length === 0 && streamingEntries.length === 0 && (
         <div className="bcs-empty">
-          <BotThinkingOrb
-            activity="breathing"
-            size={64}
-            label={mode === "group" ? "Team channel ready" : "Bot ready"}
-          />
+          {mode === "group" ? (
+            <GroupAvatarCluster
+              roles={agents.map((agent) => resolveBotRole(agent).role)}
+              totalCount={agents.length}
+              size={72}
+            />
+          ) : activeAgent ? (
+            <BotAvatar
+              role={resolveBotRole(activeAgent).role}
+              size={84}
+              live
+              agentStatus={activeAgent.status}
+              seed={activeAgent.id}
+            />
+          ) : (
+            <BotAvatar role="cub" size={84} seed="empty-bot" />
+          )}
           <div className="bcs-empty-title">
             {mode === "group" ? `${project.name} · Group Chat` : (activeAgent?.name ?? "Bot")}
           </div>
@@ -630,7 +642,7 @@ export function BotChatStream({
                   >
                     <BotAvatar
                       role={speaker.meta.role}
-                      size={34}
+                      size={42}
                       seed={speaker.agent?.id ?? speaker.meta.role}
                     />
                   </button>
@@ -835,7 +847,7 @@ export function BotChatStream({
               <span style={{ display: "inline-flex", flexShrink: 0 }}>
                 <BotAvatar
                   role={meta.role}
-                  size={34}
+                  size={42}
                   live
                   status="working"
                   seed={agent.id}
@@ -980,7 +992,7 @@ export function BotChatStream({
               <span style={{ display: "inline-flex", flexShrink: 0 }}>
                 <BotAvatar
                   role={liveMeta.role}
-                  size={32}
+                  size={40}
                   live
                   agentStatus={a.status}
                   seed={a.id}

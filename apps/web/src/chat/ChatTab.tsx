@@ -249,7 +249,7 @@ export function ChatTab({
                     </div>
                   ) : (
                     <div className="chat-assistant-row">
-                      <BotAvatar role="orchestrator" size={34} seed="main-agent" />
+                      <BotAvatar role="orchestrator" size={40} seed="main-agent" />
                       <div className="chat-assistant-body">
                         <div className="chat-turn-meta">
                           <span className="chat-speaker-name">Main Agent</span>
@@ -398,7 +398,7 @@ export function ChatTab({
           {isStreaming && (
             <div className="chat-turn assistant msg-side-left">
               <div className="chat-assistant-row">
-                <BotAvatar role="orchestrator" size={34} live status="working" seed="main-agent" />
+                <BotAvatar role="orchestrator" size={40} live status="working" seed="main-agent" />
                 <div className="chat-assistant-body">
                   <div className="chat-turn-meta">
                     <span className="chat-speaker-name">Main Agent</span>

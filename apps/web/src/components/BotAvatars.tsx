@@ -105,7 +105,7 @@ export function resolveBotRole(
     const n = `${agent.name} ${agent.model}`.toLowerCase();
     if (/verifier|inspect|review/.test(n)) {
       role = "verifier";
-    } else if (/3d|visual|asset|design|carver/.test(n)) {
+    } else if (/3d|artist|visual|asset|design|carver/.test(n)) {
       role = "artist_3d";
     } else if (/research|scout|memory|audit/.test(n)) {
       role = "research";

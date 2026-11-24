@@ -378,7 +378,7 @@ def main() -> int:
         expect(user_bubble).to_contain_text(user_prompt)
 
         main_portrait = page.get_by_role("button", name="Main Agent profile").locator(".bear-portrait-stage")
-        expect(main_portrait).to_have_css("animation-name", "bear-working-lean")
+        expect(main_portrait).to_have_css("animation-name", "bear-work-command")
         page.emulate_media(reduced_motion="reduce")
         expect(main_portrait).to_have_css("animation-name", "none")
         page.emulate_media(reduced_motion="no-preference")
@@ -605,8 +605,14 @@ def main() -> int:
         feed_items = bots_shell.locator(".group-msg-row, .bcs-artifact, .bcs-system, .bcs-verify, .bcs-trace")
         if feed_items.count() == 0:
             expect(bots_shell.locator(".bcs-empty-title")).to_contain_text("Group Chat")
+            expect(bots_shell.locator(".bcs-empty .bear-avatar-wrap, .bcs-empty .bf-group-cluster").first).to_be_visible()
+            expect(bots_shell.locator(".bcs-empty .bf-orb-shell")).to_have_count(0)
         else:
             expect(feed_items.first).to_be_visible()
+
+        roster_avatars = sidebar.locator(".bot-roster-row > .bear-avatar-wrap")
+        if roster_avatars.count() > 0:
+            assert roster_avatars.first.evaluate("el => parseFloat(getComputedStyle(el).width)") >= 42
 
         expect(sidebar.locator("button.drawer-item", has_text="Debates & Verifier")).to_have_count(0)
         if "Debates & Verifier" in sidebar.inner_text():

@@ -3715,6 +3715,11 @@ kbd {
   .bear-eye-group,
   .bear-eye-glance,
   .bear-shades-gleam,
+  .bear-anim-signal,
+  .bear-anim-spyglass,
+  .bear-anim-prism,
+  .bear-anim-inspect,
+  .bear-anim-gauge,
   .skeleton-bar {
     animation: none;
   }
@@ -3908,10 +3913,92 @@ kbd {
   76% { transform: translateY(-0.7px) rotate(-1.2deg) scale(1.01, 0.99); }
 }
 
+@keyframes bear-work-command {
+  0%, 100% { transform: translateY(0) rotate(0deg) scale(1); }
+  28% { transform: translateY(-0.9px) rotate(-1.4deg) scale(1.01); }
+  58% { transform: translateY(0.3px) rotate(1.8deg) scale(0.995, 1.005); }
+}
+
+@keyframes bear-work-radio {
+  0%, 100% { transform: translateX(0) rotate(0deg); }
+  30% { transform: translateX(-1.4px) rotate(-3.4deg); }
+  62% { transform: translateX(1.2px) rotate(2.7deg); }
+}
+
+@keyframes bear-work-forge {
+  0%, 100% { transform: translateY(0) rotate(0deg) scale(1); }
+  36% { transform: translateY(-2px) rotate(-1.2deg) scale(1.02, 0.96); }
+  48% { transform: translateY(1px) rotate(1deg) scale(0.97, 1.04); }
+  68% { transform: translateY(-0.4px) rotate(0deg) scale(1.005); }
+}
+
+@keyframes bear-work-sculpt {
+  0%, 100% { transform: translateY(0) rotate(0deg) scale(1); }
+  26% { transform: translateY(-1px) rotate(-5deg) scale(1.015); }
+  56% { transform: translateY(0.4px) rotate(4deg) scale(0.99, 1.01); }
+  78% { transform: translateY(-0.5px) rotate(-2deg) scale(1.008); }
+}
+
+@keyframes bear-work-search {
+  0%, 100% { transform: translateX(0) rotate(0deg); }
+  34% { transform: translateX(1.8px) rotate(2.2deg); }
+  68% { transform: translateX(-1.8px) rotate(-2.2deg); }
+}
+
+@keyframes bear-work-inspect {
+  0%, 100% { transform: translateY(0) rotate(0deg) scale(1); }
+  42% { transform: translateY(-0.7px) rotate(4.8deg) scale(1.025, 0.98); }
+  70% { transform: translateY(0.2px) rotate(1.2deg) scale(0.995, 1.005); }
+}
+
+@keyframes bear-work-cub {
+  0%, 100% { transform: translateY(0) rotate(0deg) scale(1); }
+  38% { transform: translateY(-2.6px) rotate(-2deg) scale(1.03, 0.95); }
+  58% { transform: translateY(0.7px) rotate(1.5deg) scale(0.97, 1.04); }
+}
+
+@keyframes bear-signal-pulse {
+  0%, 100% { opacity: 0.62; scale: 1; }
+  48% { opacity: 1; scale: 1.16; }
+}
+
+@keyframes bear-spyglass-drift {
+  0%, 100% { translate: 0 0; }
+  50% { translate: -1.8px 0.8px; }
+}
+
+@keyframes bear-prism-turn {
+  0%, 100% { rotate: 0deg; opacity: 0.92; }
+  50% { rotate: 5deg; opacity: 1; }
+}
+
+@keyframes bear-inspect-lens {
+  0%, 100% { rotate: 0deg; }
+  44% { rotate: -4deg; }
+  72% { rotate: 2deg; }
+}
+
+@keyframes bear-ember-glow {
+  0%, 100% { opacity: 0.58; }
+  50% { opacity: 1; }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   :where(.bear-avatar-wrap[data-live][data-status="working"]) > .bear-portrait-stage {
     animation: bear-working-lean 3.8s var(--ease-organic) infinite;
   }
+  .bear-avatar-wrap[data-live][data-status="working"][data-role="orchestrator"] > .bear-portrait-stage { animation-name: bear-work-command; animation-duration: 4.4s; }
+  .bear-avatar-wrap[data-live][data-status="working"][data-role="team_lead"] > .bear-portrait-stage { animation-name: bear-work-radio; animation-duration: 3.6s; }
+  .bear-avatar-wrap[data-live][data-status="working"][data-role="builder"] > .bear-portrait-stage { animation-name: bear-work-forge; animation-duration: 3.1s; }
+  .bear-avatar-wrap[data-live][data-status="working"][data-role="artist_3d"] > .bear-portrait-stage { animation-name: bear-work-sculpt; animation-duration: 4.1s; }
+  .bear-avatar-wrap[data-live][data-status="working"][data-role="research"] > .bear-portrait-stage { animation-name: bear-work-search; animation-duration: 4.8s; }
+  .bear-avatar-wrap[data-live][data-status="working"][data-role="verifier"] > .bear-portrait-stage { animation-name: bear-work-inspect; animation-duration: 4s; }
+  .bear-avatar-wrap[data-live][data-status="working"][data-role="cub"] > .bear-portrait-stage { animation-name: bear-work-cub; animation-duration: 2.9s; }
+  .bear-avatar-wrap[data-live][data-status="working"] .bear-anim-signal { animation: bear-signal-pulse 1.9s ease-in-out infinite; }
+  .bear-avatar-wrap[data-live][data-status="working"] .bear-anim-spyglass { animation: bear-spyglass-drift 3.4s ease-in-out infinite; }
+  .bear-avatar-wrap[data-live][data-status="working"] .bear-anim-prism { animation: bear-prism-turn 2.8s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  .bear-avatar-wrap[data-live][data-status="working"] .bear-anim-inspect { animation: bear-inspect-lens 3.2s ease-in-out infinite; transform-box: fill-box; transform-origin: 64px 46px; }
+  .bear-avatar-wrap[data-live][data-status="working"] .bear-anim-gauge { animation: bear-ember-glow 1.4s ease-in-out infinite; }
   .bear-avatar-wrap[data-live] .bear-eye-group { animation: bear-blink 6.8s ease-in-out infinite; }
   .bear-avatar-wrap[data-live] .bear-eye-glance { animation: bear-idle-glance 8.4s ease-in-out infinite; }
   .bear-avatar-wrap[data-live][data-status="working"] .bear-eye-glance { animation: bear-work-scan 3.8s ease-in-out infinite; }

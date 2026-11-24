@@ -10,11 +10,12 @@ names or role labels.
 - One Team switcher selects an existing project team and opens its Group
   Chat. The drawer lists the selected team's conversations and workspace
   tools. Archived projects are not switch targets.
-- Individual bot conversations show that bot's activity. The composer
-  still steers the Team Lead. Pause, Resume and Stop stay in a retractable
-  bear-paw control dock at the conversation edge and explicitly name their
-  separate target; the dock opens on hover, focus, or tap so touch and
-  keyboard users are not dependent on hover alone.
+- Individual bot conversations show that bot's activity. Empty timelines
+  introduce the selected bot with a large live bear portrait instead of a
+  generic orb. The composer still steers the Team Lead. Pause, Resume and
+  Stop stay in a retractable bear-paw control dock at the conversation edge
+  and explicitly name their separate target; the dock opens on hover, focus,
+  or tap so touch and keyboard users are not dependent on hover alone.
 - Drafts and attachments belong to the conversation in which they were
   entered. Switching does not send them and a failed send preserves them.
 - Vanta Black remains the default; Light and the vector Feltworks Bear Crew stay.
