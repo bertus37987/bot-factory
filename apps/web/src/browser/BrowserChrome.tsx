@@ -1,9 +1,9 @@
 import {
+  AppWindow,
   ArrowLeft,
   ArrowRight,
   Box,
   ChevronRight,
-  Crosshair,
   FileCode2,
   FileText,
   GitCompareArrows,
@@ -12,18 +12,28 @@ import {
   Lock,
   Maximize2,
   Minimize2,
-  Pin,
+  PanelBottom,
+  PanelRight,
   Plus,
   RefreshCw,
   Search,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import type { ArtifactEntry, GitDiffResponse, ProjectRecord, RepoFileEntry } from "@bot-factory/shared";
 import {
   breadcrumbSegments,
   formatBytes,
   validateLoopbackWebUrl,
+  type BrowserDockMode,
   type BrowserTab,
   type BrowserTabKind,
   type ImageZoomMode,
@@ -38,13 +48,9 @@ export interface BrowserChromeProps {
   artifacts: ArtifactEntry[];
   repoFiles: RepoFileEntry[];
   gitDiff: GitDiffResponse | null;
-  expanded: boolean;
+  dockMode: BrowserDockMode;
   canBack: boolean;
   canForward: boolean;
-  canAnnotate: boolean;
-  annotate: boolean;
-  pinsOpen: boolean;
-  pinsCount: number;
   imageZoom: ImageZoomMode;
   model3dPreset: Model3DPreset | "";
   model3dWireframe: boolean;
@@ -55,9 +61,8 @@ export interface BrowserChromeProps {
   onBack: () => void;
   onForward: () => void;
   onReload: () => void;
-  onToggleAnnotate: () => void;
-  onTogglePins: () => void;
-  onToggleExpand: () => void;
+  onChangeDockMode: (mode: BrowserDockMode) => void;
+  onStartFloatDrag?: (e: ReactPointerEvent<HTMLElement>) => void;
   onCloseSidebar: () => void;
   onChangeImageZoom: (zoom: ImageZoomMode) => void;
   onSelectModel3DPreset: (preset: Model3DPreset) => void;
@@ -182,13 +187,9 @@ export function BrowserChrome({
   artifacts,
   repoFiles,
   gitDiff,
-  expanded,
+  dockMode,
   canBack,
   canForward,
-  canAnnotate,
-  annotate,
-  pinsOpen,
-  pinsCount,
   imageZoom,
   model3dPreset,
   model3dWireframe,
@@ -199,9 +200,8 @@ export function BrowserChrome({
   onBack,
   onForward,
   onReload,
-  onToggleAnnotate,
-  onTogglePins,
-  onToggleExpand,
+  onChangeDockMode,
+  onStartFloatDrag,
   onCloseSidebar,
   onChangeImageZoom,
   onSelectModel3DPreset,
@@ -433,7 +433,7 @@ export function BrowserChrome({
     justifyContent: "center",
     width: 26,
     height: 24,
-    border: "none",
+    border: "1px solid transparent",
     background: "transparent",
     borderRadius: "var(--radius-sm)",
     cursor: "pointer",
@@ -441,21 +441,39 @@ export function BrowserChrome({
     flexShrink: 0,
   };
 
+  const dockBtnStyle = (active: boolean): React.CSSProperties => ({
+    ...iconBtnStyle,
+    background: active ? "var(--bg-active)" : "transparent",
+    borderColor: active ? "var(--border-strong)" : "transparent",
+    color: active ? "var(--ink-primary)" : "var(--ink-muted)",
+  });
+
+  const handleTabbarPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (dockMode !== "float" || !onStartFloatDrag) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button, input, textarea, select, a, [role="tab"], [data-no-drag="true"]')) {
+      return;
+    }
+    onStartFloatDrag(e);
+  };
+
   return (
     <>
       {/* ============================ ROW 1: TAB BAR ============================ */}
       <div
         className="iab-tabbar browser-chrome-tabs"
+        onPointerDown={handleTabbarPointerDown}
         style={{
           height: 36,
           flexShrink: 0,
           display: "flex",
           alignItems: "flex-end",
-          background: "#FAFAFA",
+          background: "var(--bg-surface)",
           borderBottom: "1px solid var(--border-hairline)",
           paddingLeft: 6,
           paddingRight: 4,
           gap: 4,
+          cursor: dockMode === "float" ? "grab" : undefined,
         }}
       >
         <div
@@ -490,9 +508,9 @@ export function BrowserChrome({
                   height: 30,
                   maxWidth: 196,
                   minWidth: 0,
-                  background: active ? "#FFFFFF" : "transparent",
+                  background: active ? "var(--bg-canvas)" : "transparent",
                   border: active ? "1px solid var(--border-hairline)" : "1px solid transparent",
-                  borderBottom: active ? "1px solid #FFFFFF" : "1px solid transparent",
+                  borderBottom: active ? "1px solid var(--bg-canvas)" : "1px solid transparent",
                   marginBottom: active ? -1 : 0,
                   borderRadius: "7px 7px 0 0",
                   flexShrink: 0,
@@ -591,67 +609,67 @@ export function BrowserChrome({
           </button>
         </div>
 
-        {/* Right Chrome Actions: Annotate / Pins / Expand / Close */}
-        <div style={{ display: "flex", alignItems: "center", gap: 3, paddingBottom: 5, flexShrink: 0 }}>
+        {/* Right Chrome Actions: 4-Mode Dock Switcher + Close */}
+        <div
+          className="iab-dock-switcher"
+          role="group"
+          aria-label="Browser layout mode"
+          style={{ display: "flex", alignItems: "center", gap: 2, paddingBottom: 5, flexShrink: 0 }}
+        >
           <button
             type="button"
-            className={`iab-chrome-btn iab-annotate-toggle ${annotate ? "active" : ""}`}
-            aria-pressed={annotate}
-            title={
-              canAnnotate
-                ? "Annotate mode: click or drag on docs, images, or 3D models to drop pins"
-                : "Annotate is available on Docs, Images, and 3D Models"
-            }
-            disabled={!canAnnotate}
-            onClick={onToggleAnnotate}
-            style={{
-              ...iconBtnStyle,
-              width: "auto",
-              gap: 4,
-              padding: "0 8px",
-              fontSize: "var(--text-2xs)",
-              fontWeight: annotate ? "var(--weight-semibold)" : "var(--weight-medium)",
-              color: annotate ? "#FFFFFF" : "var(--ink-secondary)",
-              background: annotate ? "#D95D22" : "transparent",
-              border: annotate ? "1px solid #D95D22" : "1px solid transparent",
-              opacity: canAnnotate ? 1 : 0.4,
-              cursor: canAnnotate ? "pointer" : "not-allowed",
-            }}
+            className={`iab-chrome-btn iab-dock-right ${dockMode === "right" ? "active" : ""}`}
+            aria-label="Dock Right"
+            aria-pressed={dockMode === "right"}
+            title="Dock Right"
+            data-dock-btn="right"
+            onClick={() => onChangeDockMode("right")}
+            style={dockBtnStyle(dockMode === "right")}
           >
-            <Crosshair size={12} strokeWidth={1.7} />
-            <span>Annotate</span>
+            <PanelRight size={13} strokeWidth={1.6} />
           </button>
 
           <button
             type="button"
-            className={`iab-chrome-btn iab-pins-btn ${pinsOpen ? "active" : ""}`}
-            aria-expanded={pinsOpen}
-            title="Review annotations on this file"
-            onClick={onTogglePins}
-            style={{
-              ...iconBtnStyle,
-              width: "auto",
-              gap: 4,
-              padding: "0 8px",
-              fontSize: "var(--text-2xs)",
-              color: pinsCount > 0 ? "var(--ink-primary)" : "var(--ink-muted)",
-              background: pinsOpen ? "var(--bg-active)" : "transparent",
-              border: pinsOpen ? "1px solid var(--border-strong)" : "1px solid transparent",
-            }}
+            className={`iab-chrome-btn iab-dock-bottom ${dockMode === "bottom" ? "active" : ""}`}
+            aria-label="Dock Bottom"
+            aria-pressed={dockMode === "bottom"}
+            title="Dock Bottom"
+            data-dock-btn="bottom"
+            onClick={() => onChangeDockMode("bottom")}
+            style={dockBtnStyle(dockMode === "bottom")}
           >
-            <Pin size={12} strokeWidth={1.6} color={pinsCount > 0 ? "#D95D22" : "currentColor"} />
-            <span>Pins ({pinsCount})</span>
+            <PanelBottom size={13} strokeWidth={1.6} />
           </button>
 
           <button
             type="button"
-            className="iab-chrome-btn iab-expand"
-            aria-label={expanded ? "Restore browser size" : "Expand browser"}
-            title={expanded ? "Restore" : "Expand"}
-            onClick={onToggleExpand}
-            style={iconBtnStyle}
+            className={`iab-chrome-btn iab-dock-float ${dockMode === "float" ? "active" : ""}`}
+            aria-label="Float"
+            aria-pressed={dockMode === "float"}
+            title="Float Window"
+            data-dock-btn="float"
+            onClick={() => onChangeDockMode("float")}
+            style={dockBtnStyle(dockMode === "float")}
           >
-            {expanded ? <Minimize2 size={13} strokeWidth={1.6} /> : <Maximize2 size={13} strokeWidth={1.6} />}
+            <AppWindow size={13} strokeWidth={1.6} />
+          </button>
+
+          <button
+            type="button"
+            className={`iab-chrome-btn iab-expand ${dockMode === "fullscreen" ? "active" : ""}`}
+            aria-label={dockMode === "fullscreen" ? "Restore browser size" : "Fullscreen"}
+            aria-pressed={dockMode === "fullscreen"}
+            title={dockMode === "fullscreen" ? "Restore" : "Fullscreen"}
+            data-dock-btn="fullscreen"
+            onClick={() => onChangeDockMode(dockMode === "fullscreen" ? "right" : "fullscreen")}
+            style={dockBtnStyle(dockMode === "fullscreen")}
+          >
+            {dockMode === "fullscreen" ? (
+              <Minimize2 size={13} strokeWidth={1.6} />
+            ) : (
+              <Maximize2 size={13} strokeWidth={1.6} />
+            )}
           </button>
 
           <button
@@ -676,7 +694,7 @@ export function BrowserChrome({
           display: "flex",
           alignItems: "center",
           gap: 4,
-          background: "#FFFFFF",
+          background: "var(--bg-canvas)",
           borderBottom: "1px solid var(--border-subtle)",
           padding: "0 8px",
         }}
@@ -736,7 +754,7 @@ export function BrowserChrome({
               : omniboxFeedback
                 ? "1px solid var(--status-warning-border)"
                 : "1px solid var(--border-subtle)",
-            background: omniboxEditing ? "#FFFFFF" : "#F5F5F5",
+            background: omniboxEditing ? "var(--bg-canvas)" : "var(--bg-surface-subtle)",
             cursor: omniboxEditing ? "text" : "pointer",
             overflow: "hidden",
           }}
@@ -806,7 +824,9 @@ export function BrowserChrome({
               {segments.map((seg, idx) => {
                 const isLast = idx === segments.length - 1;
                 const isFolderPrefix =
-                  !isLast && (activeTab.kind === "code" || activeTab.kind === "doc") && !(activeTab.kind === "code" && idx === 0);
+                  !isLast &&
+                  (activeTab.kind === "code" || activeTab.kind === "doc") &&
+                  !(activeTab.kind === "code" && idx === 0);
                 return (
                   <span
                     key={`${seg}-${idx}`}
@@ -818,7 +838,9 @@ export function BrowserChrome({
                       flexShrink: isLast ? 1 : 0,
                     }}
                   >
-                    {idx > 0 && <ChevronRight size={11} strokeWidth={1.6} color="var(--ink-faint)" style={{ flexShrink: 0 }} />}
+                    {idx > 0 && (
+                      <ChevronRight size={11} strokeWidth={1.6} color="var(--ink-faint)" style={{ flexShrink: 0 }} />
+                    )}
                     <button
                       type="button"
                       onClick={(e) => {
@@ -868,7 +890,7 @@ export function BrowserChrome({
               gap: 2,
               padding: 2,
               borderRadius: "var(--radius-md)",
-              background: "#F5F5F5",
+              background: "var(--bg-surface-subtle)",
               border: "1px solid var(--border-hairline)",
               flexShrink: 0,
             }}
@@ -887,9 +909,9 @@ export function BrowserChrome({
                     padding: "2px 7px",
                     fontSize: "var(--text-2xs)",
                     fontWeight: selected ? "var(--weight-semibold)" : "var(--weight-medium)",
-                    background: selected ? "#FFFFFF" : "transparent",
+                    background: selected ? "var(--bg-elevated, var(--bg-canvas))" : "transparent",
                     color: selected ? "var(--ink-primary)" : "var(--ink-muted)",
-                    boxShadow: selected ? "0 1px 2px rgba(23,23,23,0.06)" : "none",
+                    boxShadow: selected ? "0 1px 2px rgba(0, 0, 0, 0.14)" : "none",
                     cursor: "pointer",
                   }}
                 >
@@ -911,7 +933,7 @@ export function BrowserChrome({
               gap: 2,
               padding: 2,
               borderRadius: "var(--radius-md)",
-              background: "#F5F5F5",
+              background: "var(--bg-surface-subtle)",
               border: "1px solid var(--border-hairline)",
               flexShrink: 0,
             }}
@@ -930,9 +952,9 @@ export function BrowserChrome({
                     padding: "2px 7px",
                     fontSize: "var(--text-2xs)",
                     fontWeight: selected ? "var(--weight-semibold)" : "var(--weight-medium)",
-                    background: selected ? "#FFFFFF" : "transparent",
+                    background: selected ? "var(--bg-elevated, var(--bg-canvas))" : "transparent",
                     color: selected ? "var(--ink-primary)" : "var(--ink-muted)",
-                    boxShadow: selected ? "0 1px 2px rgba(23,23,23,0.06)" : "none",
+                    boxShadow: selected ? "0 1px 2px rgba(0, 0, 0, 0.14)" : "none",
                     cursor: "pointer",
                   }}
                 >
@@ -950,8 +972,8 @@ export function BrowserChrome({
                 padding: "2px 7px",
                 fontSize: "var(--text-2xs)",
                 fontWeight: model3dWireframe ? "var(--weight-semibold)" : "var(--weight-medium)",
-                background: model3dWireframe ? "#FFF7F2" : "transparent",
-                color: model3dWireframe ? "#D95D22" : "var(--ink-muted)",
+                background: model3dWireframe ? "var(--accent-orange-soft)" : "transparent",
+                color: model3dWireframe ? "var(--accent-orange)" : "var(--ink-muted)",
                 cursor: "pointer",
               }}
             >
@@ -1020,8 +1042,8 @@ export function BrowserChrome({
               maxWidth: "calc(100% - 16px)",
               maxHeight: 440,
               overflowY: "auto",
-              background: "#FFFFFF",
-              border: "1px solid var(--border-hairline)",
+              background: "var(--bg-elevated, var(--bg-canvas))",
+              border: "1px solid var(--border-strong)",
               borderRadius: "var(--radius-lg)",
               boxShadow: "var(--shadow-popover)",
               zIndex: 31,
@@ -1077,7 +1099,7 @@ export function BrowserChrome({
                   padding: "4px 8px",
                   marginBottom: 4,
                   borderRadius: "var(--radius-sm)",
-                  background: "#F5F5F5",
+                  background: "var(--bg-surface-subtle)",
                   border: "1px solid var(--border-subtle)",
                 }}
               >
@@ -1133,7 +1155,7 @@ export function BrowserChrome({
                   gap: 6,
                   padding: "4px 8px",
                   borderRadius: "var(--radius-sm)",
-                  background: "#F5F5F5",
+                  background: "var(--bg-surface-subtle)",
                   border: "1px solid var(--border-subtle)",
                 }}
               >
@@ -1164,11 +1186,7 @@ export function BrowserChrome({
                     padding: 0,
                   }}
                 />
-                <button
-                  type="button"
-                  className="btn xs primary"
-                  onClick={() => openWebDraft(webUrlDraft)}
-                >
+                <button type="button" className="btn xs primary" onClick={() => openWebDraft(webUrlDraft)}>
                   Open
                 </button>
               </div>

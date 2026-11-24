@@ -29,7 +29,7 @@ import {
   type VerificationVerdict,
 } from "@bot-factory/shared";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export interface OutboxEffectRow {
   id: string;
@@ -246,7 +246,7 @@ export class StateDatabase {
       CREATE TABLE IF NOT EXISTS runtime_meta (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         epoch INTEGER NOT NULL DEFAULT 0,
-        schema_version INTEGER NOT NULL DEFAULT 2,
+        schema_version INTEGER NOT NULL DEFAULT 3,
         instance_id TEXT NOT NULL,
         daemon_pid INTEGER NOT NULL,
         fts_stale INTEGER NOT NULL DEFAULT 0,
@@ -317,6 +317,8 @@ export class StateDatabase {
         seq INTEGER NOT NULL,
         kind TEXT NOT NULL DEFAULT 'message',
         role TEXT NOT NULL,
+        sender_agent_id TEXT,
+        sender_role TEXT,
         title TEXT,
         content TEXT NOT NULL,
         tool_call_id TEXT,
@@ -550,6 +552,10 @@ export class StateDatabase {
     this.ensureColumn("agents", "subagent_mode", "TEXT");
     this.ensureColumn("tasks", "depends_on_json", "TEXT NOT NULL DEFAULT '[]'");
     this.ensureColumn("tasks", "auto_retry_count", "INTEGER NOT NULL DEFAULT 0");
+
+    // Idempotent v3 column upgrades for pre-existing v1/v2 databases
+    this.ensureColumn("messages", "sender_agent_id", "TEXT");
+    this.ensureColumn("messages", "sender_role", "TEXT");
 
     // Recreate live_memory_facts view cleanly for epoch-ms forget_after comparisons
     this.db.exec(`
@@ -1003,6 +1009,20 @@ export class StateDatabase {
       .run(status, setPid, pidVal, opts?.lastSummary ?? null, Date.now(), id);
   }
 
+  public updateAgentModel(
+    agentId: string,
+    provider: string,
+    model: string,
+    runtimeType: RuntimeKind,
+  ): AgentRecord | null {
+    return this.runAtomicWrite(() => {
+      const row = this.db
+        .query("UPDATE agents SET provider = ?, model = ?, runtime_type = ?, updated_at = ? WHERE id = ? RETURNING *")
+        .get(provider, model, runtimeType, Date.now(), agentId) as Record<string, unknown> | null;
+      return row ? this.mapAgent(row) : null;
+    });
+  }
+
   private mapAgent(r: Record<string, unknown>): AgentRecord {
     return {
       id: String(r.id),
@@ -1276,8 +1296,8 @@ export class StateDatabase {
     item.seq = seq;
     this.db
       .query(
-        `INSERT INTO messages (id, session_id, agent_id, seq, kind, role, title, content, tool_call_id, tool_status, exit_code, file_path, diff_preview, checkpoint_ref, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, session_id, agent_id, seq, kind, role, sender_agent_id, sender_role, title, content, tool_call_id, tool_status, exit_code, file_path, diff_preview, checkpoint_ref, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         item.id,
@@ -1286,6 +1306,8 @@ export class StateDatabase {
         seq,
         item.kind,
         item.role,
+        item.senderAgentId ?? null,
+        item.senderRole ?? null,
         item.title ?? null,
         item.content,
         item.toolCallId ?? null,
@@ -1298,6 +1320,33 @@ export class StateDatabase {
       );
   }
 
+  public upsertToolCallMessage(item: TimelineItem): void {
+    this.assertWritable();
+    if (item.kind === "tool_call" && item.toolCallId) {
+      const existing = this.db
+        .query(
+          "SELECT id FROM messages WHERE session_id = ? AND tool_call_id = ? AND kind = 'tool_call' AND tool_status = 'in_progress' ORDER BY seq DESC LIMIT 1",
+        )
+        .get(item.sessionId, item.toolCallId) as { id: string } | null;
+      if (existing) {
+        this.db.query("DELETE FROM messages WHERE id = ?").run(existing.id);
+      }
+    }
+    this.appendMessage(item);
+  }
+
+  public getMessage(id: string): TimelineItem | null {
+    const r = this.db.query("SELECT * FROM messages WHERE id = ?").get(id) as Record<string, unknown> | null;
+    return r ? this.mapTimelineItem(r) : null;
+  }
+
+  public listMessages(sessionId: string, limit = 150): TimelineItem[] {
+    const rows = this.db
+      .query("SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC LIMIT ?")
+      .all(sessionId, limit) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapTimelineItem(r));
+  }
+
   public listAgentTimeline(agentId: string, limit = 150): TimelineItem[] {
     const rows = this.db
       .query("SELECT * FROM messages WHERE agent_id = ? ORDER BY created_at DESC, seq DESC LIMIT ?")
@@ -1305,10 +1354,21 @@ export class StateDatabase {
     return rows.reverse().map((r) => this.mapTimelineItem(r));
   }
 
-  public listActiveSessionMessages(sessionId: string, limit = 100): TimelineItem[] {
+  public listActiveSessionMessages(
+    sessionId: string,
+    limit = 100,
+    opts?: { kinds?: Array<TimelineItem["kind"]> },
+  ): TimelineItem[] {
+    const kinds =
+      opts?.kinds && opts.kinds.length > 0
+        ? opts.kinds
+        : (["message", "status"] as Array<TimelineItem["kind"]>);
+    const placeholders = kinds.map(() => "?").join(", ");
     const rows = this.db
-      .query("SELECT * FROM messages WHERE session_id = ? AND active = 1 ORDER BY seq DESC LIMIT ?")
-      .all(sessionId, limit) as Array<Record<string, unknown>>;
+      .query(
+        `SELECT * FROM messages WHERE session_id = ? AND active = 1 AND kind IN (${placeholders}) ORDER BY seq DESC LIMIT ?`,
+      )
+      .all(sessionId, ...kinds, limit) as Array<Record<string, unknown>>;
     return rows.reverse().map((r) => this.mapTimelineItem(r));
   }
 
@@ -1320,6 +1380,8 @@ export class StateDatabase {
       seq: Number(r.seq),
       kind: String(r.kind) as TimelineItem["kind"],
       role: String(r.role) as TimelineItem["role"],
+      senderAgentId: r.sender_agent_id !== null && r.sender_agent_id !== undefined ? String(r.sender_agent_id) : null,
+      senderRole: r.sender_role ? (String(r.sender_role) as TimelineItem["senderRole"]) : undefined,
       title: r.title ? String(r.title) : undefined,
       content: String(r.content),
       toolCallId: r.tool_call_id ? String(r.tool_call_id) : undefined,

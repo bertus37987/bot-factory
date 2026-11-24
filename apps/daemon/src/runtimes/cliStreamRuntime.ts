@@ -256,6 +256,11 @@ export class CliStreamRuntime implements AgentRuntime {
     const state = this.sessions.get(sessionId);
     if (!state || state.stopping || state.closed) return false;
     if (!state.proc) return true;
+    // Codex uses per-turn `codex exec` / `codex exec resume` subprocesses;
+    // clean exit (code 0) keeps the logical session alive across turns.
+    if (state.adapter === "codex" && state.proc.exitCode === 0 && !state.proc.killed) {
+      return true;
+    }
     return state.proc.exitCode === null && !state.proc.killed;
   }
 
@@ -538,6 +543,7 @@ export class CliStreamRuntime implements AgentRuntime {
       state.turnAbortedMode = null;
       state.accumulatedText = "";
       state.sawStreamDeltaInMsg = false;
+      state.toolNamesById.clear();
       state.emittedDoneOrError = false;
 
       const idleTimeoutMs = this.getTurnIdleTimeoutMs();
@@ -664,6 +670,9 @@ export class CliStreamRuntime implements AgentRuntime {
                 message: this.scrubber.scrub(`codex_exec_exited(${code})`),
               });
             }
+          }
+          if (code === 0 && state.proc === proc) {
+            state.proc = null;
           }
         });
       }
@@ -972,6 +981,10 @@ export class CliStreamRuntime implements AgentRuntime {
         this.pushEvent(state, { type: "thought", text: this.scrubber.scrub(item.text) });
       } else if (itemType === "agent_message" && typeof item.text === "string" && item.text) {
         const clean = this.scrubber.scrub(item.text);
+        if (state.accumulatedText.length > 0 && !state.accumulatedText.endsWith("\n")) {
+          state.accumulatedText += "\n\n";
+          this.pushEvent(state, { type: "text_delta", text: "\n\n" });
+        }
         state.accumulatedText += clean;
         this.pushEvent(state, { type: "text_delta", text: clean });
       } else if (itemType === "command_execution") {

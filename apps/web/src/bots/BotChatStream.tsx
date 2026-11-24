@@ -15,6 +15,7 @@ import {
   BotAvatar,
   GroupAvatarCluster,
   JobTitlePill,
+  ROLE_META,
   resolveBotRole,
   type ResolvedBotMeta,
 } from "../components/BotAvatars";
@@ -31,6 +32,7 @@ export interface BotChatStreamProps {
   mode: "single" | "group";
   project: ProjectRecord;
   activeAgent: AgentRecord | null;
+  metaAgentId?: string | null;
   agents: AgentRecord[];
   timeline: TimelineItem[];
   streamingBotTextByAgent: Record<string, string>;
@@ -175,6 +177,7 @@ export function BotChatStream({
   mode,
   project,
   activeAgent,
+  metaAgentId,
   agents,
   timeline,
   streamingBotTextByAgent,
@@ -278,14 +281,11 @@ export function BotChatStream({
     return { human: false, name: agent.name, meta, agent };
   };
 
-  // Grok-Bot Multi-Side Alignment:
-  // Right: You (user/steer) & Team Lead (scope === "project")
-  // Left: Specialist Engineering Bots (peer/sidekick) & Verifier (verifier)
+  // Classic Messenger Multi-Role Alignment:
+  // Right: You (user / steer)
+  // Left: Main Agent (Orchestrator) & all Engineering Bots / Subagent Cubs
   const sideFor = (speaker: SpeakerInfo): "left" | "right" => {
-    if (speaker.human) return "right";
-    if (mode === "single") return "left";
-    if (speaker.agent?.scope === "project") return "right";
-    return "left";
+    return speaker.human ? "right" : "left";
   };
 
   const feed = useMemo<FeedNode[]>(() => {
@@ -368,55 +368,85 @@ export function BotChatStream({
             ts: ev.ts,
             text: `Handoff -> ${item.title ?? item.content}`,
           });
-        } else if (item.role === "system" && item.kind !== "steer") {
-          nodes.push({ kind: "system", key: `sys-${item.id}`, ts: ev.ts, text: item.content });
         } else {
-          const isHuman = item.role === "user" || item.kind === "steer";
-          const speaker = speakerFor(item.agentId, isHuman, item.kind === "steer");
-          const mentioned = extractMentionedAgents(item.content, agents);
+          const isOrchestrator =
+            item.senderRole === "orchestrator" ||
+            Boolean(metaAgentId && item.senderAgentId === metaAgentId) ||
+            Boolean(item.title?.startsWith("Main Manager Delegation"));
 
-          let replyQuote: ReplyQuoteInfo | undefined;
-          if (item.kind === "steer" && teamLead) {
-            replyQuote = {
-              targetAgentId: teamLead.id,
-              label: `Steer -> @${teamLead.name}`,
-            };
-          } else if (mentioned.length > 0) {
-            const firstTarget = mentioned[0]!;
-            const prevMsg = lastMessageBySpeaker.get(firstTarget.id);
-            replyQuote = {
-              targetAgentId: firstTarget.id,
-              label: prevMsg
-                ? `${firstTarget.name}: "${prevMsg.snippet}"`
-                : `Directed to @${firstTarget.name}`,
-            };
-          } else if (speaker.agent?.parentAgentId && speaker.agent.scope === "sidekick") {
-            const parent = agentById.get(speaker.agent.parentAgentId);
-            if (parent) {
-              replyQuote = {
-                targetAgentId: parent.id,
-                label: `Subagent reporting to ${parent.name}`,
-              };
+          if (!isOrchestrator && item.role === "system" && item.kind !== "steer") {
+            nodes.push({ kind: "system", key: `sys-${item.id}`, ts: ev.ts, text: item.content });
+          } else {
+            const isHuman =
+              !isOrchestrator &&
+              (item.senderRole === "user" || item.role === "user" || item.kind === "steer");
+            const targetBot = agentById.get(item.agentId) ?? activeAgent;
+            const speaker: SpeakerInfo = isOrchestrator
+              ? {
+                  human: false,
+                  name: "Main Agent",
+                  meta: { role: "orchestrator", ...ROLE_META.orchestrator },
+                  agent: null,
+                }
+              : speakerFor(item.senderAgentId ?? item.agentId, isHuman, item.kind === "steer");
+
+            const mentioned = extractMentionedAgents(item.content, agents);
+            let eyebrow: string | undefined;
+            if (isOrchestrator) {
+              eyebrow = targetBot
+                ? `Orchestrator -> ${targetBot.name}`
+                : item.title || "Orchestrator -> Target Bot";
             }
-          }
 
-          const snippet = item.content.replace(/\s+/g, " ").trim().slice(0, 76);
-          if (speaker.agent && snippet) {
-            lastMessageBySpeaker.set(speaker.agent.id, { name: speaker.name, snippet });
-          }
+            let replyQuote: ReplyQuoteInfo | undefined;
+            if (isOrchestrator && item.title?.startsWith("Main Manager Delegation")) {
+              replyQuote = {
+                targetAgentId: targetBot?.id,
+                label: item.title,
+              };
+            } else if (item.kind === "steer" && teamLead) {
+              replyQuote = {
+                targetAgentId: teamLead.id,
+                label: `Steer -> @${teamLead.name}`,
+              };
+            } else if (mentioned.length > 0) {
+              const firstTarget = mentioned[0]!;
+              const prevMsg = lastMessageBySpeaker.get(firstTarget.id);
+              replyQuote = {
+                targetAgentId: firstTarget.id,
+                label: prevMsg
+                  ? `${firstTarget.name}: "${prevMsg.snippet}"`
+                  : `Directed to @${firstTarget.name}`,
+              };
+            } else if (speaker.agent?.parentAgentId && speaker.agent.scope === "sidekick") {
+              const parent = agentById.get(speaker.agent.parentAgentId);
+              if (parent) {
+                replyQuote = {
+                  targetAgentId: parent.id,
+                  label: `Subagent reporting to ${parent.name}`,
+                };
+              }
+            }
 
-          nodes.push({
-            kind: "msg",
-            key: `msg-${item.id}`,
-            ts: ev.ts,
-            side: sideFor(speaker),
-            speaker,
-            text: item.content,
-            replyQuote,
-            diffAgentId: item.agentId,
-            hasDiff: Boolean(item.diffPreview),
-            filePath: item.filePath,
-          });
+            const snippet = item.content.replace(/\s+/g, " ").trim().slice(0, 76);
+            if (speaker.agent && snippet) {
+              lastMessageBySpeaker.set(speaker.agent.id, { name: speaker.name, snippet });
+            }
+
+            nodes.push({
+              kind: "msg",
+              key: `msg-${item.id}`,
+              ts: ev.ts,
+              side: sideFor(speaker),
+              speaker,
+              text: item.content,
+              eyebrow,
+              replyQuote,
+              diffAgentId: item.agentId,
+              hasDiff: Boolean(item.diffPreview),
+              filePath: item.filePath,
+            });
+          }
         }
         continue;
       }
@@ -448,7 +478,7 @@ export function BotChatStream({
     flushTrace();
     return nodes;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeline, debates, debateMessages, scopedVerifications, scopedArtifacts, mode, agentById, activeAgent, agents, teamLead]);
+  }, [timeline, debates, debateMessages, scopedVerifications, scopedArtifacts, mode, agentById, activeAgent, agents, teamLead, metaAgentId]);
 
   // Active streaming bubbles
   const streamingEntries = useMemo(() => {
@@ -544,25 +574,28 @@ export function BotChatStream({
           const referencedArtifact = node.filePath
             ? artifacts.find((a) => a.relativePath === node.filePath) ?? null
             : null;
+          const bubbleRoleClass = !speaker.human && speaker.meta ? `role-${speaker.meta.role}` : "";
 
           return (
             <div
               key={node.key}
-              className={`group-msg-row ${node.side === "right" ? "side-right" : "side-left"}`}
+              className={`group-msg-row ${node.side === "right" ? "side-right msg-side-right" : "side-left msg-side-left"}`}
             >
               {!speaker.human &&
                 (speaker.meta ? (
                   <button
                     type="button"
                     onClick={() => speaker.agent && onSelectBot?.(speaker.agent.id)}
-                    title={`Open ${speaker.name} timeline`}
+                    title={
+                      speaker.agent
+                        ? `Open ${speaker.name} timeline`
+                        : `${speaker.name} (${speaker.meta.jobTitle})`
+                    }
                     style={{
                       padding: 0,
                       border: "none",
                       background: "transparent",
-                      borderRadius: "9999px",
-                      overflow: "hidden",
-                      cursor: onSelectBot ? "pointer" : "default",
+                      cursor: speaker.agent && onSelectBot ? "pointer" : "default",
                       flexShrink: 0,
                       display: "inline-flex",
                     }}
@@ -571,6 +604,8 @@ export function BotChatStream({
                       role={speaker.meta.role}
                       size={30}
                       active={speaker.agent?.status === "working"}
+                      agentStatus={speaker.agent?.status}
+                      seed={speaker.agent?.id ?? speaker.meta.role}
                     />
                   </button>
                 ) : (
@@ -585,7 +620,12 @@ export function BotChatStream({
                   {!speaker.human && (speaker.meta || speaker.agent) && (
                     <JobTitlePill
                       label={roleLabel(speaker.meta, speaker.agent)}
-                      tone={speaker.agent?.scope === "project" ? "accent" : "neutral"}
+                      role={speaker.meta?.role}
+                      tone={
+                        speaker.meta?.role === "orchestrator" || speaker.agent?.scope === "project"
+                          ? "accent"
+                          : "neutral"
+                      }
                     />
                   )}
                   {node.eyebrow && <span className="bcs-msg-eyebrow">{node.eyebrow}</span>}
@@ -618,7 +658,7 @@ export function BotChatStream({
                   </div>
                 )}
 
-                <div className={`bcs-bubble ${speaker.human ? "human" : "bot"}`}>
+                <div className={`bcs-bubble ${speaker.human ? "human" : `bot ${bubbleRoleClass}`.trim()}`}>
                   {speaker.human ? (
                     <div style={{ whiteSpace: "pre-wrap" }}>{node.text}</div>
                   ) : (
@@ -768,12 +808,19 @@ export function BotChatStream({
         } catch {
           meta = null;
         }
-        const side = mode === "group" && agent.scope === "project" ? "side-right" : "side-left";
+        const side = "side-left msg-side-left";
+        const streamRoleClass = meta ? `role-${meta.role}` : "";
         return (
           <div key={`stream-${agent.id}`} className={`group-msg-row ${side}`}>
             {meta ? (
-              <span style={{ borderRadius: "9999px", overflow: "hidden", display: "inline-flex", flexShrink: 0 }}>
-                <BotAvatar role={meta.role} size={30} active />
+              <span style={{ display: "inline-flex", flexShrink: 0 }}>
+                <BotAvatar
+                  role={meta.role}
+                  size={30}
+                  active
+                  agentStatus={agent.status}
+                  seed={agent.id}
+                />
               </span>
             ) : (
               <span className="bcs-avatar-fallback" style={{ borderRadius: "9999px" }}>
@@ -785,6 +832,7 @@ export function BotChatStream({
                 <span className="bcs-msg-name">{agent.name}</span>
                 <JobTitlePill
                   label={roleLabel(meta, agent)}
+                  role={meta?.role}
                   tone={agent.scope === "project" ? "accent" : "neutral"}
                 />
                 <BotThinkingOrb activity={text ? "composing" : "solving"} size={20} shell={false} />
@@ -794,7 +842,7 @@ export function BotChatStream({
                 <div className="chat-thought-pill">{thought}</div>
               )}
               {text.trim().length > 0 && (
-                <div className="bcs-bubble bot">
+                <div className={`bcs-bubble bot ${streamRoleClass}`.trim()}>
                   <MarkdownRenderer content={text} />
                 </div>
               )}
@@ -912,8 +960,14 @@ export function BotChatStream({
         return (
           <div key={a.id} className="bcs-live">
             {liveMeta ? (
-              <span style={{ borderRadius: "9999px", overflow: "hidden", display: "inline-flex", flexShrink: 0 }}>
-                <BotAvatar role={liveMeta.role} size={28} active />
+              <span style={{ display: "inline-flex", flexShrink: 0 }}>
+                <BotAvatar
+                  role={liveMeta.role}
+                  size={28}
+                  active
+                  agentStatus={a.status}
+                  seed={a.id}
+                />
               </span>
             ) : (
               <span className="bcs-avatar-fallback" style={{ borderRadius: "9999px" }}>

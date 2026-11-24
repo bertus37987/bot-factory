@@ -14,6 +14,7 @@ import type { CommandCore } from "../core/commandCore";
 import type { StateDatabase } from "../db/database";
 import {
   cleanupSubagentWorktree,
+  computeSubagentWorktreeDiffSummarySync,
   createSubagentWorktree,
   extractAndApplySubagentPatch,
   removeBotWorktree,
@@ -39,6 +40,19 @@ export interface SubagentEngineCallbacks {
   revokeMcpTokensForAgent: (agentId: string) => void;
 }
 
+export type SubagentEnvelopeStatus = "running" | "completed" | "failed" | "stopped" | "paused" | "timed_out";
+
+export interface SubagentResultEnvelope {
+  subagent: AgentRecord;
+  status: SubagentEnvelopeStatus;
+  summary: string;
+  error: string | null;
+  filesTouched: string[];
+  diffStat: string | null;
+  timedOut: boolean;
+  latestOutput: string | null;
+}
+
 const DEFAULT_WAIT_TIMEOUT_MS = 60_000;
 const MIN_WAIT_TIMEOUT_MS = 100;
 const MAX_WAIT_TIMEOUT_MS = 300_000;
@@ -46,6 +60,8 @@ const MAX_WAIT_TIMEOUT_MS = 300_000;
 export class SubagentManager {
   private readonly pendingTurns = new Map<string, number>();
   private readonly waiters = new Map<string, Set<() => void>>();
+  private readonly lastTurnErrors = new Map<string, string>();
+  private readonly cachedDiffSummaries = new Map<string, { filesTouched: string[]; diffStat: string | null }>();
 
   constructor(
     private readonly runtimeCfg: LoadedRuntimeConfig,
@@ -101,6 +117,72 @@ export class SubagentManager {
       }
     }
     return null;
+  }
+
+  private getLatestErrorText(subagentId: string): string | null {
+    const cached = this.lastTurnErrors.get(subagentId);
+    if (cached) return cached;
+    const items = this.db.listAgentTimeline(subagentId, 25);
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const item = items[i]!;
+      if (item.kind === "status" && /failed|error/i.test(item.title ?? "")) {
+        return item.content;
+      }
+    }
+    return null;
+  }
+
+  private resolveDiffStatsForSubagent(subagent: AgentRecord): { filesTouched: string[]; diffStat: string | null } {
+    if (subagent.subagentMode === "code" && subagent.worktreePath) {
+      const parent = subagent.parentAgentId ? this.db.getAgent(subagent.parentAgentId) : null;
+      const project = subagent.projectId ? this.db.getProject(subagent.projectId) : null;
+      const parentWt = parent?.worktreePath ?? project?.repoPath ?? "";
+      if (parentWt) {
+        const live = computeSubagentWorktreeDiffSummarySync({
+          parentWorktreePath: parentWt,
+          childWorktreePath: subagent.worktreePath,
+          childBranch: subagent.worktreeBranch,
+        });
+        this.cachedDiffSummaries.set(subagent.id, live);
+        return live;
+      }
+    }
+    return this.cachedDiffSummaries.get(subagent.id) ?? { filesTouched: [], diffStat: null };
+  }
+
+  private buildEnvelope(subagent: AgentRecord, timedOut: boolean): SubagentResultEnvelope {
+    const latestOutput = this.getLatestAssistantOutput(subagent.id);
+    const isRunning = subagent.status === "working" || (this.pendingTurns.get(subagent.id) ?? 0) > 0;
+    const status: SubagentEnvelopeStatus = timedOut
+      ? "timed_out"
+      : isRunning
+        ? "running"
+        : subagent.status === "error"
+          ? "failed"
+          : subagent.status === "stopped"
+            ? "stopped"
+            : subagent.status === "paused"
+              ? "paused"
+              : "completed";
+    const error =
+      status === "failed"
+        ? this.scrubber.scrub(this.getLatestErrorText(subagent.id) ?? subagent.lastSummary ?? "Subagent turn failed")
+        : null;
+    const { filesTouched, diffStat } = this.resolveDiffStatsForSubagent(subagent);
+    const summarySource = error ?? latestOutput ?? subagent.lastSummary ?? "";
+    const summary = this.scrubber.scrub(
+      summarySource.length > 800 ? `${summarySource.slice(0, 800)}…` : summarySource,
+    );
+    return {
+      subagent,
+      status,
+      summary,
+      error,
+      filesTouched,
+      diffStat: diffStat ? this.scrubber.scrub(diffStat) : null,
+      timedOut,
+      latestOutput,
+    };
   }
 
   public async spawnSubagent(params: {
@@ -311,6 +393,7 @@ export class SubagentManager {
         return;
       }
 
+      this.lastTurnErrors.delete(subagent.id);
       const autonomyLevel: AutonomyLevel = subagent.autonomyLevel ?? (subagent.subagentMode === "code" ? "high" : "spec");
       const turn = await this.callbacks.runAgentTurn(subagent.id, payload.prompt, {
         emitTopic: `bot:${subagent.id}:timeline`,
@@ -321,6 +404,24 @@ export class SubagentManager {
 
       const latestSub = this.db.getAgent(subagent.id);
       if (!latestSub || latestSub.status === "stopped" || latestSub.status === "paused") return;
+
+      if (!turn.ok) {
+        this.lastTurnErrors.set(subagent.id, this.scrubber.scrub(turn.error ?? "Subagent error"));
+      } else {
+        this.lastTurnErrors.delete(subagent.id);
+      }
+      if (latestSub.subagentMode === "code" && latestSub.worktreePath) {
+        const parentForDiff = this.db.getAgent(payload.parentAgentId);
+        const parentWt = parentForDiff?.worktreePath ?? project.repoPath;
+        this.cachedDiffSummaries.set(
+          subagent.id,
+          computeSubagentWorktreeDiffSummarySync({
+            parentWorktreePath: parentWt,
+            childWorktreePath: latestSub.worktreePath,
+            childBranch: latestSub.worktreeBranch,
+          }),
+        );
+      }
 
       const parent = this.db.getAgent(payload.parentAgentId);
       if (parent && parent.activeSessionId) {
@@ -361,18 +462,24 @@ export class SubagentManager {
   public getStatus(parentAgentId: string, subagentId?: string) {
     if (subagentId) {
       const { subagent } = this.assertOwnedSidekick(parentAgentId, subagentId);
-      return {
-        subagent,
-        latestOutput: this.getLatestAssistantOutput(subagent.id),
-      };
+      return this.buildEnvelope(subagent, false);
     }
     const subagents = this.db
       .listAgents()
       .filter((a) => a.scope === "sidekick" && a.parentAgentId === parentAgentId)
-      .map((sub) => ({
-        ...sub,
-        latestOutput: this.getLatestAssistantOutput(sub.id),
-      }));
+      .map((sub) => {
+        const env = this.buildEnvelope(sub, false);
+        return {
+          ...sub,
+          envelopeStatus: env.status,
+          summary: env.summary,
+          error: env.error,
+          filesTouched: env.filesTouched,
+          diffStat: env.diffStat,
+          timedOut: false,
+          latestOutput: env.latestOutput,
+        };
+      });
     return { subagents };
   }
 
@@ -380,7 +487,7 @@ export class SubagentManager {
     parentAgentId: string,
     subagentId: string,
     timeoutMs?: number,
-  ): Promise<{ subagent: AgentRecord; timedOut: boolean; latestOutput: string | null }> {
+  ): Promise<SubagentResultEnvelope> {
     this.assertOwnedSidekick(parentAgentId, subagentId);
     const boundedTimeout =
       typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
@@ -433,11 +540,8 @@ export class SubagentManager {
 
     const finalSub = this.db.getAgent(subagentId);
     if (!finalSub) throw new Error("subagent_not_found");
-    return {
-      subagent: finalSub,
-      timedOut: finalSub.status === "working" || (this.pendingTurns.get(subagentId) ?? 0) > 0,
-      latestOutput: this.getLatestAssistantOutput(subagentId),
-    };
+    const timedOut = finalSub.status === "working" || (this.pendingTurns.get(subagentId) ?? 0) > 0;
+    return this.buildEnvelope(finalSub, timedOut);
   }
 
   public messageSubagent(parentAgentId: string, subagentId: string, message: string): { queued: boolean; subagentId: string } {
@@ -464,6 +568,7 @@ export class SubagentManager {
       createdAt: now,
     };
 
+    this.lastTurnErrors.delete(subagent.id);
     this.bumpPendingTurns(subagent.id, 1);
     try {
       this.core.commitCommand(newId("cmd"), "subagent.message", () => ({
@@ -538,17 +643,29 @@ export class SubagentManager {
     const now = Date.now();
 
     if (res.ok) {
+      this.cachedDiffSummaries.set(subagent.id, {
+        filesTouched: res.changedFiles,
+        diffStat: res.changedFiles.length > 0 ? `${res.changedFiles.length} file(s) applied` : null,
+      });
       this.callbacks.revokeMcpTokensForAgent(subagent.id);
       await this.callbacks.abortAndCloseAgentSession(subagent, "hard_stop");
       if (process.platform === "win32" && subagent.pid) {
         await new Promise((r) => setTimeout(r, 50));
       }
       this.pendingTurns.delete(subagent.id);
-      await cleanupSubagentWorktree({
-        repoPath: project.repoPath,
-        worktreePath: subagent.worktreePath,
-        branch: subagent.worktreeBranch,
-      });
+      try {
+        await cleanupSubagentWorktree({
+          repoPath: project.repoPath,
+          worktreePath: subagent.worktreePath,
+          branch: subagent.worktreeBranch,
+        });
+      } catch {
+        try {
+          removeBotWorktree(project.repoPath, subagent.worktreePath);
+        } catch {
+          // Best-effort child worktree removal (Windows EBUSY safety)
+        }
+      }
 
       const timelineItem: TimelineItem | null = parent.activeSessionId
         ? {

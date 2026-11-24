@@ -1,98 +1,142 @@
 /* ==========================================================================
-   Bot-Factory Studio — Design Tokens ("Monochrome Ink" Light + Thinking Orbs)
-   Phase 3.3 Light-Mode Design System
+   Bot-Factory Studio — Design Tokens ("Vanta Black" Default + Crisp Light Mode)
+   Phase 4 V2 Dual-Theme Design System & Per-Role Messenger Palette
    ========================================================================== */
 
-:root {
-  color-scheme: light;
+:root,
+[data-theme="vanta"] {
+  color-scheme: dark;
 
   /* ------------------------------------------------------------------------
-     1. Monochrome Ink Light Palette
+     1. Vanta Black (#000000) Studio Surface & Ink Palette
      ------------------------------------------------------------------------ */
-  --bg-canvas: #ffffff;
-  --bg-surface: #fafafa;
-  --bg-surface-subtle: #f5f5f5;
-  --bg-hover: #f2f2f3;
-  --bg-pill: #f2f2f3;
-  --bg-active: #eaeaeb;
-  --bg-overlay: rgba(23, 23, 23, 0.24);
+  --bg-canvas: #000000;
+  --bg-surface: #07070a;
+  --bg-surface-subtle: #0e0e13;
+  --bg-elevated: #14141b;
+  --bg-hover: #181820;
+  --bg-pill: #15151c;
+  --bg-active: #1f1f29;
+  --bg-overlay: rgba(0, 0, 0, 0.74);
 
   /* Hairline Borders */
-  --border-subtle: #f2f2f2;
-  --border-hairline: #ebebeb;
-  --border-strong: #d9d9dc;
+  --border-subtle: #14141b;
+  --border-hairline: #1e1e27;
+  --border-strong: #2e2e3c;
 
-  /* Ink Typography Scale (WCAG AA compliant on #FFFFFF / #FAFAFA) */
-  --ink-primary: #171717;
-  --ink-secondary: #525252;
-  --ink-muted: #666666;
-  --ink-faint: #737373;
+  /* Ink Typography Scale (High-contrast WCAG AA+ on #000000 / #07070A) */
+  --ink-primary: #f5f5f7;
+  --ink-secondary: #b6b6c4;
+  --ink-muted: #848494;
+  --ink-faint: #646474;
 
-  /* Primary Action (Monochrome Ink) & Warm Burnt-Orange Signature Accent */
-  --action-primary-bg: #171717;
-  --action-primary-hover: #2b2b2b;
-  --action-primary-active: #0a0a0a;
-  --action-primary-fg: #ffffff;
+  /* Primary Action (Crisp Pearl Ink) & Warm Burnt-Orange Signature Accent */
+  --action-primary-bg: #f5f5f7;
+  --action-primary-hover: #ffffff;
+  --action-primary-active: #e2e2e8;
+  --action-primary-fg: #050507;
 
-  /* Burnt-Orange Signature Accent (Effort Slider, Human Bubbles, Beaver Crest) */
-  --accent-orange: #d95d22;
-  --accent-orange-hover: #c24e1a;
-  --accent-orange-soft: #fff7f2;
-  --accent-orange-border: #f5d3bf;
-  --accent-orange-ink: #b84312;
-  --human-bubble-bg: #d95d22;
-  --human-bubble-fg: #ffffff;
+  /* Burnt-Orange Signature Accent */
+  --accent-orange: #e86b2c;
+  --accent-orange-hover: #f27c40;
+  --accent-orange-soft: rgba(232, 107, 44, 0.14);
+  --accent-orange-border: rgba(232, 107, 44, 0.42);
+  --accent-orange-ink: #ff9c66;
+
+  /* Per-Role Messenger Bubble Tokens (High-Contrast Vanta Black) */
+  --bubble-user-bg: #b94815;
+  --bubble-user-border: #e26a2e;
+  --bubble-user-fg: #ffffff;
+
+  --bubble-orch-bg: #261907;
+  --bubble-orch-border: #b87818;
+  --bubble-orch-accent: #f5b041;
+  --bubble-orch-fg: #fff7ea;
+
+  --bubble-lead-bg: #072117;
+  --bubble-lead-border: #1b7a52;
+  --bubble-lead-accent: #34d399;
+  --bubble-lead-fg: #ecfdf5;
+
+  --bubble-builder-bg: #081d2f;
+  --bubble-builder-border: #2171a8;
+  --bubble-builder-accent: #38bdf8;
+  --bubble-builder-fg: #f0f9ff;
+
+  --bubble-artist-bg: #20102e;
+  --bubble-artist-border: #853ec2;
+  --bubble-artist-accent: #c084fc;
+  --bubble-artist-fg: #faf5ff;
+
+  --bubble-research-bg: #072224;
+  --bubble-research-border: #1b7c80;
+  --bubble-research-accent: #2dd4bf;
+  --bubble-research-fg: #f0fdfa;
+
+  --bubble-verifier-bg: #2a1017;
+  --bubble-verifier-border: #a83b58;
+  --bubble-verifier-accent: #fb7185;
+  --bubble-verifier-fg: #fff1f2;
+
+  --bubble-cub-bg: #1c1714;
+  --bubble-cub-border: #8b7355;
+  --bubble-cub-accent: #d4b08c;
+  --bubble-cub-fg: #f7efe7;
+
+  /* Legacy aliases */
+  --human-bubble-bg: var(--bubble-user-bg);
+  --human-bubble-fg: var(--bubble-user-fg);
 
   /* ------------------------------------------------------------------------
-     2. Whisper-Quiet Semantic Status Tokens (Non-Decorative)
+     2. Semantic Status Tokens (Vanta Black High-Contrast)
      ------------------------------------------------------------------------ */
-  --status-active-ink: #1e4e79;
-  --status-active-bg: #f3f6fa;
-  --status-active-border: #dae5f0;
+  --status-active-ink: #67b7ff;
+  --status-active-bg: #0b1e33;
+  --status-active-border: #1b436e;
 
-  --status-success-ink: #165e3d;
-  --status-success-bg: #f2f8f5;
-  --status-success-border: #d6eae0;
+  --status-success-ink: #4ade80;
+  --status-success-bg: #072115;
+  --status-success-border: #175434;
 
-  --status-warning-ink: #8a530b;
-  --status-warning-bg: #fbf7f0;
-  --status-warning-border: #efe0c6;
+  --status-warning-ink: #fbbf24;
+  --status-warning-bg: #261907;
+  --status-warning-border: #6e4810;
 
-  --status-danger-ink: #9e2626;
-  --status-danger-bg: #fcf4f4;
-  --status-danger-border: #f1d6d6;
+  --status-danger-ink: #fb7185;
+  --status-danger-bg: #2a0f16;
+  --status-danger-border: #6f2032;
 
-  /* 3D Studio Stage (Three.js Light Museum Harmony) */
-  --stage-3d-bg: #f5f5f5;
-  --stage-3d-grid: #e3e3e6;
-  --stage-3d-pin-bg: #171717;
-  --stage-3d-pin-fg: #ffffff;
+  /* 3D Studio Stage */
+  --stage-3d-bg: #07070a;
+  --stage-3d-grid: #1e1e27;
+  --stage-3d-pin-bg: #f5f5f7;
+  --stage-3d-pin-fg: #050507;
 
   /* ------------------------------------------------------------------------
-     3. Thinking Orbs — "Smoke & Pearl" Shell & Semantic Shimmers
+     3. Thinking Orbs — Dark Obsidian Shell & Semantic Shimmers
      ------------------------------------------------------------------------ */
-  --orb-ink: #171717;
-  --orb-ink-soft: rgba(23, 23, 23, 0.56);
+  --orb-ink: #f5f5f7;
+  --orb-ink-soft: rgba(245, 245, 247, 0.58);
   --orb-shell-bg: radial-gradient(
     circle at 32% 28%,
-    rgba(255, 255, 255, 0.96) 0%,
-    rgba(246, 246, 247, 0.92) 62%,
-    rgba(236, 236, 239, 0.88) 100%
+    rgba(32, 32, 42, 0.96) 0%,
+    rgba(18, 18, 25, 0.94) 62%,
+    rgba(10, 10, 15, 0.92) 100%
   );
-  --orb-shell-border: rgba(23, 23, 23, 0.09);
-  --orb-shell-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  --orb-shell-border: rgba(245, 245, 247, 0.14);
+  --orb-shell-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 
   /* Resting / Idle quiet ring */
   --orb-idle-size: 8px;
-  --orb-idle-bg: #fafafa;
-  --orb-idle-ring: #c9c9ce;
+  --orb-idle-bg: #14141b;
+  --orb-idle-ring: #3d3d4e;
 
-  /* Whisper-fine semantic shimmers */
-  --orb-shimmer-neutral: rgba(23, 23, 23, 0.08);
-  --orb-shimmer-active: rgba(30, 78, 121, 0.14);
-  --orb-shimmer-success: rgba(22, 94, 61, 0.13);
-  --orb-shimmer-warning: rgba(138, 83, 11, 0.14);
-  --orb-shimmer-danger: rgba(158, 38, 38, 0.15);
+  /* Semantic shimmers */
+  --orb-shimmer-neutral: rgba(245, 245, 247, 0.12);
+  --orb-shimmer-active: rgba(103, 183, 255, 0.22);
+  --orb-shimmer-success: rgba(74, 222, 128, 0.2);
+  --orb-shimmer-warning: rgba(251, 191, 36, 0.22);
+  --orb-shimmer-danger: rgba(251, 113, 133, 0.24);
 
   /* Purpose-tuned canvas dimensions */
   --orb-size-inline: 20px;
@@ -145,11 +189,11 @@
 
   --shadow-none: none;
   --shadow-popover:
-    0 1px 2px rgba(23, 23, 23, 0.04),
-    0 6px 18px -4px rgba(23, 23, 23, 0.07);
+    0 2px 6px rgba(0, 0, 0, 0.55),
+    0 10px 28px -4px rgba(0, 0, 0, 0.78);
   --shadow-modal:
-    0 1px 2px rgba(23, 23, 23, 0.05),
-    0 16px 40px -8px rgba(23, 23, 23, 0.12);
+    0 4px 12px rgba(0, 0, 0, 0.65),
+    0 22px 52px -8px rgba(0, 0, 0, 0.88);
 
   /* Accessible Keyboard Focus Ring */
   --focus-ring: 0 0 0 2px var(--bg-canvas), 0 0 0 3.5px var(--ink-primary);
@@ -197,6 +241,136 @@
 
   /* Scrollbar Tokens */
   --scrollbar-size: 6px;
+  --scrollbar-thumb: rgba(245, 245, 247, 0.16);
+  --scrollbar-thumb-hover: rgba(245, 245, 247, 0.3);
+}
+
+/* ==========================================================================
+   Light Mode Override ("Monochrome Ink" Crisp Pearl)
+   ========================================================================== */
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-canvas: #ffffff;
+  --bg-surface: #fafafa;
+  --bg-surface-subtle: #f5f5f5;
+  --bg-elevated: #ffffff;
+  --bg-hover: #f2f2f3;
+  --bg-pill: #f2f2f3;
+  --bg-active: #eaeaeb;
+  --bg-overlay: rgba(23, 23, 23, 0.24);
+
+  --border-subtle: #f2f2f2;
+  --border-hairline: #ebebeb;
+  --border-strong: #d9d9dc;
+
+  --ink-primary: #171717;
+  --ink-secondary: #525252;
+  --ink-muted: #666666;
+  --ink-faint: #737373;
+
+  --action-primary-bg: #171717;
+  --action-primary-hover: #2b2b2b;
+  --action-primary-active: #0a0a0a;
+  --action-primary-fg: #ffffff;
+
+  --accent-orange: #d95d22;
+  --accent-orange-hover: #c24e1a;
+  --accent-orange-soft: #fff7f2;
+  --accent-orange-border: #f5d3bf;
+  --accent-orange-ink: #b84312;
+
+  /* Per-Role Messenger Bubble Tokens (Crisp Pastel Light Mode) */
+  --bubble-user-bg: #d95d22;
+  --bubble-user-border: #c24e1a;
+  --bubble-user-fg: #ffffff;
+
+  --bubble-orch-bg: #fff8eb;
+  --bubble-orch-border: #e5b869;
+  --bubble-orch-accent: #b87818;
+  --bubble-orch-fg: #2c1d05;
+
+  --bubble-lead-bg: #ecfdf5;
+  --bubble-lead-border: #86efac;
+  --bubble-lead-accent: #15803d;
+  --bubble-lead-fg: #062818;
+
+  --bubble-builder-bg: #eff8ff;
+  --bubble-builder-border: #93c5fd;
+  --bubble-builder-accent: #0369a1;
+  --bubble-builder-fg: #082032;
+
+  --bubble-artist-bg: #f6f0ff;
+  --bubble-artist-border: #d8b4fe;
+  --bubble-artist-accent: #7e22ce;
+  --bubble-artist-fg: #260d3d;
+
+  --bubble-research-bg: #eefcfb;
+  --bubble-research-border: #99f6e4;
+  --bubble-research-accent: #0f766e;
+  --bubble-research-fg: #072726;
+
+  --bubble-verifier-bg: #fff1f4;
+  --bubble-verifier-border: #fda4af;
+  --bubble-verifier-accent: #be123c;
+  --bubble-verifier-fg: #330b16;
+
+  --bubble-cub-bg: #f7f3ef;
+  --bubble-cub-border: #c4a98b;
+  --bubble-cub-accent: #8c6b48;
+  --bubble-cub-fg: #261d14;
+
+  --human-bubble-bg: var(--bubble-user-bg);
+  --human-bubble-fg: var(--bubble-user-fg);
+
+  --status-active-ink: #1e4e79;
+  --status-active-bg: #f3f6fa;
+  --status-active-border: #dae5f0;
+
+  --status-success-ink: #165e3d;
+  --status-success-bg: #f2f8f5;
+  --status-success-border: #d6eae0;
+
+  --status-warning-ink: #8a530b;
+  --status-warning-bg: #fbf7f0;
+  --status-warning-border: #efe0c6;
+
+  --status-danger-ink: #9e2626;
+  --status-danger-bg: #fcf4f4;
+  --status-danger-border: #f1d6d6;
+
+  --stage-3d-bg: #f5f5f5;
+  --stage-3d-grid: #e3e3e6;
+  --stage-3d-pin-bg: #171717;
+  --stage-3d-pin-fg: #ffffff;
+
+  --orb-ink: #171717;
+  --orb-ink-soft: rgba(23, 23, 23, 0.56);
+  --orb-shell-bg: radial-gradient(
+    circle at 32% 28%,
+    rgba(255, 255, 255, 0.96) 0%,
+    rgba(246, 246, 247, 0.92) 62%,
+    rgba(236, 236, 239, 0.88) 100%
+  );
+  --orb-shell-border: rgba(23, 23, 23, 0.09);
+  --orb-shell-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+
+  --orb-idle-bg: #fafafa;
+  --orb-idle-ring: #c9c9ce;
+
+  --orb-shimmer-neutral: rgba(23, 23, 23, 0.08);
+  --orb-shimmer-active: rgba(30, 78, 121, 0.14);
+  --orb-shimmer-success: rgba(22, 94, 61, 0.13);
+  --orb-shimmer-warning: rgba(138, 83, 11, 0.14);
+  --orb-shimmer-danger: rgba(158, 38, 38, 0.15);
+
+  --shadow-popover:
+    0 1px 2px rgba(23, 23, 23, 0.04),
+    0 6px 18px -4px rgba(23, 23, 23, 0.07);
+  --shadow-modal:
+    0 1px 2px rgba(23, 23, 23, 0.05),
+    0 16px 40px -8px rgba(23, 23, 23, 0.12);
+
   --scrollbar-thumb: rgba(23, 23, 23, 0.12);
   --scrollbar-thumb-hover: rgba(23, 23, 23, 0.24);
 }
@@ -216,7 +390,7 @@
   --density-row-h: 36px;
 }
 
-/* Bots Workbench: Precision workbench for Live Watch, Kanban, Previews & Phase 3 */
+/* Bots Workbench: Precision workbench for Live Watch, Todo Board, Previews & Phase 3 */
 [data-density="compact"] {
   --density-text: var(--text-sm);
   --density-leading: var(--leading-snug);
@@ -228,7 +402,7 @@
 }
 
 /* ==========================================================================
-   Thinking Orb Shell Primitives ("Smoke & Pearl")
+   Thinking Orb Shell Primitives
    ========================================================================== */
 
 @keyframes bf-orb-breath {
@@ -300,7 +474,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root {
+  :root,
+  [data-theme="vanta"],
+  [data-theme="light"] {
     --duration-fast: 0.01ms;
     --duration-base: 0.01ms;
     --duration-slow: 0.01ms;

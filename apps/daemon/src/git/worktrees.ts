@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -735,6 +736,142 @@ export async function cleanupSubagentWorktree(params: {
   }
 }
 
+function isUnsafePatchRelPath(parentWorktreePath: string, rawPath: string): boolean {
+  const cleaned = rawPath.trim().replace(/^"|"$/g, "").replace(/\\/g, "/");
+  if (!cleaned || cleaned === "/dev/null") return false;
+  if (isAbsolute(cleaned) || /^[A-Za-z]:/.test(cleaned) || cleaned.startsWith("//") || cleaned.includes("\0")) {
+    return true;
+  }
+  const segs = cleaned.split("/");
+  if (segs.includes("..")) return true;
+  return !isPathStrictlyWithinRoot(parentWorktreePath, cleaned).ok;
+}
+
+function validateSubagentDiffRawAndPatch(params: {
+  parentWorktreePath: string;
+  diffRawStdout: string;
+  patchText: string;
+}): string | null {
+  if (params.diffRawStdout) {
+    const tokens = params.diffRawStdout.split("\0");
+    let i = 0;
+    while (i < tokens.length) {
+      const meta = tokens[i] ?? "";
+      i += 1;
+      if (!meta.startsWith(":")) continue;
+      const fields = meta.slice(1).trim().split(/\s+/);
+      const oldMode = fields[0] ?? "";
+      const newMode = fields[1] ?? "";
+      const status = fields[4] ?? "";
+      const firstPath = (tokens[i] ?? "").trim().replace(/\\/g, "/");
+      i += 1;
+      const secondPath =
+        status.startsWith("R") || status.startsWith("C") ? (tokens[i] ?? "").trim().replace(/\\/g, "/") : "";
+      if (status.startsWith("R") || status.startsWith("C")) {
+        i += 1;
+      }
+      if (oldMode === "120000" || newMode === "120000") {
+        return `symlink_not_allowed_in_subagent_patch: ${secondPath || firstPath}`;
+      }
+      if (firstPath && isUnsafePatchRelPath(params.parentWorktreePath, firstPath)) {
+        return `subagent_patch_path_outside_parent_worktree: ${firstPath}`;
+      }
+      if (secondPath && isUnsafePatchRelPath(params.parentWorktreePath, secondPath)) {
+        return `subagent_patch_path_outside_parent_worktree: ${secondPath}`;
+      }
+    }
+  }
+
+  for (const rawLine of params.patchText.split(/\r?\n/)) {
+    if (/^(?:old mode|new mode|new file mode|deleted file mode)\s+120000\b/.test(rawLine)) {
+      return "symlink_not_allowed_in_subagent_patch";
+    }
+    if (rawLine.startsWith("--- a/")) {
+      const p = rawLine.slice("--- a/".length);
+      if (isUnsafePatchRelPath(params.parentWorktreePath, p)) {
+        return `subagent_patch_path_outside_parent_worktree: ${p}`;
+      }
+    } else if (rawLine.startsWith("+++ b/")) {
+      const p = rawLine.slice("+++ b/".length);
+      if (isUnsafePatchRelPath(params.parentWorktreePath, p)) {
+        return `subagent_patch_path_outside_parent_worktree: ${p}`;
+      }
+    } else if (rawLine.startsWith("rename from ") || rawLine.startsWith("copy from ")) {
+      const p = rawLine.replace(/^(?:rename|copy) from /, "");
+      if (isUnsafePatchRelPath(params.parentWorktreePath, p)) {
+        return `subagent_patch_path_outside_parent_worktree: ${p}`;
+      }
+    } else if (rawLine.startsWith("rename to ") || rawLine.startsWith("copy to ")) {
+      const p = rawLine.replace(/^(?:rename|copy) to /, "");
+      if (isUnsafePatchRelPath(params.parentWorktreePath, p)) {
+        return `subagent_patch_path_outside_parent_worktree: ${p}`;
+      }
+    }
+  }
+
+  return null;
+}
+
+function resolveSubagentDiffBaseSync(
+  parentWorktreePath: string,
+  childWorktreePath: string,
+  childBranch?: string | null,
+): string {
+  if (childBranch) {
+    const baseRef = subagentBaseRefName(childBranch);
+    const check = runGitSync(["rev-parse", "--verify", baseRef], childWorktreePath, { allowFail: true });
+    if (check.code === 0 && check.stdout) return baseRef;
+  }
+  const parentHead = runGitSync(["rev-parse", "--verify", "HEAD"], parentWorktreePath, { allowFail: true });
+  if (parentHead.code === 0 && parentHead.stdout) {
+    const mergeBase = runGitSync(["merge-base", parentHead.stdout, "HEAD"], childWorktreePath, { allowFail: true });
+    if (mergeBase.code === 0 && mergeBase.stdout) return mergeBase.stdout;
+  }
+  return "HEAD";
+}
+
+export function computeSubagentWorktreeDiffSummarySync(params: {
+  parentWorktreePath: string;
+  childWorktreePath: string;
+  childBranch?: string | null;
+}): { filesTouched: string[]; diffStat: string | null } {
+  if (
+    !params.childWorktreePath ||
+    !existsSync(params.childWorktreePath) ||
+    resolve(params.childWorktreePath) === resolve(params.parentWorktreePath)
+  ) {
+    return { filesTouched: [], diffStat: null };
+  }
+  const inside = runGitSync(["rev-parse", "--is-inside-work-tree"], params.childWorktreePath, { allowFail: true });
+  if (inside.code !== 0) return { filesTouched: [], diffStat: null };
+
+  const diffBase = resolveSubagentDiffBaseSync(params.parentWorktreePath, params.childWorktreePath, params.childBranch);
+  const trackedRes = runGitSync(["diff", "--name-only", diffBase], params.childWorktreePath, { allowFail: true });
+  const statusRes = runGitSync(["--no-optional-locks", "status", "--porcelain", "-uall"], params.childWorktreePath, {
+    allowFail: true,
+  });
+  const tracked =
+    trackedRes.code === 0 && trackedRes.stdout
+      ? trackedRes.stdout.split(/\r?\n/).map((p) => p.trim().replace(/\\/g, "/")).filter(Boolean)
+      : [];
+  const untracked =
+    statusRes.code === 0 && statusRes.stdout
+      ? statusRes.stdout
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("?? "))
+          .map((line) => line.slice(3).trim().replace(/^"|"$/g, "").replace(/\\/g, "/"))
+          .filter(Boolean)
+      : [];
+  const filesTouched = [...new Set([...tracked, ...untracked].filter((p) => !isSensitiveRepoRelPath(p)))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const statRes = runGitSync(["diff", "--stat", diffBase], params.childWorktreePath, { allowFail: true });
+  const statText = statRes.code === 0 && statRes.stdout ? statRes.stdout : "";
+  const diffStat =
+    statText || (untracked.length > 0 ? `${untracked.length} untracked file(s)` : null);
+  return { filesTouched, diffStat };
+}
+
 /**
  * Capture the subagent's changes inside its child worktree, verify and apply
  * the patch atomically onto the parent worktree, and clean up on clean apply.
@@ -755,18 +892,55 @@ export async function extractAndApplySubagentPatch(params: {
 
   const baseRef = subagentBaseRefName(params.childBranch);
   const baseCheck = await runGit(["rev-parse", "--verify", baseRef], params.childWorktreePath, { allowFail: true });
-  const diffBase = baseCheck.code === 0 ? baseRef : "HEAD";
+  let diffBase = baseCheck.code === 0 ? baseRef : "";
+  if (!diffBase) {
+    const parentHead = await runGit(["rev-parse", "--verify", "HEAD"], params.parentWorktreePath, { allowFail: true });
+    if (parentHead.code === 0 && parentHead.stdout) {
+      const mergeBase = await runGit(["merge-base", parentHead.stdout, "HEAD"], params.childWorktreePath, {
+        allowFail: true,
+      });
+      if (mergeBase.code === 0 && mergeBase.stdout) {
+        diffBase = mergeBase.stdout;
+      }
+    }
+  }
+  if (!diffBase) diffBase = "HEAD";
 
-  // Intent-to-add only non-sensitive untracked files so secrets/node_modules never enter the patch.
+  // Inspect working tree entries first: reject symlinks or parent-escaping paths before staging.
   const statusRes = await runGitRaw(
     ["--no-optional-locks", "status", "--porcelain", "-z", "-uall"],
     params.childWorktreePath,
     { allowFail: true },
   );
   if (statusRes.code === 0 && statusRes.stdout) {
-    const untrackedSafe = parsePorcelainStatusZ(statusRes.stdout)
-      .filter((entry) => entry.status === "untracked")
-      .map((entry) => entry.path);
+    const statusEntries = parsePorcelainStatusZ(statusRes.stdout);
+    const untrackedSafe: string[] = [];
+    for (const entry of statusEntries) {
+      if (isUnsafePatchRelPath(params.parentWorktreePath, entry.path)) {
+        return {
+          ok: false,
+          patch: "",
+          changedFiles: [],
+          error: `subagent_patch_path_outside_parent_worktree: ${entry.path}`,
+        };
+      }
+      const absChildEntry = join(params.childWorktreePath, entry.path);
+      try {
+        if (lstatSync(absChildEntry).isSymbolicLink()) {
+          return {
+            ok: false,
+            patch: "",
+            changedFiles: [],
+            error: `symlink_not_allowed_in_subagent_patch: ${entry.path}`,
+          };
+        }
+      } catch {
+        // Entry may be deleted
+      }
+      if (entry.status === "untracked") {
+        untrackedSafe.push(entry.path);
+      }
+    }
     if (untrackedSafe.length > 0) {
       await runGitPathBatches(["add", "-N"], untrackedSafe, params.childWorktreePath);
     }
@@ -785,6 +959,17 @@ export async function extractAndApplySubagentPatch(params: {
     a.localeCompare(b),
   );
 
+  for (const rel of changedFiles) {
+    if (isUnsafePatchRelPath(params.parentWorktreePath, rel)) {
+      return {
+        ok: false,
+        patch: "",
+        changedFiles: [],
+        error: `subagent_patch_path_outside_parent_worktree: ${rel}`,
+      };
+    }
+  }
+
   if (changedFiles.length === 0) {
     if (!params.skipCleanup) {
       await cleanupSubagentWorktree({
@@ -796,6 +981,12 @@ export async function extractAndApplySubagentPatch(params: {
     return { ok: true, patch: "", changedFiles: [] };
   }
 
+  const rawArgs =
+    sensitiveNames.length > 0
+      ? ["diff", "--raw", "-z", diffBase, "--", ".", ...sensitiveNames.map((p) => `:!${p}`)]
+      : ["diff", "--raw", "-z", diffBase];
+  const rawDiffRes = await runGitRaw(rawArgs, params.childWorktreePath, { allowFail: true });
+
   const diffArgs =
     sensitiveNames.length > 0
       ? ["diff", "--binary", diffBase, "--", ".", ...sensitiveNames.map((p) => `:!${p}`)]
@@ -806,6 +997,15 @@ export async function extractAndApplySubagentPatch(params: {
   }
 
   const patch = diffRes.stdout;
+  const safetyErr = validateSubagentDiffRawAndPatch({
+    parentWorktreePath: params.parentWorktreePath,
+    diffRawStdout: rawDiffRes.code === 0 ? rawDiffRes.stdout : "",
+    patchText: patch,
+  });
+  if (safetyErr) {
+    return { ok: false, patch: "", changedFiles: [], error: safetyErr };
+  }
+
   if (!patch.trim()) {
     if (!params.skipCleanup) {
       await cleanupSubagentWorktree({

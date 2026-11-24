@@ -16,13 +16,14 @@ import type {
   TimelineItem,
 } from "@bot-factory/shared";
 import type { ArtifactCardEvent, ProviderSummary } from "../client/useBotFactory";
-import { BotAvatar } from "../components/BotAvatars";
+import { BotAvatar, JobTitlePill } from "../components/BotAvatars";
 import { BrowserPaneIcon, DiffBranchIcon, DocTabIcon } from "../components/BotFactoryIcons";
 import { BotThinkingOrb } from "../components/BotThinkingOrb";
 import { MarkdownRenderer } from "../components/MarkdownRenderer";
 import {
   PrecisionComposer,
   type AutonomyLevel,
+  type ComposerAttachment,
   type ModelTargetSelection,
 } from "../components/PrecisionComposer";
 import type { ReasoningEffort } from "../components/ReasoningEffortSlider";
@@ -48,6 +49,10 @@ interface ChatTabProps {
   autonomy: AutonomyLevel;
   onChangeEffort: (v: ReasoningEffort) => void;
   onChangeAutonomy: (v: AutonomyLevel) => void;
+  attachments?: ComposerAttachment[];
+  onRemoveAttachment?: (id: string) => void;
+  onClearAttachments?: () => void;
+  onFocusPane?: () => void;
   onSelectProject: (projectId: string) => void;
   onSendChat: (text: string) => Promise<void>;
   onOpenNewProjectModal: () => void;
@@ -96,6 +101,10 @@ export function ChatTab({
   autonomy,
   onChangeEffort,
   onChangeAutonomy,
+  attachments,
+  onRemoveAttachment,
+  onClearAttachments,
+  onFocusPane,
   onSelectProject,
   onSendChat,
   onOpenNewProjectModal,
@@ -165,7 +174,12 @@ export function ChatTab({
   const isEmpty = timeline.length === 0 && !isStreaming;
 
   return (
-    <div className="chat-root" data-density="airy">
+    <div
+      className="chat-root"
+      data-density="airy"
+      onMouseDown={() => onFocusPane?.()}
+      onFocusCapture={() => onFocusPane?.()}
+    >
       <div className="chat-layout">
         {actionError && (
           <div className="inline-error" role="alert">
@@ -180,7 +194,13 @@ export function ChatTab({
           {isEmpty && (
             <div className="chat-empty">
               <div className="chat-empty-emblem">
-                <BotAvatar role="orchestrator" size={56} active={busy} />
+                <BotAvatar
+                  role="orchestrator"
+                  size={64}
+                  active={busy}
+                  status={busy ? "working" : "idle"}
+                  seed="main-agent"
+                />
               </div>
               <h2 className="chat-empty-title">What are we building today?</h2>
               <p className="chat-empty-body">
@@ -219,7 +239,10 @@ export function ChatTab({
               const m = entry.msg;
               const isUser = m.role === "user";
               return (
-                <div key={m.id} className={`chat-turn ${isUser ? "user" : "assistant"}`}>
+                <div
+                  key={m.id}
+                  className={`chat-turn ${isUser ? "user msg-side-right" : "assistant msg-side-left"}`}
+                >
                   {isUser ? (
                     <div className="chat-bubble-human">
                       <div>{m.content}</div>
@@ -227,10 +250,11 @@ export function ChatTab({
                     </div>
                   ) : (
                     <div className="chat-assistant-row">
-                      <BotAvatar role="orchestrator" size={28} />
+                      <BotAvatar role="orchestrator" size={30} seed="main-agent" />
                       <div className="chat-assistant-body">
                         <div className="chat-turn-meta">
                           <span className="chat-speaker-name">Main Agent</span>
+                          <JobTitlePill label="Orchestrator" role="orchestrator" />
                           {memoryRecalledActive && (
                             <button
                               type="button"
@@ -244,7 +268,7 @@ export function ChatTab({
                           )}
                           <span className="chat-turn-time">{formatTime(m.createdAt)}</span>
                         </div>
-                        <div className="chat-prose-assistant">
+                        <div className="chat-prose-assistant role-orchestrator">
                           <MarkdownRenderer content={m.content} />
                         </div>
                       </div>
@@ -374,12 +398,13 @@ export function ChatTab({
           })}
 
           {isStreaming && (
-            <div className="chat-turn assistant">
+            <div className="chat-turn assistant msg-side-left">
               <div className="chat-assistant-row">
-                <BotAvatar role="orchestrator" size={28} active />
+                <BotAvatar role="orchestrator" size={30} active status="working" seed="main-agent" />
                 <div className="chat-assistant-body">
                   <div className="chat-turn-meta">
                     <span className="chat-speaker-name">Main Agent</span>
+                    <JobTitlePill label="Orchestrator" role="orchestrator" />
                     <BotThinkingOrb activity="composing" size={20} shell={false} />
                     <span className="chat-turn-time">Streaming…</span>
                   </div>
@@ -387,7 +412,7 @@ export function ChatTab({
                     <div className="chat-thought-pill">{streamingThought}</div>
                   )}
                   {streamingText && (
-                    <div className="chat-prose-assistant">
+                    <div className="chat-prose-assistant role-orchestrator">
                       <MarkdownRenderer content={streamingText} />
                     </div>
                   )}
@@ -398,7 +423,7 @@ export function ChatTab({
 
           {busy && !isStreaming && (
             <div className="chat-thinking-row">
-              <BotAvatar role="orchestrator" size={24} active />
+              <BotAvatar role="orchestrator" size={24} active status="working" seed="main-agent" />
               <BotThinkingOrb activity="composing" size={20} shell={false} />
               <span>Main Agent is thinking…</span>
             </div>
@@ -426,6 +451,9 @@ export function ChatTab({
           onChangeEffort={onChangeEffort}
           autonomy={autonomy}
           onChangeAutonomy={onChangeAutonomy}
+          attachments={attachments}
+          onRemoveAttachment={onRemoveAttachment}
+          onClearAttachments={onClearAttachments}
           onSubmit={handleSend}
           onSlashAction={handleSlash}
         />

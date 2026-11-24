@@ -67,13 +67,83 @@ export interface AutonomyLoopCallbacks {
 }
 
 const MAX_SPEC_RETRY_CHARS = 12_000;
+const RETRY_SECTION_HEADING = "## Verifier Retry Feedback (Attempt ";
 
-function appendRetryFeedback(specMd: string, attempt: number, findingsText: string): string {
+export function appendRetryFeedback(
+  specMd: string,
+  attempt: number,
+  findingsText: string,
+  maxChars = MAX_SPEC_RETRY_CHARS,
+): string {
   const cleanFindings = findingsText.trim() || "Independent verifier flagged failures; check handoff and worktree diff.";
-  const block = `\n\n## Verifier Retry Feedback (Attempt ${attempt})\n${cleanFindings}`;
-  const combined = `${specMd}${block}`;
-  if (combined.length <= MAX_SPEC_RETRY_CHARS) return combined;
-  return combined.slice(combined.length - MAX_SPEC_RETRY_CHARS);
+  const newBlock = `${RETRY_SECTION_HEADING}${attempt})\n${cleanFindings}`;
+
+  const markerInline = `\n\n${RETRY_SECTION_HEADING}`;
+  const markerIdx = specMd.startsWith(RETRY_SECTION_HEADING) ? 0 : specMd.indexOf(markerInline);
+  const rawBaseSpec = (markerIdx === -1 ? specMd : specMd.slice(0, markerIdx)).trimEnd();
+  const prevRetrySection =
+    markerIdx === -1
+      ? ""
+      : specMd.slice(markerIdx === 0 ? 0 : markerIdx + 2).trim();
+  const prevBlocks = prevRetrySection
+    ? prevRetrySection
+        .split(/\n\n(?=## Verifier Retry Feedback \(Attempt )/)
+        .map((b) => b.trim())
+        .filter(Boolean)
+    : [];
+
+  // Always preserve the original specMd head intact; only trim old retry blocks or excess spec tail if over budget.
+  const minLatestBudget = Math.min(2000, Math.floor(maxChars * 0.35));
+  const maxBaseBudget = Math.max(0, maxChars - minLatestBudget - 2);
+  const baseSpec =
+    rawBaseSpec.length <= maxBaseBudget
+      ? rawBaseSpec
+      : `${rawBaseSpec.slice(0, Math.max(0, maxBaseBudget - 18))}\n… [spec truncated]`;
+
+  const remainingAfterBase = Math.max(0, maxChars - (baseSpec ? baseSpec.length + 2 : 0));
+  const boundedNewBlock =
+    newBlock.length <= remainingAfterBase
+      ? newBlock
+      : `${newBlock.slice(0, Math.max(0, remainingAfterBase - 14))}\n… [truncated]`;
+
+  const keptPrev: string[] = [];
+  let usedChars = (baseSpec ? baseSpec.length + 2 : 0) + boundedNewBlock.length;
+  for (let i = prevBlocks.length - 1; i >= 0; i -= 1) {
+    const prev = prevBlocks[i]!;
+    if (usedChars + prev.length + 2 <= maxChars) {
+      keptPrev.unshift(prev);
+      usedChars += prev.length + 2;
+    } else {
+      break;
+    }
+  }
+
+  return [baseSpec, ...keptPrev, boundedNewBlock].filter(Boolean).join("\n\n");
+}
+
+function formatVerifierRetryFeedback(
+  report: VerificationReportRecord,
+  scrub: (text: string) => string,
+): string {
+  const failedChecks = report.checks.filter((c) => !c.passed);
+  const failedCheckNames = new Set(failedChecks.map((c) => c.name));
+  const lines: string[] = [];
+
+  for (const check of failedChecks) {
+    lines.push(`- [Check Failed: ${check.name}] ${check.detail}`);
+  }
+  for (const finding of report.findings) {
+    const checkPrefix = /^check_failed:([^:]+):/.exec(finding)?.[1];
+    if (checkPrefix && failedCheckNames.has(checkPrefix)) continue;
+    lines.push(`- [Finding] ${finding}`);
+  }
+  const summary = report.summary.trim();
+  if (summary) {
+    lines.push(`\nVerifier Summary:\n${summary.slice(0, 1200)}`);
+  }
+
+  const combined = lines.join("\n").trim();
+  return scrub(combined || "Independent verifier flagged failures; check handoff and worktree diff.");
 }
 
 export class AutonomyLoop {
@@ -247,10 +317,12 @@ export class AutonomyLoop {
       return;
     }
 
+    this.releaseAuthorAgentIfIdleable(projectId, taskId, task.assignedAgentId, `Blocked after ${maxRetries} retries`);
     const goal = this.findGoalForTask(taskId) ?? this.getActiveGoalForProject(projectId);
     if (goal) {
       goal.status = "blocked";
       goal.updatedAt = Date.now();
+      this.dispatchUnblockedTasks(projectId, goal.goalId);
       this.enqueuePmGoalCheck(projectId, goal.goalId, "task_blocked", task.id, [errorMsg]);
     }
   }
@@ -273,10 +345,7 @@ export class AutonomyLoop {
     if (report.verdict === "fail" && task && task.status !== "merged") {
       const maxRetries = this.callbacks.getConfig().guardrails.maxTaskAutoRetries;
       const nextRetry = (task.autoRetryCount ?? 0) + 1;
-      const findingsText =
-        report.findings.length > 0
-          ? report.findings.map((f) => `- ${f}`).join("\n")
-          : this.scrubber.scrub(report.summary.slice(0, 500));
+      const findingsText = formatVerifierRetryFeedback(report, (t) => this.scrubber.scrub(t));
 
       if (nextRetry <= maxRetries) {
         this.requeueTaskForRetry(projectId, task, nextRetry, findingsText);
@@ -287,6 +356,7 @@ export class AutonomyLoop {
       if (goal) {
         goal.status = "blocked";
         goal.updatedAt = Date.now();
+        this.dispatchUnblockedTasks(projectId, goal.goalId);
         this.enqueuePmGoalCheck(projectId, goal.goalId, "task_blocked", task.id, report.findings);
       }
       return;
@@ -294,6 +364,7 @@ export class AutonomyLoop {
 
     if (report.verdict === "needs_human" && goal) {
       this.releaseAuthorAgentIfIdleable(projectId, taskId, task?.assignedAgentId ?? null, `Needs review: ${task?.title.slice(0, 50) ?? taskId}`);
+      this.dispatchUnblockedTasks(projectId, goal.goalId);
       this.enqueuePmGoalCheck(projectId, goal.goalId, "needs_human", taskId, report.findings);
     }
   }
@@ -374,8 +445,11 @@ export class AutonomyLoop {
   }
 
   public dispatchUnblockedTasks(projectId: string, goalId?: string): number {
-    const goal = (goalId ? this.goals.get(goalId) : null) ?? this.getActiveGoalForProject(projectId);
-    if (!goal || goal.status !== "active") return 0;
+    const goal =
+      (goalId ? this.goals.get(goalId) : null) ??
+      this.getActiveGoalForProject(projectId) ??
+      this.findLatestGoalForProject(projectId);
+    if (!goal || goal.status === "completed") return 0;
 
     const allTasks = this.db.listTasks(projectId);
     const taskMap = new Map(allTasks.map((t) => [t.id, t]));

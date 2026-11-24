@@ -327,6 +327,8 @@ export interface TimelineItem {
   seq: number;
   kind: "message" | "thought" | "plan" | "tool_call" | "terminal" | "steer" | "handoff" | "status";
   role: "user" | "assistant" | "system" | "tool";
+  senderAgentId?: string | null;
+  senderRole?: "user" | "orchestrator" | "bot" | "system";
   title?: string;
   content: string;
   toolCallId?: string;
@@ -579,6 +581,22 @@ export const RpcCommandSchema = z.discriminatedUnion("type", [
     commandId: z.string(),
     type: z.literal("bot.resume"),
     agentId: z.string().min(1),
+  }),
+  z.object({
+    commandId: z.string(),
+    type: z.literal("bot.update_model"),
+    agentId: z.string().min(1),
+    provider: z.string().min(1),
+    model: z.string().min(1),
+  }),
+  z.object({
+    commandId: z.string(),
+    type: z.literal("bot.message"),
+    projectId: z.string().min(1),
+    agentId: z.string().min(1),
+    message: z.string().min(1),
+    senderAgentId: z.string().optional(),
+    senderRole: z.enum(["user", "orchestrator"]).optional(),
   }),
   z.object({
     commandId: z.string(),

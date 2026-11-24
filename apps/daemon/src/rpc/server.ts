@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Server, ServerWebSocket } from "bun";
 import {
   RpcCommandSchema,
@@ -45,9 +45,42 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 const ALLOWED_ARTIFACT_TOP_DIRS = new Set(["plans", "artifacts", "handoffs"]);
+const UTF8_ARTIFACT_EXTS = new Set([".md", ".txt", ".json", ".svg"]);
+const IMAGE_ARTIFACT_EXTS = new Set([".png", ".webp", ".jpg", ".jpeg"]);
+const MAX_UTF8_ARTIFACT_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_ARTIFACT_BYTES = 8 * 1024 * 1024;
 const SESSION_COOKIE_NAME = "bf_session";
 const SESSION_COOKIE_CONTEXT = "bot-factory-session-v1";
 const SECRET_KEY_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
+
+function writeArtifactAtomically(targetPath: string, data: Buffer): void {
+  mkdirSync(dirname(targetPath), { recursive: true });
+  const tmp = join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.${Date.now()}.tmp`);
+  const sab = new Int32Array(new SharedArrayBuffer(4));
+  try {
+    writeFileSync(tmp, data);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        renameSync(tmp, targetPath);
+        return;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if ((code === "EPERM" || code === "EBUSY") && attempt < 4) {
+          Atomics.wait(sab, 0, 0, 50);
+          continue;
+        }
+        throw err;
+      }
+    }
+  } catch (err) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // ignore temp cleanup failure
+    }
+    throw err;
+  }
+}
 
 function timingSafeStringEqual(a: string, b: string): boolean {
   if (!a || !b) return false;
@@ -493,6 +526,99 @@ export class DaemonServer {
             });
           } catch {
             return new Response("Forbidden", { status: 403 });
+          }
+        }
+
+        if (artifactMatch && req.method === "PUT") {
+          const projectId = safeDecodeParam(artifactMatch[1]!);
+          if (projectId === null) {
+            return Response.json({ ok: false, error: "bad_request" }, { status: 400 });
+          }
+          const project = this.db.getProject(projectId);
+          if (!project) {
+            return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+          }
+          let body: { path?: unknown; content?: unknown; encoding?: unknown };
+          try {
+            const raw = await req.json();
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+              return Response.json({ ok: false, error: "invalid_artifact_body" }, { status: 400 });
+            }
+            body = raw as { path?: unknown; content?: unknown; encoding?: unknown };
+          } catch {
+            return Response.json({ ok: false, error: "invalid_artifact_json" }, { status: 400 });
+          }
+
+          const relPath = (url.searchParams.get("path") ?? (typeof body.path === "string" ? body.path : "")).trim();
+          if (!relPath) {
+            return Response.json({ ok: false, error: "missing_artifact_path" }, { status: 400 });
+          }
+          if (typeof body.content !== "string") {
+            return Response.json({ ok: false, error: "missing_artifact_content" }, { status: 400 });
+          }
+
+          let abs: string;
+          try {
+            abs = resolveSafeProjectFile(project.rootPath, relPath);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : "forbidden";
+            return Response.json({ ok: false, error: msg }, { status: 403 });
+          }
+
+          const ext = extname(abs).toLowerCase();
+          const isUtf8 = UTF8_ARTIFACT_EXTS.has(ext);
+          const isImage = IMAGE_ARTIFACT_EXTS.has(ext);
+          if (!isUtf8 && !isImage) {
+            return Response.json({ ok: false, error: "unsupported_artifact_extension" }, { status: 415 });
+          }
+
+          let payloadBuf: Buffer;
+          if (isUtf8) {
+            if (body.encoding !== undefined && body.encoding !== "utf8") {
+              return Response.json({ ok: false, error: "invalid_encoding_for_text_artifact" }, { status: 400 });
+            }
+            payloadBuf = Buffer.from(body.content, "utf8");
+            if (payloadBuf.byteLength > MAX_UTF8_ARTIFACT_BYTES) {
+              return Response.json({ ok: false, error: "artifact_too_large" }, { status: 413 });
+            }
+          } else {
+            if (body.encoding !== undefined && body.encoding !== "base64") {
+              return Response.json({ ok: false, error: "invalid_encoding_for_image_artifact" }, { status: 400 });
+            }
+            const stripped = body.content.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "").replace(/\s+/g, "");
+            if (!stripped || stripped.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(stripped)) {
+              return Response.json({ ok: false, error: "invalid_base64_image" }, { status: 400 });
+            }
+            payloadBuf = Buffer.from(stripped, "base64");
+            if (payloadBuf.byteLength === 0 || payloadBuf.byteLength > MAX_IMAGE_ARTIFACT_BYTES) {
+              return Response.json(
+                { ok: false, error: payloadBuf.byteLength === 0 ? "empty_image" : "artifact_too_large" },
+                { status: payloadBuf.byteLength === 0 ? 400 : 413 },
+              );
+            }
+          }
+
+          try {
+            writeArtifactAtomically(abs, payloadBuf);
+            const st = statSync(abs);
+            const relativePath = relative(resolve(project.rootPath), abs).replace(/\\/g, "/");
+            const updatedAt = Math.floor(st.mtimeMs) || Date.now();
+            this.core.emitDirectEvent(`project:${project.id}:previews`, "artifact.updated", {
+              projectId: project.id,
+              relativePath,
+              updatedAt,
+            });
+            return Response.json({
+              ok: true,
+              relativePath,
+              sizeBytes: st.size,
+              updatedAt,
+            });
+          } catch (err) {
+            return Response.json(
+              { ok: false, error: this.scrubber.scrub(err instanceof Error ? err.message : String(err)) },
+              { status: 500 },
+            );
           }
         }
 

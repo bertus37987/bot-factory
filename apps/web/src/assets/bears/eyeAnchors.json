@@ -1,0 +1,79 @@
+{
+  "orchestrator": {
+    "left": [
+      34.3,
+      44.53
+    ],
+    "right": [
+      65.7,
+      44.53
+    ],
+    "hasShades": false
+  },
+  "team-lead": {
+    "left": [
+      34.3,
+      44.53
+    ],
+    "right": [
+      65.7,
+      44.53
+    ],
+    "hasShades": false
+  },
+  "builder": {
+    "left": [
+      34.3,
+      44.53
+    ],
+    "right": [
+      65.7,
+      44.53
+    ],
+    "hasShades": false
+  },
+  "artist": {
+    "left": [
+      34.3,
+      44.53
+    ],
+    "right": [
+      65.7,
+      44.53
+    ],
+    "hasShades": false
+  },
+  "research": {
+    "left": [
+      34.3,
+      44.53
+    ],
+    "right": [
+      65.7,
+      44.53
+    ],
+    "hasShades": true
+  },
+  "verifier": {
+    "left": [
+      34.3,
+      44.53
+    ],
+    "right": [
+      65.7,
+      44.53
+    ],
+    "hasShades": false
+  },
+  "cub": {
+    "left": [
+      36.33,
+      45.17
+    ],
+    "right": [
+      63.67,
+      45.17
+    ],
+    "hasShades": false
+  }
+}

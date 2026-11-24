@@ -1,21 +1,35 @@
+import { MessageSquare, X } from "lucide-react";
 import { useEffect, useRef, useState, type JSX } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { AnnotationAnchor, AnnotationRecord } from "@bot-factory/shared";
-import type { CameraPose, Model3DPreset } from "./types";
+import type { CameraPose, ComposerAttachment, Model3DPreset } from "./types";
 
 export interface Model3DViewerProps {
   projectId: string;
   filePath: string;
-  annotate: boolean;
-  annotations: AnnotationRecord[];
+  annotate?: boolean;
+  annotations?: AnnotationRecord[];
   activePreset: Model3DPreset | "";
   presetNonce: number;
   wireframe: boolean;
   focusCameraPose: CameraPose | null;
-  onPickAnchor: (anchor: AnnotationAnchor, snapshotDataUrl?: string) => void;
+  onPickAnchor?: (anchor: AnnotationAnchor, snapshotDataUrl?: string) => void;
+  onImportToChat?: (attachment: ComposerAttachment) => void;
   onUserOrbit?: () => void;
+}
+
+interface PendingMeshHit {
+  meshName: string;
+  point: [number, number, number];
+  normal: [number, number, number];
+  camera: {
+    pos: [number, number, number];
+    target: [number, number, number];
+    fov: number;
+  };
+  snapshotDataUrl?: string;
 }
 
 const DEFAULT_MODEL_BOUNDS = {
@@ -78,24 +92,37 @@ function applyWireframeToGroup(group: THREE.Group, enabled: boolean): void {
   });
 }
 
+function readStageBackgroundHex(el: HTMLElement): string {
+  try {
+    const cs = getComputedStyle(el);
+    const stageBg = cs.getPropertyValue("--stage-3d-bg").trim();
+    if (stageBg) return stageBg;
+    const canvasBg = cs.getPropertyValue("--bg-canvas").trim();
+    if (canvasBg) return canvasBg;
+  } catch {
+    // Fallback below.
+  }
+  return "#f5f5f5";
+}
+
 export function Model3DViewer({
   projectId,
   filePath,
-  annotate,
-  annotations,
+  annotations = [],
   activePreset,
   presetNonce,
   wireframe,
   focusCameraPose,
   onPickAnchor,
+  onImportToChat,
   onUserOrbit,
 }: Model3DViewerProps): JSX.Element {
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const annotateRef = useRef(annotate);
   const wireframeRef = useRef(wireframe);
-  const onPickRef = useRef(onPickAnchor);
   const onUserOrbitRef = useRef(onUserOrbit);
 
+  const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const modelGroupRef = useRef<THREE.Group | null>(null);
@@ -113,21 +140,37 @@ export function Model3DViewer({
   const programmaticCameraRef = useRef(false);
 
   const [loadStatus, setLoadStatus] = useState("Loading 3D asset...");
+  const [pendingHit, setPendingHit] = useState<PendingMeshHit | null>(null);
+  const [commentText, setCommentText] = useState("");
+  const commentInputRef = useRef<HTMLInputElement | null>(null);
 
-  annotateRef.current = annotate;
   wireframeRef.current = wireframe;
-  onPickRef.current = onPickAnchor;
   onUserOrbitRef.current = onUserOrbit;
 
   const artifactUrl = `/api/projects/${encodeURIComponent(projectId)}/artifact?path=${encodeURIComponent(filePath)}`;
 
   useEffect(() => {
+    if (pendingHit) {
+      setTimeout(() => commentInputRef.current?.focus(), 0);
+    }
+  }, [pendingHit]);
+
+  useEffect(() => {
     const host = hostRef.current;
-    if (!host) return;
+    const stage = stageRef.current;
+    if (!host || !stage) return;
     let cancelled = false;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf5f5f5);
+    sceneRef.current = scene;
+    const syncSceneBackground = () => {
+      try {
+        scene.background = new THREE.Color(readStageBackgroundHex(stage));
+      } catch {
+        scene.background = new THREE.Color(0xf5f5f5);
+      }
+    };
+    syncSceneBackground();
 
     const width = Math.max(host.clientWidth, 320);
     const height = Math.max(host.clientHeight, 320);
@@ -149,7 +192,7 @@ export function Model3DViewer({
     controls.target.set(...initialPose.target);
     controlsRef.current = controls;
 
-    // Light Museum neutral gallery studio lighting
+    // Neutral studio lighting
     scene.add(new THREE.HemisphereLight(0xffffff, 0xe4e4e8, 1.15));
     const keyLight = new THREE.DirectionalLight(0xffffff, 1.25);
     keyLight.position.set(4.5, 7.5, 5.5);
@@ -158,7 +201,16 @@ export function Model3DViewer({
     fillLight.position.set(-4, 4, -3);
     scene.add(fillLight);
 
-    const grid = new THREE.GridHelper(10, 20, 0xd4d4dc, 0xe8e8ec);
+    const grid = new THREE.GridHelper(10, 20, 0x737373, 0x3f3f46);
+    if (Array.isArray(grid.material)) {
+      for (const m of grid.material) {
+        m.opacity = 0.25;
+        m.transparent = true;
+      }
+    } else {
+      grid.material.opacity = 0.25;
+      grid.material.transparent = true;
+    }
     scene.add(grid);
 
     const modelGroup = new THREE.Group();
@@ -169,7 +221,6 @@ export function Model3DViewer({
     scene.add(pinsGroup);
     pinsGroupRef.current = pinsGroup;
 
-    // Burnt-orange (#D95D22) surface pins for active annotations, muted green for approved
     const pinGeo = new THREE.SphereGeometry(0.068, 16, 16);
     const openMat = new THREE.MeshBasicMaterial({ color: 0xd95d22, depthTest: false });
     const approvedMat = new THREE.MeshBasicMaterial({ color: 0x165e3d, depthTest: false });
@@ -234,7 +285,6 @@ export function Model3DViewer({
     };
     controls.addEventListener("change", handleControlsChange);
 
-    // Load GLB/GLTF asset with clean fallback monolith on failure
     boundsRef.current = {
       center: DEFAULT_MODEL_BOUNDS.center.clone(),
       dist: DEFAULT_MODEL_BOUNDS.dist,
@@ -306,7 +356,6 @@ export function Model3DViewer({
     };
 
     const handleClick = (ev: MouseEvent) => {
-      if (!annotateRef.current) return;
       if (downPos) {
         const moved = Math.hypot(ev.clientX - downPos.x, ev.clientY - downPos.y);
         if (moved > 6) return;
@@ -333,21 +382,18 @@ export function Model3DViewer({
         snapshotDataUrl = undefined;
       }
 
-      onPickRef.current(
-        {
-          kind: "model_3d",
-          filePath,
-          meshName: hit.object.name || "Mesh",
-          point: [hit.point.x, hit.point.y, hit.point.z],
-          normal: [normal.x, normal.y, normal.z],
-          camera: {
-            pos: [camera.position.x, camera.position.y, camera.position.z],
-            target: [controls.target.x, controls.target.y, controls.target.z],
-            fov: camera.fov,
-          },
+      setCommentText("");
+      setPendingHit({
+        meshName: hit.object.name || "Mesh",
+        point: [hit.point.x, hit.point.y, hit.point.z],
+        normal: [normal.x, normal.y, normal.z],
+        camera: {
+          pos: [camera.position.x, camera.position.y, camera.position.z],
+          target: [controls.target.x, controls.target.y, controls.target.z],
+          fov: camera.fov,
         },
         snapshotDataUrl,
-      );
+      });
     };
 
     renderer.domElement.addEventListener("pointerdown", handlePointerDown);
@@ -364,13 +410,22 @@ export function Model3DViewer({
     });
     resizeObserver.observe(host);
 
-    // Initial render
+    const themeObserver = new MutationObserver(() => {
+      syncSceneBackground();
+      requestRender(false);
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme", "class", "style"],
+    });
+
     requestRender(false);
 
     return () => {
       cancelled = true;
       if (rafId !== 0) cancelAnimationFrame(rafId);
       requestRenderRef.current = null;
+      themeObserver.disconnect();
       resizeObserver.disconnect();
       controls.removeEventListener("change", handleControlsChange);
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
@@ -384,6 +439,7 @@ export function Model3DViewer({
       pinAssetsRef.current = null;
       pinsGroupRef.current = null;
       modelGroupRef.current = null;
+      sceneRef.current = null;
       cameraRef.current = null;
       controlsRef.current = null;
       renderer.dispose();
@@ -444,15 +500,48 @@ export function Model3DViewer({
     requestRenderRef.current?.(false);
   }, [focusCameraPose]);
 
+  const submitMeshComment = () => {
+    if (!pendingHit) return;
+    const trimmed = commentText.trim();
+    if (!trimmed) return;
+    const fileName = filePath.split("/").pop() ?? filePath;
+    if (onImportToChat) {
+      onImportToChat({
+        id: `att_3d_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        kind: "model3d_comment",
+        filePath,
+        label: `${fileName} (${pendingHit.meshName})`,
+        quote: `Mesh: ${pendingHit.meshName} @ [${pendingHit.point.map((n) => n.toFixed(2)).join(", ")}] | Cam: [${pendingHit.camera.pos.map((n) => n.toFixed(2)).join(", ")}]`,
+        comment: trimmed,
+        thumbnailDataUrl: pendingHit.snapshotDataUrl,
+      });
+    } else if (onPickAnchor) {
+      onPickAnchor(
+        {
+          kind: "model_3d",
+          filePath,
+          meshName: pendingHit.meshName,
+          point: pendingHit.point,
+          normal: pendingHit.normal,
+          camera: pendingHit.camera,
+        },
+        pendingHit.snapshotDataUrl,
+      );
+    }
+    setPendingHit(null);
+    setCommentText("");
+  };
+
   return (
     <div
+      ref={stageRef}
       className="model3d-stage iab-3d-stage"
       style={{
         position: "relative",
         width: "100%",
         height: "100%",
         minHeight: 320,
-        background: "#F5F5F5",
+        background: "var(--stage-3d-bg, var(--bg-surface-subtle))",
       }}
     >
       <div
@@ -460,9 +549,10 @@ export function Model3DViewer({
         style={{
           width: "100%",
           height: "100%",
-          cursor: annotate ? "crosshair" : "grab",
+          cursor: "grab",
         }}
       />
+
       <div
         className="stage-3d-hud iab-3d-hud"
         style={{
@@ -470,17 +560,123 @@ export function Model3DViewer({
           left: 10,
           bottom: 10,
           fontSize: "var(--text-2xs)",
-          color: annotate ? "#B84312" : "var(--ink-muted)",
-          background: annotate ? "#FFF7F2" : "rgba(255,255,255,0.88)",
-          border: annotate ? "1px solid #F7D5C2" : "1px solid var(--border-hairline)",
+          color: "var(--ink-muted)",
+          background: "var(--bg-elevated, var(--bg-surface))",
+          border: "1px solid var(--border-hairline)",
           borderRadius: "var(--radius-pill)",
           padding: "3px 10px",
           pointerEvents: "none",
+          boxShadow: "var(--shadow-popover)",
         }}
       >
-        {loadStatus} ·{" "}
-        {annotate ? "Annotate: click 3D surface to drop pin + snapshot" : "Navigate: drag to orbit, scroll to zoom"}
+        {loadStatus} · Click mesh to comment → Chat · Drag to orbit
       </div>
+
+      {pendingHit && (
+        <div
+          className="iab-3d-comment-popover"
+          role="dialog"
+          aria-label="Comment on 3D mesh to chat"
+          style={{
+            position: "absolute",
+            right: 12,
+            bottom: 44,
+            width: 296,
+            maxWidth: "calc(100% - 24px)",
+            background: "var(--bg-elevated, var(--bg-canvas))",
+            border: "1px solid var(--border-strong)",
+            borderRadius: "var(--radius-lg)",
+            boxShadow: "var(--shadow-modal)",
+            padding: 10,
+            zIndex: 20,
+            display: "flex",
+            flexDirection: "column",
+            gap: 7,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: "var(--text-2xs)",
+              fontWeight: "var(--weight-semibold)",
+              color: "var(--ink-primary)",
+            }}
+          >
+            <span>Comment on 3D mesh → Chat</span>
+            <button
+              type="button"
+              className="btn xs ghost"
+              aria-label="Cancel 3D comment"
+              onClick={() => {
+                setPendingHit(null);
+                setCommentText("");
+              }}
+            >
+              <X size={11} strokeWidth={1.7} />
+            </button>
+          </div>
+
+          <div className="mono-tag" style={{ fontSize: "var(--text-2xs)" }}>
+            {pendingHit.meshName} · [{pendingHit.point.map((n) => n.toFixed(2)).join(", ")}]
+          </div>
+
+          {pendingHit.snapshotDataUrl && (
+            <img
+              src={pendingHit.snapshotDataUrl}
+              alt="3D mesh snapshot"
+              style={{
+                width: "100%",
+                maxHeight: 112,
+                objectFit: "cover",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border-hairline)",
+                display: "block",
+              }}
+            />
+          )}
+
+          <input
+            ref={commentInputRef}
+            type="text"
+            placeholder="Comment on this 3D mesh..."
+            value={commentText}
+            onChange={(e) => setCommentText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                submitMeshComment();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setPendingHit(null);
+              }
+            }}
+            style={{
+              width: "100%",
+              padding: "6px 8px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--border-hairline)",
+              background: "var(--bg-surface)",
+              color: "var(--ink-primary)",
+              fontSize: "var(--text-xs)",
+              outline: "none",
+            }}
+          />
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+            <button
+              type="button"
+              className="btn xs primary"
+              disabled={!commentText.trim()}
+              onClick={submitMeshComment}
+            >
+              <MessageSquare size={11} strokeWidth={1.6} />
+              <span>Add to Chat</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

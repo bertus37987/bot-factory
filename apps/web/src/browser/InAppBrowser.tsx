@@ -11,24 +11,26 @@ import {
   type JSX,
   type ReactNode,
 } from "react";
-import type { AnnotationAnchor, AnnotationRecord, AnnotationStatus } from "@bot-factory/shared";
-import { AnnotationOverlay } from "./AnnotationOverlay";
+import type { AnnotationAnchor } from "@bot-factory/shared";
 import { BrowserChrome } from "./BrowserChrome";
+import { useBrowserShellContext } from "./BrowserWorkspaceShell";
 import { CodeViewer } from "./CodeViewer";
 import { DiffViewer } from "./DiffViewer";
 import { DocViewer } from "./DocViewer";
 import { ImageViewer } from "./ImageViewer";
-import {
-  type BrowserTab,
-  type BrowserTabKind,
-  type CameraPose,
-  type ImageZoomMode,
-  type InAppBrowserProps,
-  type Model3DPreset,
+import type {
+  BrowserDockMode,
+  BrowserTab,
+  BrowserTabKind,
+  CameraPose,
+  ComposerAttachment,
+  ImageZoomMode,
+  InAppBrowserProps,
+  Model3DPreset,
 } from "./types";
 import { WebViewer } from "./WebViewer";
 
-export type { BrowserTab, BrowserTabKind, InAppBrowserProps };
+export type { BrowserDockMode, BrowserTab, BrowserTabKind, ComposerAttachment, InAppBrowserProps };
 
 const LazyModel3DViewer = lazy(() => import("./Model3DViewer"));
 
@@ -82,6 +84,11 @@ export function InAppBrowser({
   tabs,
   activeTabId,
   expanded,
+  dockMode,
+  onChangeDockMode,
+  onImportToChat,
+  onArtifactSaved,
+  onStartFloatDrag,
   onSelectTab,
   onCloseTab,
   onOpenTab,
@@ -89,10 +96,13 @@ export function InAppBrowser({
   onCloseSidebar,
   onRefreshContext,
   onCreateAnnotation,
-  onResolveAnnotation,
 }: InAppBrowserProps): JSX.Element {
   const activeTab = useMemo(() => tabs.find((t) => t.id === activeTabId) ?? null, [tabs, activeTabId]);
   const effectiveProjectId = activeTab?.projectId || project?.id || null;
+  const shellCtx = useBrowserShellContext();
+  const effectiveDockMode: BrowserDockMode =
+    dockMode ?? shellCtx?.dockMode ?? (expanded ? "fullscreen" : "right");
+  const effectiveFloatDrag = onStartFloatDrag ?? shellCtx?.onStartFloatDrag;
 
   /* Per-session visited-tab history -------------------------------------- */
   const historyRef = useRef<string[]>([]);
@@ -148,36 +158,18 @@ export function InAppBrowser({
   }, [tabs, activeTabId]);
 
   /* Local browser UI & viewer state -------------------------------------- */
-  const [annotate, setAnnotate] = useState(false);
-  const [pinsOpen, setPinsOpen] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [omniboxFeedback, setOmniboxFeedback] = useState<string | null>(null);
 
-  // Annotation composer state
-  const [pendingAnchor, setPendingAnchor] = useState<AnnotationAnchor | null>(null);
-  const [pendingSnapshot, setPendingSnapshot] = useState<string | undefined>(undefined);
-  const [comment, setComment] = useState("");
-  const [requestFixNow, setRequestFixNow] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-
-  // Viewer-specific toolbar & pin focus states
+  // Viewer-specific toolbar & focus states
   const [imageZoom, setImageZoom] = useState<ImageZoomMode>("fit");
   const [model3dPreset, setModel3dPreset] = useState<Model3DPreset | "">("Iso");
   const [model3dPresetNonce, setModel3dPresetNonce] = useState(0);
   const [model3dWireframe, setModel3dWireframe] = useState(false);
   const [focusCameraPose, setFocusCameraPose] = useState<CameraPose | null>(null);
-  const [focusDocBlockId, setFocusDocBlockId] = useState<string | null>(null);
-  const [focusImageAnnotationId, setFocusImageAnnotationId] = useState<string | null>(null);
-  const [focusPinNonce, setFocusPinNonce] = useState(0);
 
   useEffect(() => {
-    setPendingAnchor(null);
-    setPendingSnapshot(undefined);
-    setActionError(null);
     setFocusCameraPose(null);
-    setFocusDocBlockId(null);
-    setFocusImageAnnotationId(null);
     setOmniboxFeedback(null);
   }, [activeTabId]);
 
@@ -193,76 +185,80 @@ export function InAppBrowser({
     );
   }, [annotations, activeTab]);
 
-  const pickAnchor = useCallback((anchor: AnnotationAnchor, snapshot?: string) => {
-    setPendingAnchor(anchor);
-    setPendingSnapshot(snapshot);
-    setRequestFixNow(true);
-    setActionError(null);
-    setPinsOpen(false);
-  }, []);
+  const handleImportToChat = useCallback(
+    (attachment: ComposerAttachment) => {
+      if (onImportToChat) {
+        onImportToChat(attachment);
+        return;
+      }
+      if (onCreateAnnotation) {
+        const anchor: AnnotationAnchor =
+          attachment.kind === "doc_comment"
+            ? {
+                kind: "doc",
+                filePath: attachment.filePath,
+                blockId: attachment.id,
+                contentHash: attachment.id,
+                quote: attachment.quote ?? "",
+              }
+            : attachment.kind === "image_comment"
+              ? {
+                  kind: "image",
+                  filePath: attachment.filePath,
+                  ...(attachment.region ? { rect: attachment.region } : { pin: { x: 0.5, y: 0.5 } }),
+                }
+              : {
+                  kind: "model_3d",
+                  filePath: attachment.filePath,
+                  meshName: attachment.label || "Mesh",
+                  point: [0, 0, 0],
+                  normal: [0, 1, 0],
+                  camera: { pos: [0, 2, 5], target: [0, 0, 0], fov: 45 },
+                };
+        void onCreateAnnotation({
+          anchor,
+          comment: attachment.comment,
+          snapshotDataUrl: attachment.thumbnailDataUrl,
+          requestFixNow: true,
+        });
+      }
+    },
+    [onImportToChat, onCreateAnnotation],
+  );
 
-  const submitAnnotation = async () => {
-    if (!pendingAnchor || !comment.trim() || submitting) return;
-    setSubmitting(true);
-    setActionError(null);
-    try {
-      await onCreateAnnotation({
-        anchor: pendingAnchor,
-        comment: comment.trim(),
-        snapshotDataUrl: pendingSnapshot,
-        requestFixNow,
-      });
-      setPendingAnchor(null);
-      setPendingSnapshot(undefined);
-      setComment("");
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const handleArtifactSaved = useCallback(
+    (savedPath: string) => {
+      onRefreshContext();
+      onArtifactSaved?.(savedPath);
+    },
+    [onRefreshContext, onArtifactSaved],
+  );
 
-  const resolveAnnotation = (annotationId: string, status: AnnotationStatus) => {
-    setActionError(null);
-    void onResolveAnnotation(annotationId, status).catch((err) => {
-      setActionError(err instanceof Error ? err.message : String(err));
-    });
-  };
+  const handleChangeDockMode = useCallback(
+    (next: BrowserDockMode) => {
+      if (onChangeDockMode) {
+        onChangeDockMode(next);
+        return;
+      }
+      if (next === "fullscreen" || effectiveDockMode === "fullscreen") {
+        onToggleExpand();
+      }
+    },
+    [onChangeDockMode, effectiveDockMode, onToggleExpand],
+  );
 
-  const handleJumpToPin = (ann: AnnotationRecord) => {
-    if (ann.anchor.kind === "model_3d") {
-      setFocusCameraPose({
-        pos: [...ann.anchor.camera.pos],
-        target: [...ann.anchor.camera.target],
-      });
-      setModel3dPreset("");
-      setPinsOpen(false);
-    } else if (ann.anchor.kind === "doc") {
-      setFocusDocBlockId(ann.anchor.blockId);
-      setFocusPinNonce((n) => n + 1);
-      setPinsOpen(false);
-    } else if (ann.anchor.kind === "image") {
-      setFocusImageAnnotationId(ann.id);
-      setFocusPinNonce((n) => n + 1);
-      setPinsOpen(false);
-    }
-  };
-
-  const canAnnotate =
-    activeTab?.kind === "doc" || activeTab?.kind === "image" || activeTab?.kind === "model_3d";
-  const effectiveAnnotate = canAnnotate && annotate;
   const canBack = historyIdxRef.current > 0;
   const canForward = historyIdxRef.current < historyRef.current.length - 1;
 
   return (
     <div
-      className={`iab-root iab-shell ${expanded ? "iab-expanded" : ""}`}
+      className={`iab-root iab-shell ${effectiveDockMode === "fullscreen" ? "iab-expanded" : ""}`}
       style={{
         display: "flex",
         flexDirection: "column",
         height: "100%",
         minHeight: 0,
-        background: "#FFFFFF",
+        background: "var(--bg-canvas)",
         color: "var(--ink-primary)",
         fontFamily: "var(--font-sans)",
         position: "relative",
@@ -277,13 +273,9 @@ export function InAppBrowser({
         artifacts={artifacts}
         repoFiles={repoFiles}
         gitDiff={gitDiff}
-        expanded={expanded}
+        dockMode={effectiveDockMode}
         canBack={canBack}
         canForward={canForward}
-        canAnnotate={canAnnotate}
-        annotate={effectiveAnnotate}
-        pinsOpen={pinsOpen}
-        pinsCount={fileAnnotations.length}
         imageZoom={imageZoom}
         model3dPreset={model3dPreset}
         model3dWireframe={model3dWireframe}
@@ -297,12 +289,8 @@ export function InAppBrowser({
           setReloadNonce((n) => n + 1);
           onRefreshContext();
         }}
-        onToggleAnnotate={() => setAnnotate((v) => !v)}
-        onTogglePins={() => {
-          setPendingAnchor(null);
-          setPinsOpen((v) => !v);
-        }}
-        onToggleExpand={onToggleExpand}
+        onChangeDockMode={handleChangeDockMode}
+        onStartFloatDrag={effectiveFloatDrag}
         onCloseSidebar={onCloseSidebar}
         onChangeImageZoom={setImageZoom}
         onSelectModel3DPreset={(preset) => {
@@ -321,7 +309,7 @@ export function InAppBrowser({
           flex: 1,
           minHeight: 0,
           position: "relative",
-          background: "#FFFFFF",
+          background: "var(--bg-canvas)",
           overflow: "hidden",
         }}
       >
@@ -353,12 +341,10 @@ export function InAppBrowser({
             key={`${activeTab.id}:${reloadNonce}`}
             projectId={effectiveProjectId}
             filePath={activeTab.target}
-            annotate={effectiveAnnotate}
             annotations={fileAnnotations}
-            focusBlockId={focusDocBlockId}
-            focusNonce={focusPinNonce}
             artifactVersion={activeArtifact?.updatedAt ?? 0}
-            onPickAnchor={pickAnchor}
+            onImportToChat={handleImportToChat}
+            onArtifactSaved={handleArtifactSaved}
           />
         )}
 
@@ -367,13 +353,11 @@ export function InAppBrowser({
             key={`${activeTab.id}:${reloadNonce}`}
             projectId={effectiveProjectId}
             filePath={activeTab.target}
-            annotate={effectiveAnnotate}
             annotations={fileAnnotations}
             zoom={imageZoom}
-            focusAnnotationId={focusImageAnnotationId}
-            focusNonce={focusPinNonce}
             artifactVersion={activeArtifact?.updatedAt ?? 0}
-            onPickAnchor={pickAnchor}
+            onImportToChat={handleImportToChat}
+            onArtifactSaved={handleArtifactSaved}
           />
         )}
 
@@ -386,7 +370,7 @@ export function InAppBrowser({
                   style={{
                     width: "100%",
                     height: "100%",
-                    background: "#F5F5F5",
+                    background: "var(--stage-3d-bg, var(--bg-surface-subtle))",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -401,13 +385,12 @@ export function InAppBrowser({
               <LazyModel3DViewer
                 projectId={effectiveProjectId}
                 filePath={activeTab.target}
-                annotate={effectiveAnnotate}
                 annotations={fileAnnotations}
                 activePreset={model3dPreset}
                 presetNonce={model3dPresetNonce}
                 wireframe={model3dWireframe}
                 focusCameraPose={focusCameraPose}
-                onPickAnchor={pickAnchor}
+                onImportToChat={handleImportToChat}
                 onUserOrbit={() => setModel3dPreset("")}
               />
             </Suspense>
@@ -423,13 +406,9 @@ export function InAppBrowser({
           />
         )}
 
-        {activeTab?.kind === "diff" && (
-          <DiffViewer gitDiff={gitDiff} onRefreshDiff={onRefreshContext} />
-        )}
+        {activeTab?.kind === "diff" && <DiffViewer gitDiff={gitDiff} onRefreshDiff={onRefreshContext} />}
 
-        {activeTab?.kind === "web" && (
-          <WebViewer key={`${activeTab.id}:${reloadNonce}`} url={activeTab.target} />
-        )}
+        {activeTab?.kind === "web" && <WebViewer key={`${activeTab.id}:${reloadNonce}`} url={activeTab.target} />}
 
         {activeTab && !effectiveProjectId && activeTab.kind !== "diff" && activeTab.kind !== "web" && (
           <div
@@ -448,28 +427,6 @@ export function InAppBrowser({
           </div>
         )}
       </div>
-
-      <AnnotationOverlay
-        pendingAnchor={pendingAnchor}
-        pendingSnapshot={pendingSnapshot}
-        comment={comment}
-        requestFixNow={requestFixNow}
-        submitting={submitting}
-        actionError={actionError}
-        pinsOpen={pinsOpen}
-        fileAnnotations={fileAnnotations}
-        onChangeComment={setComment}
-        onChangeRequestFixNow={setRequestFixNow}
-        onCancelComposer={() => {
-          setPendingAnchor(null);
-          setPendingSnapshot(undefined);
-          setActionError(null);
-        }}
-        onSubmitComposer={() => void submitAnnotation()}
-        onClosePins={() => setPinsOpen(false)}
-        onJumpToPin={handleJumpToPin}
-        onResolveAnnotation={resolveAnnotation}
-      />
     </div>
   );
 }

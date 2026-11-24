@@ -14,7 +14,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { startBotFactoryDaemon, type BotFactoryApp } from "../apps/daemon/src/index";
-import { StateDatabase } from "../apps/daemon/src/db/database";
+import { CURRENT_SCHEMA_VERSION, StateDatabase } from "../apps/daemon/src/db/database";
 import { provisionProjectWorkspace } from "../apps/daemon/src/git/worktrees";
 import { isPathStrictlyWithinRoot, resolveSafeWorktreePath } from "../apps/daemon/src/runtimes/nativeHttpRuntime";
 
@@ -1117,7 +1117,7 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
     expect(gitRef1.stdout.toString().trim()).toBe(turn1Sha);
   });
 
-  it("cleanly migrates an isolated copy of C:\\Users\\willy\\bot-factory\\system\\state.db* from v1 to v2 and recovers 'verifying' self-mod proposals", () => {
+  it("cleanly migrates an isolated copy of C:\\Users\\willy\\bot-factory\\system\\state.db* to current schema (v3) and recovers 'verifying' self-mod proposals", () => {
     const realSystemDir = "C:\\Users\\willy\\bot-factory\\system";
     const realDbPath = join(realSystemDir, "state.db");
     expect(existsSync(realDbPath)).toBe(true);
@@ -1135,7 +1135,7 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
       }
     }
 
-    // Read-only sanity check before migration: confirm copied baseline is schema_version 1
+    // Read-only sanity check before migration: confirm copied baseline is schema_version >= 1
     const preCheck = new Database(copyDbPath, { readonly: true });
     const preMeta = preCheck.query("SELECT schema_version FROM runtime_meta WHERE id = 1").get() as {
       schema_version: number;
@@ -1145,7 +1145,7 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
     const preTasks = preCheck.query("SELECT id FROM tasks").all() as Array<{ id: string }>;
     preCheck.close();
 
-    expect(preMeta.schema_version).toBe(1);
+    expect(preMeta.schema_version).toBeGreaterThanOrEqual(1);
     expect(preProjects.length).toBeGreaterThanOrEqual(1);
     expect(preAgents.length).toBeGreaterThanOrEqual(1);
 
@@ -1156,10 +1156,12 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
       const firstRec = migrated.recoverAfterRestart();
       expect(firstRec.retiredEffects).toBeGreaterThanOrEqual(0);
 
+      expect(CURRENT_SCHEMA_VERSION).toBe(3);
       const postMeta = migrated.db.query("SELECT schema_version FROM runtime_meta WHERE id = 1").get() as {
         schema_version: number;
       };
-      expect(postMeta.schema_version).toBe(2);
+      expect(postMeta.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+      expect(postMeta.schema_version).toBe(3);
 
       const tables = new Set(
         (migrated.db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(
@@ -1169,6 +1171,12 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
       for (const reqTable of ["debates", "debate_messages", "verifications", "self_mod_proposals", "memory_embeddings"]) {
         expect(tables.has(reqTable)).toBe(true);
       }
+
+      const msgCols = new Set(
+        (migrated.db.query("PRAGMA table_info(messages)").all() as Array<{ name: string }>).map((c) => c.name),
+      );
+      expect(msgCols.has("sender_agent_id")).toBe(true);
+      expect(msgCols.has("sender_role")).toBe(true);
 
       // Verify existing projects, agents, and tasks are preserved intact
       expect(migrated.listProjects().map((p) => p.id)).toEqual(expect.arrayContaining(preProjects.map((p) => p.id)));
@@ -1221,6 +1229,221 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
       const afterWalStat = statSync(realWalPath);
       expect(afterWalStat.mtimeMs).toBe(beforeWalStat.mtimeMs);
       expect(afterWalStat.size).toBe(beforeWalStat.size);
+    }
+  });
+
+  it("deterministically migrates a self-contained v1 SQLite fixture through v2 to v3 while preserving rows and upgrading timestamps", () => {
+    const tempDir = makeTempRoot("bf-v1-fixture-");
+    const v1DbPath = join(tempDir, "state.db");
+    const nowMs = Date.now();
+    const nowSec = Math.floor(nowMs / 1000);
+
+    const rawDb = new Database(v1DbPath, { create: true });
+    rawDb.exec(`
+      CREATE TABLE runtime_meta (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        epoch INTEGER NOT NULL DEFAULT 0,
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        instance_id TEXT NOT NULL,
+        daemon_pid INTEGER NOT NULL,
+        fts_stale INTEGER NOT NULL DEFAULT 0,
+        started_at INTEGER NOT NULL
+      );
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        root_path TEXT NOT NULL,
+        repo_path TEXT NOT NULL,
+        routing_overrides_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        parent_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        scope TEXT NOT NULL,
+        name TEXT NOT NULL,
+        runtime_type TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'idle',
+        worktree_path TEXT,
+        worktree_branch TEXT,
+        pid INTEGER,
+        active_session_id TEXT,
+        last_summary TEXT,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        parent_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+        system_prompt TEXT NOT NULL,
+        system_prompt_hash TEXT NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 1,
+        token_in INTEGER NOT NULL DEFAULT 0,
+        token_out INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        agent_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'message',
+        role TEXT NOT NULL,
+        title TEXT,
+        content TEXT NOT NULL,
+        tool_call_id TEXT,
+        tool_status TEXT,
+        exit_code INTEGER,
+        file_path TEXT,
+        diff_preview TEXT,
+        checkpoint_ref TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        title TEXT NOT NULL,
+        spec_md TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'ready',
+        priority INTEGER NOT NULL DEFAULT 3,
+        assigned_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        source_annotation_id TEXT,
+        worktree_branch TEXT,
+        handoff_path TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE memory_facts (
+        rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        namespace TEXT NOT NULL,
+        doc_id TEXT,
+        entity TEXT NOT NULL DEFAULT 'general',
+        fact_text TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('fact','preference','decision','episode')),
+        version INTEGER NOT NULL DEFAULT 1,
+        is_latest INTEGER NOT NULL DEFAULT 1,
+        is_forgotten INTEGER NOT NULL DEFAULT 0,
+        is_inference INTEGER NOT NULL DEFAULT 0,
+        is_static INTEGER NOT NULL DEFAULT 0,
+        confidence REAL NOT NULL DEFAULT 0.85,
+        valid_from INTEGER NOT NULL,
+        forget_after INTEGER,
+        forget_reason TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE memory_edges (
+        src_id TEXT NOT NULL,
+        dst_id TEXT NOT NULL,
+        rel TEXT NOT NULL CHECK(rel IN ('updates','extends','derives')),
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(src_id, dst_id, rel)
+      );
+    `);
+
+    rawDb
+      .query(
+        "INSERT INTO runtime_meta (id, epoch, schema_version, instance_id, daemon_pid, fts_stale, started_at) VALUES (1, 1, 1, 'inst_v1', 9999, 0, ?)",
+      )
+      .run(nowMs);
+    rawDb
+      .query(
+        "INSERT INTO projects (id, slug, name, root_path, repo_path, status, created_at) VALUES ('prj_v1', 'v1-proj', 'V1 Fixture', ?, ?, 'active', ?)",
+      )
+      .run(join(tempDir, "proj"), join(tempDir, "proj", "repo"), nowMs);
+    rawDb
+      .query(
+        "INSERT INTO agents (id, project_id, scope, name, runtime_type, provider, model, status, active_session_id, updated_at) VALUES ('agt_v1', 'prj_v1', 'peer', 'Forge-V1', 'native_http', 'mistral-hosted', 'glm-5.3', 'working', 'ses_v1', ?)",
+      )
+      .run(nowMs);
+    rawDb
+      .query(
+        "INSERT INTO sessions (id, agent_id, system_prompt, system_prompt_hash, created_at, updated_at) VALUES ('ses_v1', 'agt_v1', 'sys', 'hash_v1', ?, ?)",
+      )
+      .run(nowMs, nowMs);
+    rawDb
+      .query(
+        "INSERT INTO messages (id, session_id, agent_id, seq, kind, role, title, content, created_at) VALUES ('msg_v1', 'ses_v1', 'agt_v1', 1, 'message', 'assistant', 'V1 Msg', 'Legacy v1 assistant message', ?)",
+      )
+      .run(nowMs);
+    rawDb
+      .query(
+        "INSERT INTO tasks (id, project_id, title, spec_md, status, priority, assigned_agent_id, created_at, updated_at) VALUES ('tsk_v1', 'prj_v1', 'Legacy V1 Task', 'Verify v1 -> v2 -> v3 upgrade', 'ready', 2, 'agt_v1', ?, ?)",
+      )
+      .run(nowMs, nowMs);
+    rawDb
+      .query(
+        "INSERT INTO memory_facts (id, namespace, entity, fact_text, kind, valid_from, forget_after, created_at, updated_at) VALUES ('fact_v1_a', 'global', 'studio', 'Prefer strict checks', 'preference', ?, ?, ?, ?), ('fact_v1_b', 'global', 'studio', 'Use isolated worktrees', 'decision', ?, NULL, ?, ?)",
+      )
+      .run(nowSec, nowSec + 3600, nowSec, nowSec, nowSec, nowSec, nowSec);
+    rawDb
+      .query("INSERT INTO memory_edges (src_id, dst_id, rel, created_at) VALUES ('fact_v1_b', 'fact_v1_a', 'extends', ?)")
+      .run(nowSec);
+    rawDb.close();
+
+    const migrated = new StateDatabase(v1DbPath);
+    try {
+      const rec = migrated.recoverAfterRestart();
+      expect(rec.resetAgents).toBe(1);
+
+      const postMeta = migrated.db.query("SELECT schema_version FROM runtime_meta WHERE id = 1").get() as {
+        schema_version: number;
+      };
+      expect(postMeta.schema_version).toBe(3);
+
+      const tables = new Set(
+        (migrated.db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(
+          (r) => r.name,
+        ),
+      );
+      for (const reqTable of ["debates", "debate_messages", "verifications", "self_mod_proposals", "memory_embeddings"]) {
+        expect(tables.has(reqTable)).toBe(true);
+      }
+
+      const colsOf = (table: string) =>
+        new Set((migrated.db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => c.name));
+      expect(colsOf("projects").has("verify_checks_json")).toBe(true);
+      expect(colsOf("agents").has("turn_counter")).toBe(true);
+      expect(colsOf("agents").has("depth")).toBe(true);
+      expect(colsOf("agents").has("subagent_mode")).toBe(true);
+      expect(colsOf("tasks").has("depends_on_json")).toBe(true);
+      expect(colsOf("tasks").has("auto_retry_count")).toBe(true);
+      expect(colsOf("messages").has("sender_agent_id")).toBe(true);
+      expect(colsOf("messages").has("sender_role")).toBe(true);
+
+      // Verify preserved rows + second-scale -> ms timestamp upgrade
+      expect(migrated.listProjects().map((p) => p.id)).toContain("prj_v1");
+      const agent = migrated.getAgent("agt_v1");
+      expect(agent?.status).toBe("idle");
+      expect(agent?.turnCounter).toBe(0);
+      expect(migrated.getTask("tsk_v1")?.dependsOn).toEqual([]);
+      const msg = migrated.getMessage("msg_v1");
+      expect(msg?.content).toBe("Legacy v1 assistant message");
+      expect(msg?.senderAgentId).toBeNull();
+
+      const upgradedFact = migrated.db
+        .query("SELECT valid_from, forget_after, created_at FROM memory_facts WHERE id = 'fact_v1_a'")
+        .get() as { valid_from: number; forget_after: number; created_at: number };
+      expect(upgradedFact.valid_from).toBe(nowSec * 1000);
+      expect(upgradedFact.forget_after).toBe((nowSec + 3600) * 1000);
+      expect(upgradedFact.created_at).toBe(nowSec * 1000);
+
+      const liveCount = (migrated.db.query("SELECT COUNT(*) AS cnt FROM live_memory_facts").get() as { cnt: number }).cnt;
+      expect(liveCount).toBe(2);
+    } finally {
+      migrated.close();
     }
   });
 });

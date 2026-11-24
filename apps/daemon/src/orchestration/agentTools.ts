@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import {
+  AgentScopeSchema,
   AutonomyLevelSchema,
   MemoryKindSchema,
   MemoryL1TargetSchema,
@@ -9,11 +10,9 @@ import {
   TaskStatusSchema,
   VerifyCheckSchema,
   type AgentRecord,
-  type AutonomyLevel,
   type MemoryKind,
   type ProjectRecord,
   type QuietStatusProjection,
-  type ReasoningEffort,
   type RpcCommand,
   type SubscriptionTopic,
   type TaskRecord,
@@ -159,6 +158,7 @@ export interface MainManagerToolContext {
   executeCommand: (cmd: RpcCommand) => unknown;
   getQuietStatusProjection: () => QuietStatusProjection;
   getProjectBoardSnapshot: (projectId: string) => unknown;
+  getConfigSnapshot: () => unknown;
 }
 
 export interface TeamLeadToolContext {
@@ -243,6 +243,158 @@ export const MAIN_MANAGER_TOOL_DEFS: ToolDefinition[] = [
       properties: {
         projectId: { type: "string", description: "Optional project ID or slug filter." },
       },
+    },
+  },
+  {
+    name: "bf_config_get",
+    description:
+      "Read scrubbed Bot-Factory runtime configuration (providers, models, routing defaults, hub host/port, memory and autonomy guardrails).",
+    parametersJsonSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "bf_config_update",
+    description:
+      "Hot-reload hub configuration (providers, routing defaults, memory, guardrails) and/or set a per-project routing override.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        patch: {
+          type: "object",
+          description: "Optional partial HubConfig JSON patch object to merge and hot-reload.",
+        },
+        projectRoutingOverride: {
+          type: "object",
+          description: "Optional per-project intent routing override.",
+          properties: {
+            projectId: { type: "string", description: "Project ID or slug." },
+            intent: { type: "string", description: "Routing intent name (e.g. coding_parallel, project_manager)." },
+            provider: { type: "string", description: "Configured provider ID." },
+            model: { type: "string", description: "Configured model key or ID." },
+          },
+          required: ["projectId", "intent", "provider", "model"],
+        },
+      },
+    },
+  },
+  {
+    name: "bf_bot_spawn",
+    description: "Spawn a new project, peer, sidekick, or verifier bot inside a project.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", description: "Project ID or slug." },
+        name: { type: "string", description: "Bot display name." },
+        scope: {
+          type: "string",
+          enum: ["project", "peer", "sidekick", "verifier"],
+          description: "Agent scope (default 'peer').",
+        },
+        provider: { type: "string", description: "Optional provider ID." },
+        model: { type: "string", description: "Optional model key or ID." },
+        autonomyLevel: { type: "string", enum: ["spec", "low", "medium", "high"] },
+        reasoningEffort: { type: "string", enum: ["low", "medium", "high", "max"] },
+        taskId: { type: "string", description: "Optional initial task ID hint for worktree naming." },
+        parentAgentId: { type: "string", description: "Optional parent bot ID or name (for sidekicks)." },
+      },
+      required: ["projectId", "name"],
+    },
+  },
+  {
+    name: "bf_bot_update_model",
+    description: "Switch an existing bot (or the Meta-Orchestrator) to a configured provider and model.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        agentId: { type: "string", description: "Target agent ID or name." },
+        projectId: { type: "string", description: "Optional project ID or slug when identifying a bot by name." },
+        provider: { type: "string", description: "Configured provider ID." },
+        model: { type: "string", description: "Configured model key or ID." },
+      },
+      required: ["agentId", "provider", "model"],
+    },
+  },
+  {
+    name: "bf_bot_message",
+    description: "Send a direct orchestrator message into a target project bot's timeline and trigger its turn.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", description: "Project ID or slug." },
+        agentId: { type: "string", description: "Target bot ID or name." },
+        message: { type: "string", description: "Message content to deliver to the bot." },
+      },
+      required: ["projectId", "agentId", "message"],
+    },
+  },
+  {
+    name: "bf_task_list",
+    description: "List all tasks in a project (by ID or slug) with assigned bot names and DAG dependencies.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", description: "Project ID or slug." },
+        status: {
+          type: "string",
+          enum: ["backlog", "ready", "claimed", "in_review", "verified", "merged", "blocked"],
+          description: "Optional status filter.",
+        },
+      },
+      required: ["projectId"],
+    },
+  },
+  {
+    name: "bf_task_create",
+    description: "Create a task on a project's board with optional priority and DAG dependencies.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", description: "Project ID or slug." },
+        title: { type: "string", description: "Short task title." },
+        specMd: { type: "string", description: "Detailed markdown specification." },
+        priority: { type: "number", description: "Priority 1 (highest) to 5 (default 3)." },
+        dependsOn: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional existing task IDs that must verify/merge before dispatch.",
+        },
+      },
+      required: ["projectId", "title"],
+    },
+  },
+  {
+    name: "bf_task_update",
+    description: "Update a task's status, specification, priority, or assigned bot on the project board.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string", description: "Target task ID." },
+        projectId: { type: "string", description: "Optional project ID or slug guard." },
+        status: {
+          type: "string",
+          enum: ["backlog", "ready", "claimed", "in_review", "verified", "merged", "blocked"],
+        },
+        specMd: { type: "string" },
+        priority: { type: "number" },
+        assignedAgentId: {
+          type: ["string", "null"],
+          description: "Optional bot ID/name to assign, or null/empty to unassign.",
+        },
+      },
+      required: ["taskId"],
+    },
+  },
+  {
+    name: "bf_task_dispatch",
+    description: "Dispatch a ready task (with met dependencies) to an idle or auto-spawned bot.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", description: "Project ID or slug." },
+        taskId: { type: "string", description: "Task ID to dispatch." },
+        agentId: { type: "string", description: "Optional target bot ID or name." },
+        autonomous: { type: "boolean", description: "Whether to enroll task in autonomous verification/retry." },
+      },
+      required: ["projectId", "taskId"],
     },
   },
   {
@@ -484,6 +636,101 @@ function validateVerifyChecks(raw: unknown): VerifyCheck[] | undefined {
   return raw.map((item) => VerifyCheckSchema.parse(item));
 }
 
+function resolveProjectOrThrow(db: StateDatabase, rawProjectId: unknown): ProjectRecord {
+  const pid = typeof rawProjectId === "string" ? rawProjectId.trim() : "";
+  if (!pid) throw new Error("projectId_required");
+  const project = db.getProject(pid);
+  if (!project) throw new Error(`Project not found: ${pid}`);
+  return project;
+}
+
+function resolveAgentRef(db: StateDatabase, rawAgentRef: unknown, projectId?: string): AgentRecord {
+  const ref = typeof rawAgentRef === "string" ? rawAgentRef.trim() : "";
+  if (!ref) throw new Error("agentId_required");
+  const byId = db.getAgent(ref);
+  if (byId) {
+    if (projectId && byId.projectId !== projectId) {
+      throw new Error("agent_project_mismatch");
+    }
+    return byId;
+  }
+  const candidates = projectId ? db.listAgents(projectId) : db.listAgents();
+  const lower = ref.toLowerCase();
+  const matches = candidates.filter((a) => a.name.toLowerCase() === lower);
+  const activeMatch = matches.find((a) => a.status !== "stopped") ?? matches[0];
+  if (activeMatch) return activeMatch;
+  throw new Error(`Agent not found: ${ref}`);
+}
+
+function commitTaskUpdate(
+  ctx: Pick<
+    MainManagerToolContext,
+    "db" | "core" | "scrubber" | "getQuietStatusProjection" | "getProjectBoardSnapshot"
+  >,
+  existing: TaskRecord,
+  args: Record<string, unknown>,
+  allowAssign: boolean,
+) {
+  const nextStatus = args.status !== undefined ? TaskStatusSchema.parse(args.status) : existing.status;
+  const nextSpecMd = typeof args.specMd === "string" ? ctx.scrubber.scrub(args.specMd) : existing.specMd;
+  const nextPriority =
+    typeof args.priority === "number" && Number.isFinite(args.priority)
+      ? Math.max(1, Math.min(5, Math.trunc(args.priority)))
+      : existing.priority;
+
+  let nextAssignedAgentId = existing.assignedAgentId;
+  if (allowAssign && args.assignedAgentId !== undefined) {
+    if (
+      args.assignedAgentId === null ||
+      (typeof args.assignedAgentId === "string" && args.assignedAgentId.trim() === "")
+    ) {
+      nextAssignedAgentId = null;
+    } else if (typeof args.assignedAgentId === "string") {
+      const assignee = resolveAgentRef(ctx.db, args.assignedAgentId, existing.projectId);
+      if (assignee.scope === "global") throw new Error("agent_invalid_scope:global");
+      if (assignee.status === "stopped") throw new Error(`agent_unavailable:${assignee.status}`);
+      nextAssignedAgentId = assignee.id;
+    } else {
+      throw new Error("invalid_assignedAgentId");
+    }
+  }
+
+  const updated: TaskRecord = {
+    ...existing,
+    status: nextStatus,
+    specMd: nextSpecMd,
+    priority: nextPriority,
+    assignedAgentId: nextAssignedAgentId,
+    updatedAt: Date.now(),
+  };
+
+  const boardEvt = {
+    topic: `project:${existing.projectId}:board` as SubscriptionTopic,
+    eventType: "board.updated",
+    payload: null as unknown,
+  };
+  const statusEvt = {
+    topic: "global:status" as SubscriptionTopic,
+    eventType: "status.updated",
+    payload: null as unknown,
+  };
+
+  return ctx.core.commitCommand(newId("cmd"), "task.update", () => ({
+    result: { task: updated },
+    applyProjections: () => {
+      ctx.db.upsertTask(updated);
+      boardEvt.payload = ctx.getProjectBoardSnapshot(existing.projectId);
+      statusEvt.payload = ctx.getQuietStatusProjection();
+    },
+    events: [
+      { topic: `project:${existing.projectId}:board`, eventType: "task.updated", payload: updated },
+      boardEvt,
+      statusEvt,
+    ],
+    effects: [],
+  }));
+}
+
 export function createMainManagerToolExecutor(ctx: MainManagerToolContext): ToolCallExecutor {
   return async ({ name, args }) => {
     switch (name) {
@@ -568,13 +815,26 @@ export function createMainManagerToolExecutor(ctx: MainManagerToolContext): Tool
               agentId: pm.id,
               sessionId: pm.activeSessionId,
               seq: 0,
-              kind: "steer",
+              kind: "message",
               role: "user",
+              senderAgentId: ctx.metaAgentId,
+              senderRole: "orchestrator",
               title: `Main Manager Delegation (${goalCtx.goalId})`,
               content: cleanGoal,
               createdAt: now,
             }
           : null;
+
+        const boardEvt = {
+          topic: `project:${project.id}:board` as SubscriptionTopic,
+          eventType: "board.updated",
+          payload: null as unknown,
+        };
+        const statusEvt = {
+          topic: "global:status" as SubscriptionTopic,
+          eventType: "status.updated",
+          payload: null as unknown,
+        };
 
         ctx.core.commitCommand(newId("cmd"), "team.delegate", () => ({
           result: { ok: true, goalId: goalCtx.goalId, projectId: project.id, pmAgentId: pm.id, status: goalCtx.status },
@@ -587,14 +847,16 @@ export function createMainManagerToolExecutor(ctx: MainManagerToolContext): Tool
               projectId: project.id,
               agentId: pm.id,
             });
+            boardEvt.payload = ctx.getProjectBoardSnapshot(project.id);
+            statusEvt.payload = ctx.getQuietStatusProjection();
           },
           events: [
             { topic: "chat:meta", eventType: "chat.artifact_card", payload: cardPayload },
             ...(pmTimelineItem
               ? [{ topic: `bot:${pm.id}:timeline` as SubscriptionTopic, eventType: "timeline.item", payload: pmTimelineItem }]
               : []),
-            { topic: `project:${project.id}:board`, eventType: "board.updated", payload: ctx.getProjectBoardSnapshot(project.id) },
-            { topic: "global:status", eventType: "status.updated", payload: ctx.getQuietStatusProjection() },
+            boardEvt,
+            statusEvt,
           ],
           effects: [
             {
@@ -639,6 +901,7 @@ export function createMainManagerToolExecutor(ctx: MainManagerToolContext): Tool
             pm: agents.find((a) => a.scope === "project") ?? null,
             peers: agents.filter((a) => a.scope === "peer"),
             subagents: agents.filter((a) => a.scope === "sidekick"),
+            verifiers: agents.filter((a) => a.scope === "verifier"),
             tasks,
             goals,
             verifications,
@@ -650,6 +913,190 @@ export function createMainManagerToolExecutor(ctx: MainManagerToolContext): Tool
           quietStatus: ctx.getQuietStatusProjection(),
           teams,
         };
+      }
+      case "bf_config_get": {
+        return ctx.getConfigSnapshot();
+      }
+      case "bf_config_update": {
+        const hasPatch = args.patch !== undefined;
+        const hasOverride = args.projectRoutingOverride !== undefined;
+        if (!hasPatch && !hasOverride) {
+          throw new Error("config_update_patch_or_override_required");
+        }
+
+        let configUpdate: unknown;
+        if (hasPatch) {
+          if (!args.patch || typeof args.patch !== "object" || Array.isArray(args.patch)) {
+            throw new Error("invalid_config_patch_object");
+          }
+          configUpdate = ctx.executeCommand({
+            commandId: newId("cmd"),
+            type: "config.update",
+            patchJson: JSON.stringify(args.patch),
+          });
+        }
+
+        let routingOverride: unknown;
+        if (hasOverride) {
+          const rawOv = args.projectRoutingOverride;
+          if (!rawOv || typeof rawOv !== "object" || Array.isArray(rawOv)) {
+            throw new Error("invalid_project_routing_override");
+          }
+          const ov = rawOv as Record<string, unknown>;
+          const project = resolveProjectOrThrow(ctx.db, ov.projectId);
+          const intent = typeof ov.intent === "string" ? ov.intent.trim() : "";
+          const provider = typeof ov.provider === "string" ? ov.provider.trim() : "";
+          const model = typeof ov.model === "string" ? ov.model.trim() : "";
+          if (!intent || !provider || !model) {
+            throw new Error("routing_override_fields_required");
+          }
+          routingOverride = ctx.executeCommand({
+            commandId: newId("cmd"),
+            type: "routing.set_override",
+            projectId: project.id,
+            intent,
+            target: { provider, model },
+          });
+        }
+
+        return {
+          ok: true,
+          ...(configUpdate !== undefined ? { configUpdate } : {}),
+          ...(routingOverride !== undefined ? { routingOverride } : {}),
+        };
+      }
+      case "bf_bot_spawn": {
+        const project = resolveProjectOrThrow(ctx.db, args.projectId);
+        const botName = typeof args.name === "string" ? args.name.trim() : "";
+        if (!botName) throw new Error("bot_name_required");
+        const scope = args.scope !== undefined ? AgentScopeSchema.parse(args.scope) : "peer";
+        const autonomyLevel =
+          args.autonomyLevel !== undefined ? AutonomyLevelSchema.parse(args.autonomyLevel) : undefined;
+        const reasoningEffort =
+          args.reasoningEffort !== undefined ? ReasoningEffortSchema.parse(args.reasoningEffort) : undefined;
+        const parentAgentId =
+          typeof args.parentAgentId === "string" && args.parentAgentId.trim()
+            ? resolveAgentRef(ctx.db, args.parentAgentId.trim(), project.id).id
+            : undefined;
+        return ctx.executeCommand({
+          commandId: newId("cmd"),
+          type: "bot.spawn",
+          projectId: project.id,
+          name: botName,
+          scope,
+          provider: typeof args.provider === "string" && args.provider.trim() ? args.provider.trim() : undefined,
+          model: typeof args.model === "string" && args.model.trim() ? args.model.trim() : undefined,
+          taskId: typeof args.taskId === "string" && args.taskId.trim() ? args.taskId.trim() : undefined,
+          parentAgentId,
+          autonomyLevel,
+          reasoningEffort,
+        });
+      }
+      case "bf_bot_update_model": {
+        const projectId =
+          typeof args.projectId === "string" && args.projectId.trim()
+            ? resolveProjectOrThrow(ctx.db, args.projectId).id
+            : undefined;
+        const agent = resolveAgentRef(ctx.db, args.agentId, projectId);
+        const provider = typeof args.provider === "string" ? args.provider.trim() : "";
+        const model = typeof args.model === "string" ? args.model.trim() : "";
+        if (!provider || !model) throw new Error("provider_and_model_required");
+        return ctx.executeCommand({
+          commandId: newId("cmd"),
+          type: "bot.update_model",
+          agentId: agent.id,
+          provider,
+          model,
+        });
+      }
+      case "bf_bot_message": {
+        const project = resolveProjectOrThrow(ctx.db, args.projectId);
+        const agent = resolveAgentRef(ctx.db, args.agentId, project.id);
+        const message = typeof args.message === "string" ? args.message.trim() : "";
+        if (!message) throw new Error("message_required");
+        return ctx.executeCommand({
+          commandId: newId("cmd"),
+          type: "bot.message",
+          projectId: project.id,
+          agentId: agent.id,
+          message,
+          senderAgentId: ctx.metaAgentId,
+          senderRole: "orchestrator",
+        });
+      }
+      case "bf_task_list": {
+        const project = resolveProjectOrThrow(ctx.db, args.projectId);
+        const statusFilter = args.status !== undefined ? TaskStatusSchema.parse(args.status) : null;
+        const agentNames = new Map(ctx.db.listAgents(project.id).map((a) => [a.id, a.name]));
+        const tasks = ctx.db
+          .listTasks(project.id)
+          .filter((t) => (statusFilter ? t.status === statusFilter : true))
+          .map((t) => ({
+            ...t,
+            assignedAgentName: t.assignedAgentId ? (agentNames.get(t.assignedAgentId) ?? null) : null,
+            dependsOn: t.dependsOn ?? [],
+          }));
+        return {
+          project: { id: project.id, slug: project.slug, name: project.name },
+          tasks,
+        };
+      }
+      case "bf_task_create": {
+        const project = resolveProjectOrThrow(ctx.db, args.projectId);
+        const title = typeof args.title === "string" ? ctx.scrubber.scrub(args.title.trim()) : "";
+        if (!title) throw new Error("task_title_required");
+        const specMd = typeof args.specMd === "string" ? ctx.scrubber.scrub(args.specMd) : "";
+        const priority =
+          typeof args.priority === "number" && Number.isFinite(args.priority)
+            ? Math.max(1, Math.min(5, Math.trunc(args.priority)))
+            : 3;
+        const dependsOn = Array.isArray(args.dependsOn)
+          ? args.dependsOn.map((d) => String(d).trim()).filter(Boolean)
+          : undefined;
+        return ctx.executeCommand({
+          commandId: newId("cmd"),
+          type: "task.create",
+          projectId: project.id,
+          title,
+          specMd,
+          priority,
+          dependsOn,
+        });
+      }
+      case "bf_task_update": {
+        const taskId = typeof args.taskId === "string" ? args.taskId.trim() : "";
+        if (!taskId) throw new Error("taskId_required");
+        const existing = ctx.db.getTask(taskId);
+        if (!existing) throw new Error(`Task not found: ${taskId}`);
+        if (typeof args.projectId === "string" && args.projectId.trim()) {
+          const project = resolveProjectOrThrow(ctx.db, args.projectId);
+          if (existing.projectId !== project.id) throw new Error("task_project_mismatch");
+        }
+        return commitTaskUpdate(ctx, existing, args, true);
+      }
+      case "bf_task_dispatch": {
+        const taskId = typeof args.taskId === "string" ? args.taskId.trim() : "";
+        if (!taskId) throw new Error("taskId_required");
+        const task = ctx.db.getTask(taskId);
+        if (!task) throw new Error(`Task not found: ${taskId}`);
+        const project =
+          typeof args.projectId === "string" && args.projectId.trim()
+            ? resolveProjectOrThrow(ctx.db, args.projectId)
+            : resolveProjectOrThrow(ctx.db, task.projectId);
+        if (task.projectId !== project.id) throw new Error("task_project_mismatch");
+        const agentId =
+          typeof args.agentId === "string" && args.agentId.trim()
+            ? resolveAgentRef(ctx.db, args.agentId.trim(), project.id).id
+            : undefined;
+        const autonomous = typeof args.autonomous === "boolean" ? args.autonomous : undefined;
+        return ctx.executeCommand({
+          commandId: newId("cmd"),
+          type: "task.dispatch",
+          projectId: project.id,
+          taskId: task.id,
+          agentId,
+          autonomous,
+        });
       }
       case "bf_memory_search": {
         const query = typeof args.query === "string" ? args.query : "";
@@ -859,34 +1306,7 @@ export function createTeamLeadToolExecutor(ctx: TeamLeadToolContext): ToolCallEx
         const existing = ctx.db.getTask(taskId);
         if (!existing) throw new Error(`Task not found: ${taskId}`);
         if (existing.projectId !== project.id) throw new Error("task_project_mismatch");
-
-        const nextStatus = args.status !== undefined ? TaskStatusSchema.parse(args.status) : existing.status;
-        const nextSpecMd =
-          typeof args.specMd === "string" ? ctx.scrubber.scrub(args.specMd) : existing.specMd;
-        const nextPriority =
-          typeof args.priority === "number" && Number.isFinite(args.priority)
-            ? Math.max(1, Math.min(5, Math.trunc(args.priority)))
-            : existing.priority;
-
-        const updated: TaskRecord = {
-          ...existing,
-          status: nextStatus,
-          specMd: nextSpecMd,
-          priority: nextPriority,
-          updatedAt: Date.now(),
-        };
-
-        return ctx.core.commitCommand(newId("cmd"), "task.update", () => ({
-          result: { task: updated },
-          applyProjections: () => {
-            ctx.db.upsertTask(updated);
-          },
-          events: [
-            { topic: `project:${project.id}:board`, eventType: "task.updated", payload: updated },
-            { topic: `project:${project.id}:board`, eventType: "board.updated", payload: ctx.getProjectBoardSnapshot(project.id) },
-          ],
-          effects: [],
-        }));
+        return commitTaskUpdate(ctx, existing, args, false);
       }
       case "bf_bot_spawn": {
         const botName = typeof args.name === "string" ? args.name.trim() : "";

@@ -16,6 +16,7 @@ const SERVER_VERSION = "0.1.0";
 
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:4310";
 const DAEMON_FETCH_TIMEOUT_MS = 15_000;
+export const DEFAULT_SUBAGENT_WAIT_MS = 60_000;
 
 // --- Types ---
 
@@ -408,14 +409,20 @@ export async function handleMcpJsonRpcRequest(
 
 // --- Daemon HTTP client ---
 
+export function computeMcpFetchTimeoutMs(name: string, args: Record<string, unknown>): number {
+  const requestedWaitMs =
+    name === "bf_subagent_wait"
+      ? typeof args.timeoutMs === "number" && Number.isFinite(args.timeoutMs)
+        ? Math.max(0, Math.min(300_000, args.timeoutMs))
+        : DEFAULT_SUBAGENT_WAIT_MS
+      : 0;
+  return Math.max(DAEMON_FETCH_TIMEOUT_MS, requestedWaitMs + 5_000);
+}
+
 export function makeDaemonCallTool(config: BridgeConfig): CallToolFn {
   return async (name, args) => {
     const url = `${config.daemonUrl.replace(/\/+$/, "")}/api/mcp/${name}`;
-    const requestedWaitMs =
-      name === "bf_subagent_wait" && typeof args.timeoutMs === "number" && Number.isFinite(args.timeoutMs)
-        ? Math.max(0, Math.min(300_000, args.timeoutMs))
-        : 0;
-    const fetchTimeoutMs = Math.max(DAEMON_FETCH_TIMEOUT_MS, requestedWaitMs + 5_000);
+    const fetchTimeoutMs = computeMcpFetchTimeoutMs(name, args);
     let res: Response;
     try {
       res = await fetch(url, {

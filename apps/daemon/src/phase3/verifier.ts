@@ -39,7 +39,7 @@ const STAGED_CONTENT_EXCERPT_MAX_CHARS = 4000;
 const DIFF_STAT_MAX_CHARS = 2000;
 const DIFF_EXCERPT_MAX_CHARS = 6000;
 const SUMMARY_MAX_CHARS = 4000;
-const CHECK_DETAIL_MAX_CHARS = 300;
+const CHECK_DETAIL_MAX_CHARS = 800;
 const DEFAULT_VERIFY_CHECK_TIMEOUT_MS = 60_000;
 const VERIFY_OUTPUT_MAX_BUFFER_CHARS = 16_384;
 const VERIFY_OUTPUT_TAIL_CHARS = 800;
@@ -76,6 +76,62 @@ export function parseVerifierVerdict(
 
 function truncate(input: string, max: number): string {
   return input.length > max ? `${input.slice(0, max)}\n… [truncated]` : input;
+}
+
+function truncateTail(input: string, max: number): string {
+  if (input.length <= max) return input;
+  const colonIdx = input.indexOf(": ");
+  if (colonIdx > 0 && colonIdx <= 48) {
+    const prefix = `${input.slice(0, colonIdx + 2)}…`;
+    const tailLen = Math.max(0, max - prefix.length);
+    return `${prefix}${input.slice(input.length - tailLen)}`;
+  }
+  return `…${input.slice(input.length - Math.max(0, max - 1))}`;
+}
+
+function mergeWorktreeAndBranchDiff(
+  branchDiff: GitDiffResponse,
+  workspaceDiff: GitDiffResponse,
+): GitDiffResponse {
+  if (branchDiff.filesChanged === 0) return workspaceDiff;
+  if (workspaceDiff.filesChanged === 0) return branchDiff;
+
+  const byPath = new Map<string, GitDiffFileSummary>();
+  for (const f of branchDiff.files) {
+    byPath.set(f.path, { ...f });
+  }
+  for (const wf of workspaceDiff.files) {
+    const existing = byPath.get(wf.path);
+    if (!existing) {
+      byPath.set(wf.path, { ...wf });
+    } else {
+      const mergedPatch =
+        existing.patch && wf.patch
+          ? `${existing.patch}\n\n# Uncommitted changes\n${wf.patch}`.slice(0, DIFF_EXCERPT_MAX_CHARS)
+          : wf.patch || existing.patch;
+      byPath.set(wf.path, {
+        path: wf.path,
+        status: wf.status === "deleted" ? "deleted" : existing.status === "added" ? "added" : wf.status,
+        added: existing.added + wf.added,
+        removed: existing.removed + wf.removed,
+        patch: mergedPatch,
+      });
+    }
+  }
+  const files = [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)).slice(0, 40);
+  let insertions = 0;
+  let deletions = 0;
+  for (const f of files) {
+    insertions += f.added;
+    deletions += f.removed;
+  }
+  return {
+    branch: workspaceDiff.branch && workspaceDiff.branch !== "main" ? workspaceDiff.branch : branchDiff.branch,
+    filesChanged: files.length,
+    insertions,
+    deletions,
+    files,
+  };
 }
 
 function buildVerifyCheckEnv(): Record<string, string | undefined> {
@@ -444,7 +500,7 @@ export class IndependentVerifier {
       `## Worktree Change Evidence\n${this.scrubber.scrub(worktree.diffStat || "(git status unavailable)")}\n\n` +
       `## Worktree Git Diff\n${this.scrubber.scrub(worktree.diffExcerpt || "(no worktree diff)")}\n\n` +
       `## Objective Check Results\n${checks
-        .map((c) => `- ${c.name}: ${c.passed ? "PASS" : "FAIL"} — ${truncate(c.detail, CHECK_DETAIL_MAX_CHARS)}`)
+        .map((c) => `- ${c.name}: ${c.passed ? "PASS" : "FAIL"} — ${truncateTail(c.detail, CHECK_DETAIL_MAX_CHARS)}`)
         .join("\n")}\n\n` +
       (objectiveChecksPassed
         ? "All objective checks passed. Assess whether the work actually satisfies the spec, then end with your VERDICT line."
@@ -462,7 +518,7 @@ export class IndependentVerifier {
     const parsed = parseVerifierVerdict(turn.finalText, objectiveChecksPassed);
     const failedCheckFindings = checks
       .filter((c) => !c.passed)
-      .map((c) => `check_failed:${c.name}: ${truncate(c.detail, 200)}`);
+      .map((c) => `check_failed:${c.name}: ${truncateTail(c.detail, CHECK_DETAIL_MAX_CHARS)}`);
     const verdict: VerificationVerdict = !objectiveChecksPassed
       ? "fail"
       : turn.ok
@@ -720,13 +776,14 @@ export class IndependentVerifier {
       };
     }
 
-    let diff = await computeWorkspaceGitDiff(basePath, (t) => this.scrubber.scrub(t));
-    if (diff.filesChanged === 0 && resolve(basePath) !== resolve(project.repoPath) && existsSync(project.repoPath)) {
-      const branchDiff = await computeBranchCommitsDiff(basePath, project.repoPath, (t) => this.scrubber.scrub(t));
-      if (branchDiff.filesChanged > 0) {
-        diff = branchDiff;
-      }
-    }
+    const workspaceDiff = await computeWorkspaceGitDiff(basePath, (t) => this.scrubber.scrub(t));
+    const diff =
+      resolve(basePath) !== resolve(project.repoPath) && existsSync(project.repoPath)
+        ? mergeWorktreeAndBranchDiff(
+            await computeBranchCommitsDiff(basePath, project.repoPath, (t) => this.scrubber.scrub(t)),
+            workspaceDiff,
+          )
+        : workspaceDiff;
 
     if (diff.filesChanged === 0) {
       if (this.isVerifiedDocOnlyChange(project, task, handoffContent)) {

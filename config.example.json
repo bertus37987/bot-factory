@@ -113,6 +113,18 @@
         }
       }
     },
+    "factory-droid-acp": {
+      "runtime": "acp_stdio",
+      "command": "droid",
+      "args": ["exec", "-o", "acp"],
+      "models": {
+        "gpt-6.1-sol": {
+          "id": "gpt-6.1-sol",
+          "capabilities": ["coding_deep", "refactor", "debug", "autonomous_slice"],
+          "tier": "flagship"
+        }
+      }
+    },
     "opencode-acp": {
       "runtime": "acp_stdio",
       "command": "opencode",

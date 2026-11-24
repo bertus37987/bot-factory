@@ -1,17 +1,19 @@
-import { Check, Copy, FileWarning, Pin } from "lucide-react";
+import { Check, Copy, FileWarning, MessageSquare, Pencil, Pin, Save, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import type { AnnotationAnchor, AnnotationRecord } from "@bot-factory/shared";
-import { quickHash } from "./types";
+import { quickHash, type ComposerAttachment } from "./types";
 
 export interface DocViewerProps {
   projectId: string;
   filePath: string;
-  annotate: boolean;
-  annotations: AnnotationRecord[];
+  annotate?: boolean;
+  annotations?: AnnotationRecord[];
   focusBlockId?: string | null;
   focusNonce?: number;
   artifactVersion?: number;
-  onPickAnchor: (anchor: AnnotationAnchor) => void;
+  onPickAnchor?: (anchor: AnnotationAnchor) => void;
+  onImportToChat?: (attachment: ComposerAttachment) => void;
+  onArtifactSaved?: (filePath: string) => void;
 }
 
 type TableAlign = "left" | "center" | "right";
@@ -30,6 +32,14 @@ interface MdBlock {
   contentHash: string;
   raw: string;
   parsed: ParsedMdBlock;
+}
+
+interface PendingDocComment {
+  quote: string;
+  blockId?: string;
+  contentHash?: string;
+  top: number;
+  left: number;
 }
 
 const TABLE_SEP_RE = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
@@ -89,7 +99,6 @@ function parseMarkdownBlocks(markdown: string): MdBlock[] {
       continue;
     }
 
-    // Fenced code block (``` or ~~~)
     const fenceMatch = /^\s*(```+|~~~+)\s*([a-zA-Z0-9_+-]*).*$/.exec(line);
     if (fenceMatch) {
       const fenceToken = fenceMatch[1]!.slice(0, 3);
@@ -107,7 +116,6 @@ function parseMarkdownBlocks(markdown: string): MdBlock[] {
       continue;
     }
 
-    // Heading
     const headingMatch = /^(#{1,6})\s+(.*)$/.exec(line);
     if (headingMatch) {
       pushBlock(line, {
@@ -119,14 +127,12 @@ function parseMarkdownBlocks(markdown: string): MdBlock[] {
       continue;
     }
 
-    // Horizontal rule
     if (/^(?:---+|===+|\*\*\*+)\s*$/.test(line)) {
       pushBlock(line, { kind: "hr" });
       i += 1;
       continue;
     }
 
-    // Markdown table
     if (line.includes("|") && i + 1 < lines.length && TABLE_SEP_RE.test(lines[i + 1]!)) {
       const start = i;
       const headers = splitTableCells(line);
@@ -146,7 +152,6 @@ function parseMarkdownBlocks(markdown: string): MdBlock[] {
       continue;
     }
 
-    // Blockquote
     if (/^\s*>/.test(line)) {
       const start = i;
       const quoteLines: string[] = [];
@@ -161,7 +166,6 @@ function parseMarkdownBlocks(markdown: string): MdBlock[] {
       continue;
     }
 
-    // Unordered, ordered, or task list
     const listStartMatch = /^\s*(?:([-*+])|(\d+)\.)\s+/.exec(line);
     if (listStartMatch) {
       const ordered = listStartMatch[2] !== undefined;
@@ -197,7 +201,6 @@ function parseMarkdownBlocks(markdown: string): MdBlock[] {
       continue;
     }
 
-    // Paragraph
     const start = i;
     const paraLines: string[] = [];
     while (i < lines.length && !isBlockStarter(lines[i]!, lines[i + 1])) {
@@ -254,7 +257,7 @@ function renderInlineMarkdown(text: string, disableLinks: boolean): ReactNode[] 
           style={{
             fontFamily: "var(--font-mono)",
             fontSize: "0.87em",
-            background: "#F5F5F5",
+            background: "var(--bg-surface-subtle)",
             border: "1px solid var(--border-hairline)",
             borderRadius: "var(--radius-xs)",
             padding: "1px 5px",
@@ -284,7 +287,7 @@ function renderInlineMarkdown(text: string, disableLinks: boolean): ReactNode[] 
               }
             }}
             style={{
-              color: "#D95D22",
+              color: "var(--accent-orange-ink, var(--accent-orange))",
               textDecoration: "underline",
               textUnderlineOffset: 2,
             }}
@@ -303,10 +306,7 @@ function renderInlineMarkdown(text: string, disableLinks: boolean): ReactNode[] 
       );
     } else if (tok.startsWith("~~") && tok.endsWith("~~") && tok.length > 4) {
       out.push(<del key={key++}>{tok.slice(2, -2)}</del>);
-    } else if (
-      (tok.startsWith("*") && tok.endsWith("*")) ||
-      (tok.startsWith("_") && tok.endsWith("_"))
-    ) {
+    } else if ((tok.startsWith("*") && tok.endsWith("*")) || (tok.startsWith("_") && tok.endsWith("_"))) {
       out.push(<em key={key++}>{tok.slice(1, -1)}</em>);
     } else {
       out.push(<span key={key++}>{tok}</span>);
@@ -351,7 +351,7 @@ function FencedCodeBlock({ lang, code, annotate }: { lang: string; code: string;
       style={{
         border: "1px solid var(--border-hairline)",
         borderRadius: "var(--radius-md)",
-        background: "#FAFAFA",
+        background: "var(--bg-surface)",
         overflow: "hidden",
       }}
     >
@@ -362,7 +362,7 @@ function FencedCodeBlock({ lang, code, annotate }: { lang: string; code: string;
           justifyContent: "space-between",
           padding: "5px 10px",
           borderBottom: "1px solid var(--border-subtle)",
-          background: "#F5F5F5",
+          background: "var(--bg-surface-subtle)",
           fontSize: "var(--text-2xs)",
           color: "var(--ink-muted)",
         }}
@@ -373,6 +373,7 @@ function FencedCodeBlock({ lang, code, annotate }: { lang: string; code: string;
             type="button"
             className="btn xs ghost"
             onClick={(e) => void handleCopy(e)}
+            onDoubleClick={(e) => e.stopPropagation()}
             title="Copy code block"
           >
             {copied ? <Check size={11} strokeWidth={1.8} /> : <Copy size={11} strokeWidth={1.6} />}
@@ -389,7 +390,7 @@ function FencedCodeBlock({ lang, code, annotate }: { lang: string; code: string;
           fontSize: "var(--text-xs)",
           lineHeight: 1.55,
           color: "var(--ink-primary)",
-          background: "#FFFFFF",
+          background: "var(--bg-canvas)",
         }}
       >
         <code>{code}</code>
@@ -439,7 +440,7 @@ function MarkdownBlockBody({ parsed, annotate }: { parsed: ParsedMdBlock; annota
             overflowX: "auto",
             border: "1px solid var(--border-hairline)",
             borderRadius: "var(--radius-md)",
-            background: "#FFFFFF",
+            background: "var(--bg-canvas)",
           }}
         >
           <table
@@ -452,7 +453,7 @@ function MarkdownBlockBody({ parsed, annotate }: { parsed: ParsedMdBlock; annota
             }}
           >
             <thead>
-              <tr style={{ background: "#FAFAFA", borderBottom: "1px solid var(--border-hairline)" }}>
+              <tr style={{ background: "var(--bg-surface)", borderBottom: "1px solid var(--border-hairline)" }}>
                 {parsed.headers.map((header, idx) => (
                   <th
                     key={idx}
@@ -503,8 +504,8 @@ function MarkdownBlockBody({ parsed, annotate }: { parsed: ParsedMdBlock; annota
           style={{
             margin: 0,
             padding: "4px 12px",
-            borderLeft: "2.5px solid #D95D22",
-            background: "#FAFAFA",
+            borderLeft: "2.5px solid var(--accent-orange)",
+            background: "var(--bg-surface)",
             borderRadius: "0 var(--radius-xs) var(--radius-xs) 0",
             color: "var(--ink-secondary)",
             fontSize: "var(--text-base)",
@@ -548,9 +549,9 @@ function MarkdownBlockBody({ parsed, annotate }: { parsed: ParsedMdBlock; annota
                     height: 14,
                     marginTop: 4,
                     borderRadius: 3,
-                    border: item.checked ? "1px solid #D95D22" : "1px solid var(--border-strong)",
-                    background: item.checked ? "#D95D22" : "#FFFFFF",
-                    color: "#FFFFFF",
+                    border: item.checked ? "1px solid var(--accent-orange)" : "1px solid var(--border-strong)",
+                    background: item.checked ? "var(--accent-orange)" : "var(--bg-canvas)",
+                    color: "var(--action-primary-fg, #ffffff)",
                     display: "inline-flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -587,18 +588,41 @@ function MarkdownBlockBody({ parsed, annotate }: { parsed: ParsedMdBlock; annota
 export function DocViewer({
   projectId,
   filePath,
-  annotate,
-  annotations,
+  annotate = false,
+  annotations = [],
   focusBlockId,
   focusNonce = 0,
   artifactVersion = 0,
   onPickAnchor,
+  onImportToChat,
+  onArtifactSaved,
 }: DocViewerProps): JSX.Element {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedNotice, setSavedNotice] = useState(false);
+
+  const [hoveredBlockId, setHoveredBlockId] = useState<string | null>(null);
+  const [pendingComment, setPendingComment] = useState<PendingDocComment | null>(null);
+  const [commentText, setCommentText] = useState("");
+
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const contentWrapRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const commentInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const artifactUrl = `/api/projects/${encodeURIComponent(projectId)}/artifact?path=${encodeURIComponent(filePath)}`;
+
+  useEffect(() => {
+    return () => {
+      if (savedTimerRef.current !== null) clearTimeout(savedTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -609,7 +633,9 @@ export function DocViewer({
         return r.text();
       })
       .then((t) => {
-        if (alive) setText(t);
+        if (!alive) return;
+        setText(t);
+        setDraft((prev) => (isEditing ? prev : t));
       })
       .catch((err) => {
         if (alive) setError(err instanceof Error ? err.message : String(err));
@@ -619,27 +645,168 @@ export function DocViewer({
     };
   }, [artifactUrl, artifactVersion]);
 
+  useEffect(() => {
+    setIsEditing(false);
+    setPendingComment(null);
+    setCommentText("");
+    setSaveError(null);
+    setSavedNotice(false);
+  }, [filePath]);
+
+  useEffect(() => {
+    if (isEditing) {
+      editorRef.current?.focus();
+    }
+  }, [isEditing]);
+
+  useEffect(() => {
+    if (pendingComment) {
+      setTimeout(() => commentInputRef.current?.focus(), 0);
+    }
+  }, [pendingComment]);
+
   const blocks = useMemo(() => (text === null ? [] : parseMarkdownBlocks(text)), [text]);
+  const isDirty = isEditing && text !== null && draft !== text;
 
   useEffect(() => {
     if (!focusBlockId || !stageRef.current) return;
-    const escaped = typeof CSS !== "undefined" && typeof CSS.escape === "function"
-      ? CSS.escape(focusBlockId)
-      : focusBlockId.replace(/"/g, '\\"');
+    const escaped =
+      typeof CSS !== "undefined" && typeof CSS.escape === "function"
+        ? CSS.escape(focusBlockId)
+        : focusBlockId.replace(/"/g, '\\"');
     const el = stageRef.current.querySelector(`[data-block-id="${escaped}"]`);
     if (el && typeof el.scrollIntoView === "function") {
       el.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }, [focusBlockId, focusNonce, blocks.length]);
 
-  const pickBlock = (b: MdBlock) => {
-    onPickAnchor({
-      kind: "doc",
-      filePath,
+  const enterEditMode = () => {
+    if (text === null) return;
+    setPendingComment(null);
+    setCommentText("");
+    setSaveError(null);
+    setDraft(text);
+    setIsEditing(true);
+  };
+
+  const cancelEditMode = () => {
+    setIsEditing(false);
+    setDraft(text ?? "");
+    setSaveError(null);
+  };
+
+  const saveEdit = async () => {
+    if (saving || text === null) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await fetch(artifactUrl, {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: draft, encoding: "utf8" }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try {
+          const data = (await res.json()) as { error?: string };
+          if (data?.error) msg = data.error;
+        } catch {
+          // Use status fallback.
+        }
+        throw new Error(msg);
+      }
+      setText(draft);
+      setIsEditing(false);
+      setSavedNotice(true);
+      if (savedTimerRef.current !== null) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => {
+        setSavedNotice(false);
+        savedTimerRef.current = null;
+      }, 2200);
+      onArtifactSaved?.(filePath);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openBlockComment = (b: MdBlock, blockEl: HTMLElement | null) => {
+    const wrap = contentWrapRef.current;
+    let top = 24;
+    let left = 12;
+    if (wrap && blockEl) {
+      const wrapRect = wrap.getBoundingClientRect();
+      const bRect = blockEl.getBoundingClientRect();
+      top = Math.max(8, bRect.bottom - wrapRect.top + 6);
+      left = Math.max(8, Math.min(bRect.left - wrapRect.left, Math.max(8, wrapRect.width - 332)));
+    }
+    setCommentText("");
+    setPendingComment({
+      quote: b.raw.slice(0, 240),
       blockId: b.blockId,
       contentHash: b.contentHash,
-      quote: b.raw.slice(0, 140),
+      top,
+      left,
     });
+  };
+
+  const handleBodyMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isEditing || e.detail >= 2) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button, a, .iab-doc-comment-popover")) return;
+
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+    const quote = sel.toString().trim();
+    if (quote.length < 2) return;
+
+    const wrap = contentWrapRef.current;
+    if (!wrap) return;
+    const range = sel.getRangeAt(0);
+    if (!wrap.contains(range.commonAncestorContainer)) return;
+
+    const wrapRect = wrap.getBoundingClientRect();
+    const rRect = range.getBoundingClientRect();
+    const top = Math.max(8, rRect.bottom - wrapRect.top + 8);
+    const left = Math.max(8, Math.min(rRect.left - wrapRect.left, Math.max(8, wrapRect.width - 332)));
+
+    setCommentText("");
+    setPendingComment({
+      quote: quote.slice(0, 400),
+      top,
+      left,
+    });
+  };
+
+  const submitDocComment = () => {
+    if (!pendingComment) return;
+    const trimmed = commentText.trim();
+    if (!trimmed) return;
+
+    if (onImportToChat) {
+      onImportToChat({
+        id: `att_doc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        kind: "doc_comment",
+        filePath,
+        label: filePath.split("/").pop() ?? filePath,
+        quote: pendingComment.quote,
+        comment: trimmed,
+      });
+    } else if (onPickAnchor) {
+      onPickAnchor({
+        kind: "doc",
+        filePath,
+        blockId: pendingComment.blockId ?? `sel-${quickHash(pendingComment.quote)}`,
+        contentHash: pendingComment.contentHash ?? quickHash(pendingComment.quote),
+        quote: pendingComment.quote.slice(0, 140),
+      });
+    }
+
+    window.getSelection()?.removeAllRanges();
+    setPendingComment(null);
+    setCommentText("");
   };
 
   return (
@@ -648,139 +815,402 @@ export function DocViewer({
       className="iab-doc-stage doc-stage"
       style={{
         height: "100%",
-        overflowY: "auto",
-        padding: "20px 28px 48px",
-        background: "#FFFFFF",
+        display: "flex",
+        flexDirection: "column",
+        background: "var(--bg-canvas)",
+        position: "relative",
+        overflow: "hidden",
       }}
     >
-      {annotate && (
-        <div
-          className="iab-stage-hint"
-          style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 4,
-            width: "fit-content",
-            margin: "0 auto 16px",
-            padding: "4px 12px",
-            borderRadius: "var(--radius-pill)",
-            background: "#FFF7F2",
-            border: "1px solid #F7D5C2",
-            color: "#B84312",
-            fontSize: "var(--text-2xs)",
-            fontWeight: "var(--weight-medium)",
-          }}
-        >
-          Annotate mode active — click any document block to drop a pin
-        </div>
-      )}
-
-      {error && (
-        <div
-          className="iab-error-banner"
-          style={{
-            padding: "10px 14px",
-            borderRadius: "var(--radius-md)",
-            border: "1px solid var(--status-danger-border)",
-            background: "var(--status-danger-bg)",
-            color: "var(--status-danger-ink)",
-            fontSize: "var(--text-sm)",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-          }}
-        >
-          <FileWarning size={14} strokeWidth={1.6} />
-          <span>Failed to load document ({error}).</span>
-        </div>
-      )}
-
-      {text === null && !error && (
-        <div style={{ color: "var(--ink-muted)", fontSize: "var(--text-sm)" }}>Loading document...</div>
-      )}
-
-      {text !== null && blocks.length === 0 && !error && (
-        <div style={{ color: "var(--ink-muted)", fontSize: "var(--text-sm)" }}>Document is empty.</div>
-      )}
-
+      {/* Compact Doc Header Bar */}
       <div
+        className="iab-doc-header"
         style={{
-          maxWidth: "var(--measure-prose)",
-          margin: "0 auto",
           display: "flex",
-          flexDirection: "column",
-          gap: 14,
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          padding: "7px 16px",
+          borderBottom: "1px solid var(--border-subtle)",
+          background: "var(--bg-surface)",
+          flexShrink: 0,
+          fontSize: "var(--text-2xs)",
+          color: "var(--ink-muted)",
         }}
       >
-        {blocks.map((b) => {
-          const matchingPins = annotations.filter(
-            (a) => a.anchor.kind === "doc" && (a.anchor.blockId === b.blockId || a.anchor.contentHash === b.contentHash),
-          );
-          const pinned = matchingPins.length > 0;
-          const isFocused = focusBlockId === b.blockId;
-
-          return (
-            <div
-              key={b.blockId}
-              data-block-id={b.blockId}
-              role={annotate ? "button" : undefined}
-              tabIndex={annotate ? 0 : undefined}
-              className={`doc-block iab-doc-block ${annotate ? "annotatable" : ""} ${pinned ? "has-pin" : ""}`}
-              onClick={() => {
-                if (annotate) pickBlock(b);
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span className="mono-tag" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {filePath.split("/").pop() ?? filePath}
+          </span>
+          {isDirty && (
+            <span
+              data-testid="doc-unsaved-indicator"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                color: "var(--accent-orange)",
+                fontWeight: "var(--weight-medium)",
               }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: "var(--accent-orange)",
+                }}
+              />
+              Unsaved
+            </span>
+          )}
+          {savedNotice && !isDirty && (
+            <span className="pill success" style={{ fontSize: "var(--text-2xs)" }}>
+              <Check size={10} strokeWidth={2.2} />
+              Saved
+            </span>
+          )}
+          {!isEditing && text !== null && (
+            <span style={{ color: "var(--ink-faint)", whiteSpace: "nowrap" }}>
+              Double-click to edit · Select text to comment
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          {!isEditing ? (
+            <button
+              type="button"
+              className="btn xs"
+              data-testid="doc-edit-btn"
+              disabled={text === null || Boolean(error)}
+              onClick={enterEditMode}
+              title="Edit markdown inline"
+            >
+              <Pencil size={11} strokeWidth={1.6} />
+              <span>Edit</span>
+            </button>
+          ) : (
+            <>
+              <button type="button" className="btn xs" onClick={cancelEditMode} disabled={saving}>
+                <X size={11} strokeWidth={1.6} />
+                <span>Cancel</span>
+              </button>
+              <button
+                type="button"
+                className="btn xs primary"
+                data-testid="doc-save-btn"
+                onClick={() => void saveEdit()}
+                disabled={saving}
+                title="Save changes (Ctrl+S)"
+              >
+                <Save size={11} strokeWidth={1.6} />
+                <span>{saving ? "Saving..." : "Save"}</span>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {saveError && (
+        <div
+          className="inline-error"
+          role="alert"
+          style={{ margin: "10px 16px 0", flexShrink: 0 }}
+        >
+          <span>Failed to save: {saveError}</span>
+          <button type="button" className="btn xs ghost" onClick={() => setSaveError(null)} aria-label="Dismiss save error">
+            <X size={11} strokeWidth={1.6} />
+          </button>
+        </div>
+      )}
+
+      {/* Main Scrollable Doc Body / Inline Editor */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          padding: isEditing ? "14px 20px 24px" : "20px 28px 56px",
+          background: "var(--bg-canvas)",
+        }}
+      >
+        {error && (
+          <div
+            className="iab-error-banner"
+            style={{
+              padding: "10px 14px",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--status-danger-border)",
+              background: "var(--status-danger-bg)",
+              color: "var(--status-danger-ink)",
+              fontSize: "var(--text-sm)",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <FileWarning size={14} strokeWidth={1.6} />
+            <span>Failed to load document ({error}).</span>
+          </div>
+        )}
+
+        {text === null && !error && (
+          <div style={{ color: "var(--ink-muted)", fontSize: "var(--text-sm)" }}>Loading document...</div>
+        )}
+
+        {isEditing && text !== null && (
+          <div style={{ maxWidth: "var(--measure-prose)", margin: "0 auto", height: "100%", display: "flex", flexDirection: "column" }}>
+            <textarea
+              ref={editorRef}
+              data-testid="doc-editor-textarea"
+              aria-label="Edit markdown document"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (!annotate) return;
-                if (e.key === "Enter" || e.key === " ") {
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
                   e.preventDefault();
-                  pickBlock(b);
+                  void saveEdit();
+                } else if (e.key === "Escape" && !isDirty) {
+                  e.preventDefault();
+                  cancelEditMode();
                 }
               }}
               style={{
-                position: "relative",
-                borderRadius: "var(--radius-sm)",
-                padding: annotate || pinned ? "6px 10px" : "2px 0",
-                margin: annotate || pinned ? "0 -10px" : 0,
-                cursor: annotate ? "crosshair" : "default",
-                borderLeft: pinned
-                  ? "2.5px solid #D95D22"
-                  : isFocused
-                    ? "2.5px solid #171717"
-                    : "2.5px solid transparent",
-                background: isFocused
-                  ? "#FFF5EF"
-                  : pinned
-                    ? "#FFF7F2"
-                    : "transparent",
-                boxShadow: isFocused ? "0 0 0 1px #F7D5C2" : "none",
-                transition: "background var(--duration-fast) var(--ease-out-quiet)",
+                width: "100%",
+                flex: 1,
+                minHeight: 360,
+                resize: "vertical",
+                padding: "14px 16px",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--border-strong)",
+                background: "var(--bg-surface)",
+                color: "var(--ink-primary)",
+                fontFamily: "var(--font-mono)",
+                fontSize: "var(--text-xs)",
+                lineHeight: 1.65,
+                outline: "none",
               }}
-            >
-              {pinned && (
+            />
+          </div>
+        )}
+
+        {!isEditing && text !== null && !error && (
+          <div
+            ref={contentWrapRef}
+            className="iab-doc-body"
+            onMouseUp={handleBodyMouseUp}
+            onDoubleClick={(e) => {
+              const target = e.target as HTMLElement | null;
+              if (target?.closest("button, a, .iab-doc-comment-popover")) return;
+              enterEditMode();
+            }}
+            style={{
+              maxWidth: "var(--measure-prose)",
+              margin: "0 auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: 14,
+              position: "relative",
+              minHeight: 120,
+            }}
+          >
+            {blocks.length === 0 && (
+              <div style={{ color: "var(--ink-muted)", fontSize: "var(--text-sm)" }}>
+                Document is empty. Click Edit or double-click here to write markdown.
+              </div>
+            )}
+
+            {blocks.map((b) => {
+              const matchingPins = annotations.filter(
+                (a) =>
+                  a.anchor.kind === "doc" && (a.anchor.blockId === b.blockId || a.anchor.contentHash === b.contentHash),
+              );
+              const pinned = matchingPins.length > 0;
+              const isFocused = focusBlockId === b.blockId;
+              const isHovered = hoveredBlockId === b.blockId;
+
+              return (
                 <div
+                  key={b.blockId}
+                  data-block-id={b.blockId}
+                  className={`doc-block iab-doc-block ${pinned ? "has-pin" : ""}`}
+                  onMouseEnter={() => setHoveredBlockId(b.blockId)}
+                  onMouseLeave={() => setHoveredBlockId((cur) => (cur === b.blockId ? null : cur))}
                   style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    marginBottom: 4,
-                    padding: "1px 7px",
-                    borderRadius: "var(--radius-pill)",
-                    background: "#D95D22",
-                    color: "#FFFFFF",
-                    fontSize: "var(--text-2xs)",
-                    fontWeight: "var(--weight-semibold)",
+                    position: "relative",
+                    borderRadius: "var(--radius-sm)",
+                    padding: "4px 10px",
+                    margin: "0 -10px",
+                    borderLeft: pinned
+                      ? "2.5px solid var(--accent-orange)"
+                      : isFocused
+                        ? "2.5px solid var(--ink-primary)"
+                        : "2.5px solid transparent",
+                    background: isFocused
+                      ? "var(--accent-orange-soft)"
+                      : pinned
+                        ? "var(--accent-orange-soft)"
+                        : isHovered
+                          ? "var(--bg-surface)"
+                          : "transparent",
+                    transition: "background var(--duration-fast) var(--ease-out-quiet)",
                   }}
                 >
-                  <Pin size={10} strokeWidth={2} />
-                  <span>
-                    {matchingPins.length} {matchingPins.length === 1 ? "Pin" : "Pins"}
-                  </span>
+                  {pinned && (
+                    <div
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        marginBottom: 4,
+                        padding: "1px 7px",
+                        borderRadius: "var(--radius-pill)",
+                        background: "var(--accent-orange)",
+                        color: "var(--action-primary-fg, #ffffff)",
+                        fontSize: "var(--text-2xs)",
+                        fontWeight: "var(--weight-semibold)",
+                      }}
+                    >
+                      <Pin size={10} strokeWidth={2} />
+                      <span>
+                        {matchingPins.length} {matchingPins.length === 1 ? "Pin" : "Pins"}
+                      </span>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    aria-label="Comment on block"
+                    title="Comment -> Chat"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openBlockComment(b, e.currentTarget.parentElement);
+                    }}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    style={{
+                      position: "absolute",
+                      top: 4,
+                      right: 6,
+                      zIndex: 3,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      padding: "2px 7px",
+                      borderRadius: "var(--radius-pill)",
+                      border: "1px solid var(--border-hairline)",
+                      background: "var(--bg-elevated, var(--bg-canvas))",
+                      color: "var(--ink-secondary)",
+                      fontSize: "var(--text-2xs)",
+                      cursor: "pointer",
+                      opacity: isHovered ? 1 : 0,
+                      pointerEvents: isHovered ? "auto" : "none",
+                      transition: "opacity 120ms ease",
+                      boxShadow: "var(--shadow-popover)",
+                    }}
+                  >
+                    <MessageSquare size={10} strokeWidth={1.7} />
+                    <span>Comment</span>
+                  </button>
+
+                  <MarkdownBlockBody parsed={b.parsed} annotate={annotate} />
                 </div>
-              )}
-              <MarkdownBlockBody parsed={b.parsed} annotate={annotate} />
-            </div>
-          );
-        })}
+              );
+            })}
+
+            {/* Lightweight Anchored Floating Comment-to-Chat Popover */}
+            {pendingComment && (
+              <div
+                className="iab-doc-comment-popover"
+                role="dialog"
+                aria-label="Comment to chat"
+                onDoubleClick={(e) => e.stopPropagation()}
+                style={{
+                  position: "absolute",
+                  top: pendingComment.top,
+                  left: pendingComment.left,
+                  width: 320,
+                  maxWidth: "calc(100% - 16px)",
+                  background: "var(--bg-elevated, var(--bg-canvas))",
+                  border: "1px solid var(--border-strong)",
+                  borderRadius: "var(--radius-lg)",
+                  boxShadow: "var(--shadow-modal)",
+                  padding: 10,
+                  zIndex: 20,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 7,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "var(--text-2xs)",
+                    color: "var(--ink-muted)",
+                    borderLeft: "2px solid var(--accent-orange)",
+                    paddingLeft: 8,
+                    maxHeight: 54,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    display: "-webkit-box",
+                    WebkitLineClamp: 3,
+                    WebkitBoxOrient: "vertical",
+                  }}
+                >
+                  {pendingComment.quote}
+                </div>
+                <textarea
+                  ref={commentInputRef}
+                  rows={2}
+                  placeholder="Add a comment to import into chat..."
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      submitDocComment();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      setPendingComment(null);
+                    }
+                  }}
+                  style={{
+                    width: "100%",
+                    resize: "vertical",
+                    padding: "6px 8px",
+                    borderRadius: "var(--radius-sm)",
+                    border: "1px solid var(--border-hairline)",
+                    background: "var(--bg-surface)",
+                    color: "var(--ink-primary)",
+                    fontSize: "var(--text-xs)",
+                    lineHeight: 1.45,
+                    outline: "none",
+                  }}
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                  <button
+                    type="button"
+                    className="btn xs ghost"
+                    onClick={() => {
+                      setPendingComment(null);
+                      setCommentText("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn xs primary"
+                    disabled={!commentText.trim()}
+                    onClick={submitDocComment}
+                  >
+                    <MessageSquare size={11} strokeWidth={1.6} />
+                    <span>Add to Chat</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

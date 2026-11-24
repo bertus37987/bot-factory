@@ -269,6 +269,22 @@ export class OrchestrationEngine {
     this.mcpTokens.clear();
   }
 
+  private getMetaPromptSpec(): { identity: string; toolsBrief: string } {
+    return {
+      identity:
+        "You are the Bot-Factory Meta-Orchestrator (Main Managing Agent). You keep the human's main Chat-Tab calm, concise, and strategic while directly managing projects, runtime configuration, bots, task boards, and Team Lead delegations.",
+      toolsBrief: [
+        "Direct management tools available to you:",
+        "- Projects: `bf_projects_list`, `bf_project_create` (provision projects under ~/bot-factory/projects/<slug>/ with optional externalRepoPath & verifyChecks).",
+        "- Config & Routing: `bf_config_get` (inspect scrubbed providers, models, routing defaults, hub host/port, memory & guardrails), `bf_config_update` (hot-reload config patches and per-project routing overrides).",
+        "- Bots: `bf_bot_spawn` (spawn project, peer, sidekick, or verifier bots), `bf_bot_update_model` (switch a bot's provider & model), `bf_bot_message` (send a direct orchestrator message to any project bot).",
+        "- Tasks & Teams: `bf_task_list` (inspect project tasks, assignees & DAG dependencies), `bf_task_create`, `bf_task_update` (status/spec/priority/assignee), `bf_task_dispatch` (dispatch ready tasks), `bf_team_delegate` (delegate high-level goals to the Team Lead), `bf_team_status` (inspect teams, tasks, goals, verifications, and open debates).",
+        "- Memory: `bf_memory_search`, `bf_memory_remember`, `bf_memory_update_l1`, `bf_memory_forget`.",
+        "Use these tools directly when asked rather than claiming you cannot inspect or update config, bots, or tasks.",
+      ].join("\n"),
+    };
+  }
+
   private buildAgentSystemPrompt(agent: Pick<AgentRecord, "scope" | "name" | "projectId" | "worktreePath" | "provider" | "model">): {
     systemPrompt: string;
     hash: string;
@@ -276,11 +292,10 @@ export class OrchestrationEngine {
     const pluginBlocks = loadActivePluginBlocks(this.runtimeCfg.pluginsDir);
     const modelLabel = `${agent.provider}/${agent.model}`;
     if (agent.scope === "global") {
+      const metaSpec = this.getMetaPromptSpec();
       return this.memory.buildFrozenSystemPrompt({
-        identity:
-          "You are the Bot-Factory Meta-Orchestrator (Life-Manager). You keep the human's main Chat-Tab calm, concise, and strategic while provisioning projects and steering background Project Managers.",
-        toolsBrief:
-          "You coordinate projects under ~/bot-factory/projects/<slug>/, spawn Project Managers, review high-level milestones, and record durable preferences/decisions.",
+        identity: metaSpec.identity,
+        toolsBrief: metaSpec.toolsBrief,
         namespace: "global",
         modelLabel,
         pluginBlocks,
@@ -317,16 +332,33 @@ export class OrchestrationEngine {
 
   private ensureMetaOrchestrator(): AgentRecord {
     const existing = this.db.getAgent(this.metaAgentId);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.activeSessionId) {
+        const sess = this.db.getSession(existing.activeSessionId);
+        if (sess && !sess.systemPrompt.includes("bf_config_get")) {
+          const metaSpec = this.getMetaPromptSpec();
+          const rebuilt = this.memory.buildFrozenSystemPrompt({
+            identity: metaSpec.identity,
+            toolsBrief: metaSpec.toolsBrief,
+            namespace: "global",
+            modelLabel: `${existing.provider}/${existing.model}`,
+            pluginBlocks: loadActivePluginBlocks(this.runtimeCfg.pluginsDir),
+          });
+          this.db.runAtomicWrite(() => {
+            this.db.updateSessionSystemPrompt(sess.id, rebuilt.systemPrompt, rebuilt.hash);
+          });
+        }
+      }
+      return existing;
+    }
 
     const route = this.router.resolveIntent("meta_orchestrator");
     const now = Date.now();
     const sessionId = newId("ses");
+    const metaSpec = this.getMetaPromptSpec();
     const { systemPrompt, hash } = this.memory.buildFrozenSystemPrompt({
-      identity:
-        "You are the Bot-Factory Meta-Orchestrator (Life-Manager). You keep the human's main Chat-Tab calm, concise, and strategic while provisioning projects and steering background Project Managers.",
-      toolsBrief:
-        "You coordinate projects under ~/bot-factory/projects/<slug>/, spawn Project Managers, review high-level milestones, and record durable preferences/decisions.",
+      identity: metaSpec.identity,
+      toolsBrief: metaSpec.toolsBrief,
       namespace: "global",
       modelLabel: `${route.provider}/${route.model}`,
       pluginBlocks: loadActivePluginBlocks(this.runtimeCfg.pluginsDir),
@@ -748,6 +780,9 @@ export class OrchestrationEngine {
             noticePrefix: `${agent.name} turn error`,
           });
         }
+
+        this.core.emitDirectEvent(`project:${projectId}:board`, "board.updated", this.getProjectBoardSnapshot(projectId));
+        this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
       },
       { lane: "work", concurrencyKey: (eff) => `agent:${String(eff.payload.agentId ?? "")}` },
     );
@@ -845,6 +880,10 @@ export class OrchestrationEngine {
         return this.handleBotControl(cmd.commandId, cmd.agentId, "hard_stop");
       case "bot.resume":
         return this.handleBotResume(cmd);
+      case "bot.update_model":
+        return this.handleBotUpdateModel(cmd);
+      case "bot.message":
+        return this.handleBotMessage(cmd);
       case "permission.respond":
         return this.handlePermissionRespond(cmd);
       case "steer.submit":
@@ -1700,6 +1739,9 @@ export class OrchestrationEngine {
     const agentAfterTurn = this.db.getAgent(agent.id);
     if (!agentAfterTurn || agentAfterTurn.status === "stopped" || agentAfterTurn.status === "paused") return;
 
+    // Clean up any depth-1 child subagents spawned during this task turn so slots/worktrees never leak across tasks or retries
+    await this.subagentManager.cleanupSubagentsForParent(agent.id).catch(() => {});
+
     if (!turn.ok) {
       const errMsg = this.scrubber.scrub(turn.error ?? "Task turn failed");
       const failure = this.db.runAtomicWrite(() => {
@@ -1977,17 +2019,25 @@ export class OrchestrationEngine {
         }
       }
 
-      const rawHistory = this.db
-        .listActiveSessionMessages(session.id, 24)
+      const filteredHistory = this.db
+        .listActiveSessionMessages(session.id, 48)
         .filter(
           (m) =>
             (m.kind === "message" && (m.role === "user" || m.role === "assistant")) ||
             (m.kind === "status" && Boolean(m.title?.startsWith("Compaction Gen #"))),
-        )
+        );
+      let rawHistory = filteredHistory
+        .slice(-24)
         .map((m) => ({
           role: (m.kind === "status" ? "system" : m.role) as "user" | "assistant" | "system",
           content: m.content,
         }));
+      const latestCompaction = [...filteredHistory]
+        .reverse()
+        .find((m) => m.kind === "status" && Boolean(m.title?.startsWith("Compaction Gen #")));
+      if (latestCompaction && !rawHistory.some((h) => h.role === "system" && h.content === latestCompaction.content)) {
+        rawHistory = [{ role: "system", content: latestCompaction.content }, ...rawHistory.slice(-23)];
+      }
       if (rawHistory.length > 0 && rawHistory[rawHistory.length - 1]?.role === "user" && rawHistory[rawHistory.length - 1]?.content === userText) {
         rawHistory.pop();
       }
@@ -2016,6 +2066,7 @@ export class OrchestrationEngine {
           executeCommand: (cmd) => this.executeCommand(cmd),
           getQuietStatusProjection: () => this.getQuietStatusProjection(),
           getProjectBoardSnapshot: (pid) => this.getProjectBoardSnapshot(pid),
+          getConfigSnapshot: () => this.getScrubbedConfigSnapshot(),
         });
         turnTools = mainTools.tools;
         turnToolExecutor = mainTools.onToolCall;
@@ -2092,7 +2143,7 @@ export class OrchestrationEngine {
           };
           // Strict Anti-Log-Spam invariant: tool_calls are persisted & emitted ONLY on bot timeline, NEVER pushed to chat:meta!
           if (opts.emitTopic !== "chat:meta") {
-            this.db.runAtomicWrite(() => this.db.appendMessage(item));
+            this.db.runAtomicWrite(() => this.db.upsertToolCallMessage(item));
           }
           this.core.emitDirectEvent(botTimelineTopic, "timeline.item", item);
         } else if (evt.type === "tool_result") {
@@ -2239,29 +2290,34 @@ export class OrchestrationEngine {
       const totalTokens = this.db.getSessionTokenTotal(session.id);
       if (totalTokens >= this.runtimeCfg.config.guardrails.autoCompactThresholdTokens) {
         const activeMsgs = this.db.listActiveSessionMessages(session.id, 40);
+        const priorSummary = activeMsgs.find((m) => m.kind === "status" && m.title?.startsWith("Compaction Gen #"));
         const summaryLines = activeMsgs
           .filter((m) => m.kind === "message" && (m.role === "user" || m.role === "assistant"))
           .slice(-8)
           .map((m) => `- ${m.role}: ${m.content.replace(/\s+/g, " ").slice(0, 180)}`);
+        const priorBlock = priorSummary
+          ? `Prior summary (${priorSummary.title}): ${priorSummary.content.replace(/\s+/g, " ").slice(0, 600)}\n`
+          : "";
         const summaryText = this.scrubber.scrub(
-          `Compacted ${activeMsgs.length} active messages (${totalTokens} tokens).\n${summaryLines.join("\n")}`,
+          `Compacted ${activeMsgs.length} active messages (${totalTokens} tokens).\n${priorBlock}${summaryLines.join("\n")}`,
         );
         const freshAgent = this.db.getAgent(agent.id) ?? agent;
         const rebuilt = this.buildAgentSystemPrompt(freshAgent);
         const nextGen = this.db.compactSessionInPlace(session.id, summaryText, rebuilt.systemPrompt, rebuilt.hash);
-        this.db.runAtomicWrite(() => {
-          this.db.updateSessionSystemPrompt(session.id, rebuilt.systemPrompt, rebuilt.hash);
-        });
         if (handle) {
           this.sessionHandles.delete(session.id);
           await runtime.closeSession(handle).catch(() => {});
         }
-        this.core.emitDirectEvent(botTimelineTopic, "session.compacted", {
+        const compactPayload = {
           agentId: agent.id,
           sessionId: session.id,
           generation: nextGen,
           previousTokens: totalTokens,
-        });
+        };
+        this.core.emitDirectEvent(botTimelineTopic, "session.compacted", compactPayload);
+        if (opts.emitTopic === "chat:meta") {
+          this.core.emitDirectEvent("chat:meta", "session.compacted", compactPayload);
+        }
       }
 
       // Non-blocking memory pre-warm for next turn
@@ -3084,6 +3140,119 @@ export class OrchestrationEngine {
     }));
   }
 
+  private handleBotUpdateModel(cmd: Extract<RpcCommand, { type: "bot.update_model" }>) {
+    const agent = this.db.getAgent(cmd.agentId);
+    if (!agent) throw new Error(`Agent not found: ${cmd.agentId}`);
+
+    const route = this.router.resolveTarget({ provider: cmd.provider, model: cmd.model });
+    let handleToClose: RuntimeSessionHandle | undefined;
+
+    const resObj: { agent: AgentRecord | null } = { agent: null };
+    const boardEvt = agent.projectId
+      ? {
+          topic: `project:${agent.projectId}:board` as SubscriptionTopic,
+          eventType: "board.updated",
+          payload: null as unknown,
+        }
+      : null;
+    const statusEvt = { topic: "global:status" as SubscriptionTopic, eventType: "status.updated", payload: null as unknown };
+
+    const committed = this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result: resObj,
+      applyProjections: () => {
+        let updated = this.db.updateAgentModel(agent.id, route.provider, route.model, route.runtimeKind);
+        if (!updated) throw new Error(`Agent not found: ${cmd.agentId}`);
+        if (updated.status !== "working" && updated.activeSessionId) {
+          const cached = this.sessionHandles.get(updated.activeSessionId);
+          if (cached) {
+            this.sessionHandles.delete(updated.activeSessionId);
+            this.revokeMcpTokensForAgent(updated.id);
+            handleToClose = cached;
+            if (updated.pid !== null) {
+              this.db.updateAgentStatus(updated.id, updated.status, { pid: null });
+              updated = this.db.getAgent(updated.id) ?? updated;
+            }
+          }
+        }
+        resObj.agent = updated;
+        if (boardEvt && updated.projectId) {
+          boardEvt.payload = this.getProjectBoardSnapshot(updated.projectId);
+        }
+        statusEvt.payload = this.getQuietStatusProjection();
+      },
+      events: [...(boardEvt ? [boardEvt] : []), statusEvt],
+      effects: [],
+    }));
+
+    if (handleToClose) {
+      void this.getRuntime(handleToClose.runtimeKind).closeSession(handleToClose).catch(() => {});
+    }
+
+    return committed;
+  }
+
+  private handleBotMessage(cmd: Extract<RpcCommand, { type: "bot.message" }>) {
+    const project = this.db.getProject(cmd.projectId);
+    if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
+    const agent = this.db.getAgent(cmd.agentId);
+    if (!agent) throw new Error(`Agent not found: ${cmd.agentId}`);
+    if (agent.projectId !== project.id) throw new Error("agent_project_mismatch");
+    if (agent.status === "stopped" || agent.status === "paused") {
+      throw new Error(`agent_unavailable:${agent.status}`);
+    }
+    if (!agent.activeSessionId) {
+      throw new Error("agent_session_missing");
+    }
+
+    const cleanMsg = this.scrubber.scrub(cmd.message);
+    const senderRole = cmd.senderRole ?? "user";
+    const senderAgentId = cmd.senderAgentId ?? (senderRole === "orchestrator" ? this.metaAgentId : null);
+    const now = Date.now();
+    const item: TimelineItem = {
+      id: newId("msg"),
+      agentId: agent.id,
+      sessionId: agent.activeSessionId,
+      seq: 0,
+      kind: "message",
+      role: "user",
+      senderAgentId,
+      senderRole,
+      ...(senderRole === "orchestrator" ? { title: "Main Manager Message" } : {}),
+      content: cleanMsg,
+      createdAt: now,
+    };
+
+    const boardEvt = {
+      topic: `project:${project.id}:board` as SubscriptionTopic,
+      eventType: "board.updated",
+      payload: null as unknown,
+    };
+    const statusEvt = { topic: "global:status" as SubscriptionTopic, eventType: "status.updated", payload: null as unknown };
+
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
+      result: { queued: true, projectId: project.id, agentId: agent.id, messageId: item.id, item },
+      applyProjections: () => {
+        this.db.appendMessage(item);
+        this.db.updateAgentStatus(agent.id, "working", {
+          lastSummary: `${senderRole === "orchestrator" ? "Manager message" : "Message"}: ${cleanMsg.slice(0, 60)}`,
+        });
+        boardEvt.payload = this.getProjectBoardSnapshot(project.id);
+        statusEvt.payload = this.getQuietStatusProjection();
+      },
+      events: [
+        { topic: `bot:${agent.id}:timeline`, eventType: "timeline.item", payload: item },
+        boardEvt,
+        statusEvt,
+      ],
+      effects: [
+        {
+          effectType: "bot.message.turn",
+          payload: { projectId: project.id, agentId: agent.id, message: cleanMsg },
+        },
+      ],
+    }));
+  }
+
   private handleConfigUpdate(cmd: Extract<RpcCommand, { type: "config.update" }>) {
     let patch: unknown;
     try {
@@ -3428,6 +3597,7 @@ export class OrchestrationEngine {
       }
       this.core.emitDirectEvent(`project:${project.id}:board`, "board.updated", this.getProjectBoardSnapshot(project.id));
       this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
+      this.autonomyLoop.dispatchUnblockedTasks(project.id);
       return;
     }
 
@@ -3522,6 +3692,50 @@ export class OrchestrationEngine {
   }
 
   // --- Read Projections for Scoped Subscriptions ---
+
+  private getScrubbedConfigSnapshot() {
+    const cfg = this.runtimeCfg.config;
+    const providers = Object.fromEntries(
+      Object.entries(cfg.providers).map(([providerId, p]) => [
+        providerId,
+        {
+          runtime: p.runtime,
+          ...(p.protocol ? { protocol: p.protocol } : {}),
+          ...(p.adapter ? { adapter: p.adapter } : {}),
+          ...(p.baseUrl ? { baseUrl: this.scrubber.scrub(p.baseUrl) } : {}),
+          ...(p.apiKeyEnv
+            ? {
+                apiKeyEnv: p.apiKeyEnv,
+                apiKeyConfigured: Boolean(this.runtimeCfg.secrets[p.apiKeyEnv]),
+              }
+            : {}),
+          ...(p.command ? { command: p.command } : {}),
+          ...(p.args ? { args: [...p.args] } : {}),
+          ...(p.embeddingModel ? { embeddingModel: p.embeddingModel } : {}),
+          models: Object.fromEntries(
+            Object.entries(p.models).map(([modelKey, m]) => [
+              modelKey,
+              { id: m.id, capabilities: [...m.capabilities], tier: m.tier },
+            ]),
+          ),
+        },
+      ]),
+    );
+    const rawSnapshot = {
+      version: cfg.version,
+      hub: {
+        host: cfg.hub.host,
+        port: this.boundPort ?? cfg.hub.port,
+        rootDir: this.scrubber.scrub(this.runtimeCfg.rootDir),
+        defaultProjectsDir: this.scrubber.scrub(this.runtimeCfg.projectsDir),
+      },
+      providers,
+      routing: structuredClone(cfg.routing),
+      memory: structuredClone(cfg.memory),
+      guardrails: structuredClone(cfg.guardrails),
+    };
+    return JSON.parse(this.scrubber.scrub(JSON.stringify(rawSnapshot))) as typeof rawSnapshot;
+  }
 
   public getQuietStatusProjection(): QuietStatusProjection {
     const counts = this.db.getQuietStatusCounts();

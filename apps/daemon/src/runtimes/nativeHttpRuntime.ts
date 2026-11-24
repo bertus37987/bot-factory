@@ -24,6 +24,12 @@ type ExtendedProviderConfig = Omit<HubConfig["providers"][string], "protocol" | 
 };
 
 const DEFAULT_MAX_TOOL_STEPS = 12;
+const MAX_TOOL_OUTPUT_CONTEXT_CHARS = 12_000;
+const STALE_TOOL_OUTPUT_AGE_STEPS = 3;
+const STALE_TOOL_OUTPUT_COMPACT_MIN_CHARS = 400;
+const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = 120_000;
+const DOOM_LOOP_REPEAT_THRESHOLD = 3;
+const CONSECUTIVE_ERROR_STEP_THRESHOLD = 3;
 
 const GEMINI_THINKING_BUDGET: Record<ReasoningEffort, number> = {
   low: 1024,
@@ -230,6 +236,255 @@ function stringifyToolOutput(value: unknown): string {
   }
 }
 
+export function stableStringify(value: unknown, seen = new WeakSet<object>()): string {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value !== "object") return JSON.stringify(value) ?? String(value);
+  if (seen.has(value as object)) return '"[Circular]"';
+  seen.add(value as object);
+  try {
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => stableStringify(item, seen)).join(",")}]`;
+    }
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj).sort();
+    const parts = keys
+      .filter((k) => obj[k] !== undefined)
+      .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k], seen)}`);
+    return `{${parts.join(",")}}`;
+  } finally {
+    seen.delete(value as object);
+  }
+}
+
+export function boundToolOutputForContext(output: string, maxChars = MAX_TOOL_OUTPUT_CONTEXT_CHARS): string {
+  if (maxChars <= 0) return "";
+  if (output.length <= maxChars) return output;
+  if (maxChars < 160) return output.slice(0, maxChars);
+
+  const roughOmitted = output.length - maxChars;
+  const marker = `\n\n... [truncated ${roughOmitted} chars of ${output.length} total] ...\n\n`;
+  const remaining = Math.max(0, maxChars - marker.length);
+  const headLen = Math.ceil(remaining * 0.6);
+  const tailLen = Math.max(0, remaining - headLen);
+  const omitted = output.length - headLen - tailLen;
+  const exactMarker = `\n\n... [truncated ${omitted} chars of ${output.length} total] ...\n\n`;
+  if (headLen + tailLen + exactMarker.length > maxChars) {
+    const adjHead = Math.max(0, maxChars - exactMarker.length - tailLen);
+    return `${output.slice(0, adjHead)}${exactMarker}${tailLen > 0 ? output.slice(output.length - tailLen) : ""}`;
+  }
+  return `${output.slice(0, headLen)}${exactMarker}${tailLen > 0 ? output.slice(output.length - tailLen) : ""}`;
+}
+
+interface StaleToolEntry {
+  step: number;
+  compacted: boolean;
+  compact: () => void;
+}
+
+function compactStaleToolOutputs(entries: StaleToolEntry[], currentStep: number): void {
+  for (const entry of entries) {
+    if (!entry.compacted && currentStep - entry.step > STALE_TOOL_OUTPUT_AGE_STEPS) {
+      entry.compacted = true;
+      entry.compact();
+    }
+  }
+}
+
+function createToolLoopTracker() {
+  const signatureCounts = new Map<string, number>();
+  let consecutiveErrorSteps = 0;
+
+  return {
+    evaluateBatch(calls: Array<{ id: string; name: string; args: Record<string, unknown>; parseError?: string }>): {
+      blockedCallIds: Map<string, string>;
+      trippedReason: string | null;
+    } {
+      const blockedCallIds = new Map<string, string>();
+      let trippedReason: string | null = null;
+      for (const call of calls) {
+        const sig = call.parseError ? `${call.name}::PARSE_ERROR` : `${call.name}::${stableStringify(call.args)}`;
+        const count = (signatureCounts.get(sig) ?? 0) + 1;
+        signatureCounts.set(sig, count);
+        if (count >= DOOM_LOOP_REPEAT_THRESHOLD) {
+          const msg = `[Loop Breaker] Blocked repeated identical call to '${call.name}' (${count}x with identical arguments). Do not repeat this call; summarize your progress or choose a genuinely different action.`;
+          blockedCallIds.set(call.id, msg);
+          if (!trippedReason) trippedReason = msg;
+        }
+      }
+      return { blockedCallIds, trippedReason };
+    },
+    recordStepOutcomes(results: Array<{ isError: boolean }>): string | null {
+      if (results.length > 0 && results.every((r) => r.isError)) {
+        consecutiveErrorSteps += 1;
+        if (consecutiveErrorSteps >= CONSECUTIVE_ERROR_STEP_THRESHOLD) {
+          return `[Loop Breaker] ${consecutiveErrorSteps} consecutive tool steps failed. Stop calling tools and summarize the blocker clearly for the user.`;
+        }
+      } else if (results.some((r) => !r.isError)) {
+        consecutiveErrorSteps = 0;
+      }
+      return null;
+    },
+  };
+}
+
+function createPerRequestSignal(
+  callerSignal: AbortSignal,
+  timeoutMs = DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const onCallerAbort = () => controller.abort(callerSignal.reason);
+  if (callerSignal.aborted) {
+    controller.abort(callerSignal.reason);
+  } else {
+    callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+  }
+  const timer = setTimeout(() => {
+    controller.abort(new Error(`HTTP request timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      callerSignal.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
+
+export function buildOpenAiMessages(
+  frozenSystemPrompt: string,
+  history: TurnInput["history"],
+  apiUserText: string,
+  imageDataUrl?: string | null,
+): Array<Record<string, unknown>> {
+  const messages: Array<Record<string, unknown>> = [{ role: "system", content: frozenSystemPrompt }];
+  for (const m of history) {
+    if (!m.content) continue;
+    if (m.role === "system") {
+      messages.push({ role: "user", content: `[Session Compaction Summary]\n${m.content}` });
+      messages.push({ role: "assistant", content: "Acknowledged compacted session context." });
+    } else {
+      messages.push({ role: m.role, content: m.content });
+    }
+  }
+  const userContent = imageDataUrl
+    ? [
+        { type: "text", text: apiUserText },
+        { type: "image_url", image_url: { url: imageDataUrl } },
+      ]
+    : apiUserText;
+  messages.push({ role: "user", content: userContent });
+  return messages;
+}
+
+export function buildGeminiContents(
+  history: TurnInput["history"],
+  apiUserText: string,
+  imageDataUrl?: string | null,
+): Array<{ role: string; parts: Array<Record<string, unknown>> }> {
+  const contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = [];
+  const pushTextTurn = (role: "user" | "model", text: string) => {
+    if (!text) return;
+    const prev = contents[contents.length - 1];
+    if (prev && prev.role === role) {
+      prev.parts.push({ text });
+    } else {
+      contents.push({ role, parts: [{ text }] });
+    }
+  };
+
+  for (const m of history) {
+    if (!m.content) continue;
+    if (m.role === "system") {
+      pushTextTurn("user", `[Session Compaction Summary]\n${m.content}`);
+      pushTextTurn("model", "Acknowledged compacted session context.");
+    } else if (m.role === "assistant") {
+      pushTextTurn("model", m.content);
+    } else {
+      pushTextTurn("user", m.content);
+    }
+  }
+
+  if (contents.length > 0 && contents[0]?.role === "model") {
+    contents.unshift({ role: "user", parts: [{ text: "(continued session)" }] });
+  }
+
+  const userParts: Array<Record<string, unknown>> = [{ text: apiUserText }];
+  const img = parseDataUrl(imageDataUrl);
+  if (img) {
+    userParts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
+  }
+  const prev = contents[contents.length - 1];
+  if (prev && prev.role === "user") {
+    prev.parts.push(...userParts);
+  } else {
+    contents.push({ role: "user", parts: userParts });
+  }
+  return contents;
+}
+
+export function buildAnthropicMessages(
+  history: TurnInput["history"],
+  apiUserText: string,
+  imageDataUrl?: string | null,
+): Array<Record<string, unknown>> {
+  const normalized: Array<{ role: "user" | "assistant"; content: string }> = [];
+  const pushTextMsg = (role: "user" | "assistant", text: string) => {
+    if (!text) return;
+    const prev = normalized[normalized.length - 1];
+    if (prev && prev.role === role) {
+      prev.content = `${prev.content}\n\n${text}`;
+    } else {
+      normalized.push({ role, content: text });
+    }
+  };
+
+  for (const m of history) {
+    if (!m.content) continue;
+    if (m.role === "system") {
+      pushTextMsg("user", `[Session Compaction Summary]\n${m.content}`);
+      pushTextMsg("assistant", "Acknowledged compacted session context.");
+    } else if (m.role === "assistant") {
+      pushTextMsg("assistant", m.content);
+    } else {
+      pushTextMsg("user", m.content);
+    }
+  }
+
+  if (normalized.length > 0 && normalized[0]?.role === "assistant") {
+    normalized.unshift({ role: "user", content: "(continued session)" });
+  }
+
+  const messages: Array<Record<string, unknown>> = normalized.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
+  const img = parseDataUrl(imageDataUrl);
+  const prev = messages[messages.length - 1];
+  if (prev && prev.role === "user") {
+    const prevText = typeof prev.content === "string" ? prev.content : "";
+    if (img) {
+      prev.content = [
+        ...(prevText ? [{ type: "text", text: prevText }] : []),
+        { type: "image", source: { type: "base64", media_type: img.mimeType, data: img.data } },
+        { type: "text", text: apiUserText },
+      ];
+    } else {
+      prev.content = prevText ? `${prevText}\n\n${apiUserText}` : apiUserText;
+    }
+  } else {
+    const currentUserContent = img
+      ? [
+          { type: "image", source: { type: "base64", media_type: img.mimeType, data: img.data } },
+          { type: "text", text: apiUserText },
+        ]
+      : apiUserText;
+    messages.push({ role: "user", content: currentUserContent });
+  }
+  return messages;
+}
+
 function formatToolTitle(name: string, args: Record<string, unknown>): string {
   const keys = Object.keys(args);
   if (keys.length === 0) return `${name}()`;
@@ -265,9 +520,24 @@ async function* parseSseStream(
     return payload;
   };
 
+  let rejectAbortRef: (() => void) | null = null;
+  const abortPromise = new Promise<never>((_, reject) => {
+    const rejectAbort = () => {
+      reject(signal.reason instanceof Error ? signal.reason : new Error("HTTP stream aborted"));
+    };
+    rejectAbortRef = rejectAbort;
+    if (signal.aborted) {
+      rejectAbort();
+    } else {
+      signal.addEventListener("abort", rejectAbort, { once: true });
+    }
+  });
+  // Prevent unhandled rejection if stream completes normally before abort fires
+  abortPromise.catch(() => {});
+
   try {
     while (!signal.aborted) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), abortPromise]);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
@@ -291,6 +561,10 @@ async function* parseSseStream(
       }
     }
 
+    if (signal.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("HTTP stream aborted");
+    }
+
     buffer += decoder.decode();
     if (buffer.trim()) {
       for (const rawLine of buffer.split(/\r?\n/)) {
@@ -304,6 +578,9 @@ async function* parseSseStream(
     const tail = flushEvent();
     if (tail) yield tail;
   } finally {
+    if (rejectAbortRef) {
+      signal.removeEventListener("abort", rejectAbortRef);
+    }
     try {
       await reader.cancel();
     } catch {
@@ -361,6 +638,7 @@ export class NativeHttpRuntime implements AgentRuntime {
     private config: HubConfig,
     private secrets: Record<string, string>,
     private readonly scrubber: SecretScrubber,
+    private readonly opts?: { requestTimeoutMs?: number },
   ) {}
 
   public setConfig(newConfig: HubConfig): void {
@@ -529,6 +807,7 @@ export class NativeHttpRuntime implements AgentRuntime {
   private async *executeToolCalls(
     calls: Array<{ id: string; name: string; args: Record<string, unknown>; parseError?: string }>,
     onToolCall: NonNullable<TurnInput["onToolCall"]>,
+    blockedOutputs?: Map<string, string>,
   ): AsyncGenerator<NormalizedAgentEvent, Array<{ id: string; name: string; output: string; isError: boolean }>> {
     const results: Array<{ id: string; name: string; output: string; isError: boolean }> = [];
     for (const call of calls) {
@@ -541,7 +820,11 @@ export class NativeHttpRuntime implements AgentRuntime {
 
       let output = "";
       let isError = false;
-      if (call.parseError) {
+      const blocked = blockedOutputs?.get(call.id);
+      if (blocked !== undefined) {
+        output = this.scrubber.scrub(blocked);
+        isError = true;
+      } else if (call.parseError) {
         output = this.scrubber.scrub(`Invalid JSON arguments for ${call.name}: ${call.parseError}`);
         isError = true;
       } else {
@@ -588,18 +871,7 @@ export class NativeHttpRuntime implements AgentRuntime {
     maxToolSteps: number,
     signal: AbortSignal,
   ): AsyncIterable<NormalizedAgentEvent> {
-    const userContent = imageDataUrl
-      ? [
-          { type: "text", text: apiUserText },
-          { type: "image_url", image_url: { url: imageDataUrl } },
-        ]
-      : apiUserText;
-
-    const messages: Array<Record<string, unknown>> = [
-      { role: "system", content: frozenSystemPrompt },
-      ...history.map((m) => ({ role: m.role, content: m.content })),
-      { role: "user", content: userContent },
-    ];
+    const messages = buildOpenAiMessages(frozenSystemPrompt, history, apiUserText, imageDataUrl);
 
     const openAiTools =
       tools && tools.length > 0
@@ -616,146 +888,217 @@ export class NativeHttpRuntime implements AgentRuntime {
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
     const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
+    const requestTimeoutMs = this.opts?.requestTimeoutMs ?? DEFAULT_HTTP_REQUEST_TIMEOUT_MS;
 
     let includeStreamOptions = true;
     let includeReasoningEffort = Boolean(reasoningEffort);
+    let includeToolChoiceNone = true;
     let accumulatedAllText = "";
+    let forceFinalNoTools = false;
+    let loopBreakerSummary: string | null = null;
+    let hasToolHistoryInTurn = false;
+    const loopTracker = createToolLoopTracker();
+    const staleToolEntries: StaleToolEntry[] = [];
 
     for (let step = 0; step <= maxToolSteps; step++) {
-      const canOfferTools = Boolean(openAiTools && onToolCall && step < maxToolSteps);
-      let res: Response | null = null;
+      compactStaleToolOutputs(staleToolEntries, step);
+      const mustDisableTools = forceFinalNoTools || step >= maxToolSteps;
+      const canOfferTools = Boolean(openAiTools && onToolCall && !mustDisableTools);
+      const reqSig = createPerRequestSignal(signal, requestTimeoutMs);
 
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const body: Record<string, unknown> = {
-          model: modelId,
-          messages,
-          temperature: 0.3,
-          stream: true,
-        };
-        if (includeStreamOptions) {
-          body.stream_options = { include_usage: true };
-        }
-        if (includeReasoningEffort && reasoningEffort) {
-          body.reasoning_effort = reasoningEffort === "max" ? "high" : reasoningEffort;
-        }
-        if (canOfferTools && openAiTools) {
-          body.tools = openAiTools;
-        }
+      try {
+        let res: Response | null = null;
 
-        res = await fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal,
-        });
-        if (res.ok) break;
-
-        const errText = await res.text();
-        if ((res.status === 400 || res.status === 422) && attempt < 2) {
-          let retried = false;
-          if (includeReasoningEffort && /reasoning_effort|extra_forbidden|unrecognized|unknown/i.test(errText)) {
-            includeReasoningEffort = false;
-            retried = true;
-          }
-          if (includeStreamOptions && /stream_options|extra_forbidden|unrecognized|unknown/i.test(errText)) {
-            includeStreamOptions = false;
-            retried = true;
-          }
-          if (retried) continue;
-        }
-        throw new Error(`HTTP ${res.status}: ${errText.slice(0, 400)}`);
-      }
-
-      if (!res || !res.ok) {
-        throw new Error("HTTP request failed");
-      }
-
-      let stepText = "";
-      let stepUsage: { tokenIn: number; tokenOut: number } | null = null;
-      const toolCallsByIndex = new Map<number, { id: string; name: string; arguments: string }>();
-      let orderedToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
-
-      for await (const item of iterSseOrJson(res, signal)) {
-        if (item.kind === "sse") {
-          if (item.data === "[DONE]") break;
-          let chunk: {
-            error?: { message?: string };
-            choices?: Array<{
-              delta?: {
-                content?: string | null;
-                reasoning_content?: string | null;
-                reasoning?: string | null;
-                thinking?: string | null;
-                tool_calls?: Array<{
-                  index?: number;
-                  id?: string;
-                  function?: { name?: string; arguments?: string };
-                }>;
-              };
-              message?: {
-                content?: string | null;
-                reasoning_content?: string | null;
-                reasoning?: string | null;
-                tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
-              };
-            }>;
-            usage?: { prompt_tokens?: number; completion_tokens?: number };
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const body: Record<string, unknown> = {
+            model: modelId,
+            messages,
+            temperature: 0.3,
+            stream: true,
           };
-          try {
-            chunk = JSON.parse(item.data);
-          } catch {
-            continue;
+          if (includeStreamOptions) {
+            body.stream_options = { include_usage: true };
           }
-
-          if (chunk.error) {
-            throw new Error(chunk.error.message || JSON.stringify(chunk.error));
+          if (includeReasoningEffort && reasoningEffort) {
+            body.reasoning_effort = reasoningEffort === "max" ? "high" : reasoningEffort;
           }
-          if (chunk.usage) {
-            stepUsage = {
-              tokenIn: chunk.usage.prompt_tokens ?? 0,
-              tokenOut: chunk.usage.completion_tokens ?? 0,
-            };
-          }
-          const choice = chunk.choices?.[0];
-          const delta = choice?.delta;
-          if (delta) {
-            const thoughtPart = delta.reasoning_content ?? delta.reasoning ?? delta.thinking;
-            if (thoughtPart) {
-              yield { type: "thought", text: this.scrubber.scrub(thoughtPart) };
-            }
-            if (delta.content) {
-              const clean = this.scrubber.scrub(delta.content);
-              stepText += clean;
-              accumulatedAllText += clean;
-              yield { type: "text_delta", text: clean };
-            }
-            if (Array.isArray(delta.tool_calls)) {
-              for (const tc of delta.tool_calls) {
-                const idx = tc.index ?? 0;
-                const prev = toolCallsByIndex.get(idx) ?? {
-                  id: tc.id ?? `call_${crypto.randomUUID().slice(0, 8)}`,
-                  name: "",
-                  arguments: "",
-                };
-                if (tc.id) prev.id = tc.id;
-                if (tc.function?.name) prev.name += tc.function.name;
-                if (tc.function?.arguments) prev.arguments += tc.function.arguments;
-                toolCallsByIndex.set(idx, prev);
+          if (openAiTools && onToolCall) {
+            if (canOfferTools) {
+              body.tools = openAiTools;
+            } else if (hasToolHistoryInTurn) {
+              body.tools = openAiTools;
+              if (includeToolChoiceNone) {
+                body.tool_choice = "none";
               }
             }
-          } else if (choice?.message) {
-            const thoughtPart = choice.message.reasoning_content ?? choice.message.reasoning;
-            if (thoughtPart) {
-              yield { type: "thought", text: this.scrubber.scrub(thoughtPart) };
+          }
+
+          res = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: reqSig.signal,
+          });
+          if (res.ok) break;
+
+          const errText = await res.text();
+          if ((res.status === 400 || res.status === 422) && attempt < 3) {
+            let retried = false;
+            if (includeReasoningEffort && /reasoning_effort|extra_forbidden|unrecognized|unknown/i.test(errText)) {
+              includeReasoningEffort = false;
+              retried = true;
             }
-            if (choice.message.content) {
-              const clean = this.scrubber.scrub(choice.message.content);
-              stepText += clean;
-              accumulatedAllText += clean;
+            if (includeStreamOptions && /stream_options|extra_forbidden|unrecognized|unknown/i.test(errText)) {
+              includeStreamOptions = false;
+              retried = true;
+            }
+            if (includeToolChoiceNone && !canOfferTools && /tool_choice/i.test(errText)) {
+              includeToolChoiceNone = false;
+              retried = true;
+            }
+            if (retried) continue;
+          }
+          throw new Error(`HTTP ${res.status}: ${errText.slice(0, 400)}`);
+        }
+
+        if (!res || !res.ok) {
+          throw new Error("HTTP request failed");
+        }
+
+        let stepText = "";
+        let stepHasText = false;
+        let stepUsage: { tokenIn: number; tokenOut: number } | null = null;
+        const toolCallsByIndex = new Map<number, { id: string; name: string; arguments: string }>();
+        let orderedToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+
+        const appendStepText = (clean: string): string | null => {
+          let sepText: string | null = null;
+          if (!stepHasText) {
+            stepHasText = true;
+            if (accumulatedAllText.length > 0 && !accumulatedAllText.endsWith("\n")) {
+              accumulatedAllText += "\n\n";
+              sepText = "\n\n";
+            }
+          }
+          stepText += clean;
+          accumulatedAllText += clean;
+          return sepText;
+        };
+
+        for await (const item of iterSseOrJson(res, reqSig.signal)) {
+          if (item.kind === "sse") {
+            if (item.data === "[DONE]") break;
+            let chunk: {
+              error?: { message?: string };
+              choices?: Array<{
+                delta?: {
+                  content?: string | null;
+                  reasoning_content?: string | null;
+                  reasoning?: string | null;
+                  thinking?: string | null;
+                  tool_calls?: Array<{
+                    index?: number;
+                    id?: string;
+                    function?: { name?: string; arguments?: string };
+                  }>;
+                };
+                message?: {
+                  content?: string | null;
+                  reasoning_content?: string | null;
+                  reasoning?: string | null;
+                  tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+                };
+              }>;
+              usage?: { prompt_tokens?: number; completion_tokens?: number };
+            };
+            try {
+              chunk = JSON.parse(item.data);
+            } catch {
+              continue;
+            }
+
+            if (chunk.error) {
+              throw new Error(chunk.error.message || JSON.stringify(chunk.error));
+            }
+            if (chunk.usage) {
+              stepUsage = {
+                tokenIn: chunk.usage.prompt_tokens ?? 0,
+                tokenOut: chunk.usage.completion_tokens ?? 0,
+              };
+            }
+            const choice = chunk.choices?.[0];
+            const delta = choice?.delta;
+            if (delta) {
+              const thoughtPart = delta.reasoning_content ?? delta.reasoning ?? delta.thinking;
+              if (thoughtPart) {
+                yield { type: "thought", text: this.scrubber.scrub(thoughtPart) };
+              }
+              if (delta.content) {
+                const clean = this.scrubber.scrub(delta.content);
+                const sep = appendStepText(clean);
+                if (sep) yield { type: "text_delta", text: sep };
+                yield { type: "text_delta", text: clean };
+              }
+              if (Array.isArray(delta.tool_calls)) {
+                for (const tc of delta.tool_calls) {
+                  const idx = tc.index ?? 0;
+                  const prev = toolCallsByIndex.get(idx) ?? {
+                    id: tc.id ?? `call_${crypto.randomUUID().slice(0, 8)}`,
+                    name: "",
+                    arguments: "",
+                  };
+                  if (tc.id) prev.id = tc.id;
+                  if (tc.function?.name) prev.name += tc.function.name;
+                  if (tc.function?.arguments) prev.arguments += tc.function.arguments;
+                  toolCallsByIndex.set(idx, prev);
+                }
+              }
+            } else if (choice?.message) {
+              const thoughtPart = choice.message.reasoning_content ?? choice.message.reasoning;
+              if (thoughtPart) {
+                yield { type: "thought", text: this.scrubber.scrub(thoughtPart) };
+              }
+              if (choice.message.content) {
+                const clean = this.scrubber.scrub(choice.message.content);
+                const sep = appendStepText(clean);
+                if (sep) yield { type: "text_delta", text: sep };
+                yield { type: "text_delta", text: clean };
+              }
+              if (Array.isArray(choice.message.tool_calls)) {
+                choice.message.tool_calls.forEach((tc, idx) => {
+                  toolCallsByIndex.set(idx, {
+                    id: tc.id ?? `call_${crypto.randomUUID().slice(0, 8)}`,
+                    name: tc.function?.name ?? "",
+                    arguments: tc.function?.arguments ?? "{}",
+                  });
+                });
+              }
+            }
+          } else {
+            const data = item.data as {
+              choices?: Array<{
+                message?: {
+                  content?: string | null;
+                  reasoning_content?: string | null;
+                  reasoning?: string | null;
+                  tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+                };
+              }>;
+              usage?: { prompt_tokens?: number; completion_tokens?: number };
+            };
+            const msg = data.choices?.[0]?.message;
+            const thoughtText = msg?.reasoning_content ?? msg?.reasoning;
+            if (thoughtText) {
+              yield { type: "thought", text: this.scrubber.scrub(thoughtText) };
+            }
+            if (msg?.content) {
+              const clean = this.scrubber.scrub(msg.content);
+              const sep = appendStepText(clean);
+              if (sep) yield { type: "text_delta", text: sep };
               yield { type: "text_delta", text: clean };
             }
-            if (Array.isArray(choice.message.tool_calls)) {
-              choice.message.tool_calls.forEach((tc, idx) => {
+            if (Array.isArray(msg?.tool_calls)) {
+              msg.tool_calls.forEach((tc, idx) => {
                 toolCallsByIndex.set(idx, {
                   id: tc.id ?? `call_${crypto.randomUUID().slice(0, 8)}`,
                   name: tc.function?.name ?? "",
@@ -763,100 +1106,100 @@ export class NativeHttpRuntime implements AgentRuntime {
                 });
               });
             }
-          }
-        } else {
-          const data = item.data as {
-            choices?: Array<{
-              message?: {
-                content?: string | null;
-                reasoning_content?: string | null;
-                reasoning?: string | null;
-                tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+            if (data.usage) {
+              stepUsage = {
+                tokenIn: data.usage.prompt_tokens ?? 0,
+                tokenOut: data.usage.completion_tokens ?? 0,
               };
-            }>;
-            usage?: { prompt_tokens?: number; completion_tokens?: number };
-          };
-          const msg = data.choices?.[0]?.message;
-          const thoughtText = msg?.reasoning_content ?? msg?.reasoning;
-          if (thoughtText) {
-            yield { type: "thought", text: this.scrubber.scrub(thoughtText) };
-          }
-          if (msg?.content) {
-            const clean = this.scrubber.scrub(msg.content);
-            stepText = clean;
-            accumulatedAllText += clean;
-            yield { type: "text_delta", text: clean };
-          }
-          if (Array.isArray(msg?.tool_calls)) {
-            msg.tool_calls.forEach((tc, idx) => {
-              toolCallsByIndex.set(idx, {
-                id: tc.id ?? `call_${crypto.randomUUID().slice(0, 8)}`,
-                name: tc.function?.name ?? "",
-                arguments: tc.function?.arguments ?? "{}",
-              });
-            });
-          }
-          if (data.usage) {
-            stepUsage = {
-              tokenIn: data.usage.prompt_tokens ?? 0,
-              tokenOut: data.usage.completion_tokens ?? 0,
-            };
-          }
-        }
-      }
-
-      orderedToolCalls = [...toolCallsByIndex.entries()]
-        .sort((a, b) => a[0] - b[0])
-        .map(([, v]) => v)
-        .filter((v) => v.name);
-
-      if (stepUsage) {
-        yield { type: "usage", tokenIn: stepUsage.tokenIn, tokenOut: stepUsage.tokenOut };
-      }
-
-      if (orderedToolCalls.length > 0 && onToolCall && step < maxToolSteps) {
-        messages.push({
-          role: "assistant",
-          content: stepText || null,
-          tool_calls: orderedToolCalls.map((tc) => ({
-            id: tc.id,
-            type: "function",
-            function: { name: tc.name, arguments: tc.arguments || "{}" },
-          })),
-        });
-
-        const parsedCalls = orderedToolCalls.map((tc) => {
-          const raw = tc.arguments.trim();
-          if (!raw) return { id: tc.id, name: tc.name, args: {} as Record<string, unknown> };
-          try {
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-              return { id: tc.id, name: tc.name, args: parsed as Record<string, unknown> };
             }
-            return { id: tc.id, name: tc.name, args: { value: parsed } as Record<string, unknown> };
-          } catch (err) {
-            return {
-              id: tc.id,
-              name: tc.name,
-              args: {},
-              parseError: err instanceof Error ? err.message : String(err),
-            };
           }
-        });
-
-        const toolResults = yield* this.executeToolCalls(parsedCalls, onToolCall);
-        for (const r of toolResults) {
-          messages.push({
-            role: "tool",
-            tool_call_id: r.id,
-            content: r.output,
-          });
         }
-        continue;
-      }
 
-      yield { type: "done", finalText: accumulatedAllText };
-      return;
+        orderedToolCalls = [...toolCallsByIndex.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([, v]) => v)
+          .filter((v) => v.name);
+
+        if (stepUsage) {
+          yield { type: "usage", tokenIn: stepUsage.tokenIn, tokenOut: stepUsage.tokenOut };
+        }
+
+        if (orderedToolCalls.length > 0 && onToolCall && !mustDisableTools) {
+          messages.push({
+            role: "assistant",
+            content: stepText || null,
+            tool_calls: orderedToolCalls.map((tc) => ({
+              id: tc.id,
+              type: "function",
+              function: { name: tc.name, arguments: tc.arguments || "{}" },
+            })),
+          });
+
+          const parsedCalls = orderedToolCalls.map((tc) => {
+            const raw = tc.arguments.trim();
+            if (!raw) return { id: tc.id, name: tc.name, args: {} as Record<string, unknown> };
+            try {
+              const parsed = JSON.parse(raw);
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                return { id: tc.id, name: tc.name, args: parsed as Record<string, unknown> };
+              }
+              return { id: tc.id, name: tc.name, args: { value: parsed } as Record<string, unknown> };
+            } catch (err) {
+              return {
+                id: tc.id,
+                name: tc.name,
+                args: {},
+                parseError: err instanceof Error ? err.message : String(err),
+              };
+            }
+          });
+
+          const batchCheck = loopTracker.evaluateBatch(parsedCalls);
+          const toolResults = yield* this.executeToolCalls(parsedCalls, onToolCall, batchCheck.blockedCallIds);
+          const consecErrReason = loopTracker.recordStepOutcomes(toolResults);
+          const breakerReason = batchCheck.trippedReason ?? consecErrReason;
+          hasToolHistoryInTurn = true;
+
+          for (let i = 0; i < toolResults.length; i++) {
+            const r = toolResults[i]!;
+            let bounded = boundToolOutputForContext(r.output, MAX_TOOL_OUTPUT_CONTEXT_CHARS);
+            if (consecErrReason && i === toolResults.length - 1 && !bounded.includes("[Loop Breaker]")) {
+              bounded = `${bounded}\n\n${consecErrReason}`;
+            }
+            const toolMsg: Record<string, unknown> = {
+              role: "tool",
+              tool_call_id: r.id,
+              content: bounded,
+            };
+            messages.push(toolMsg);
+            if (bounded.length > STALE_TOOL_OUTPUT_COMPACT_MIN_CHARS) {
+              const origLen = bounded.length;
+              staleToolEntries.push({
+                step,
+                compacted: false,
+                compact: () => {
+                  toolMsg.content = `[compacted tool output from step ${step + 1}: ${r.name} (${origLen} chars, ${r.isError ? "error" : "ok"})]`;
+                },
+              });
+            }
+          }
+
+          if (breakerReason) {
+            forceFinalNoTools = true;
+            loopBreakerSummary = breakerReason;
+          }
+          continue;
+        }
+
+        if (forceFinalNoTools && !accumulatedAllText.trim() && loopBreakerSummary) {
+          accumulatedAllText = loopBreakerSummary;
+          yield { type: "text_delta", text: accumulatedAllText };
+        }
+        yield { type: "done", finalText: accumulatedAllText };
+        return;
+      } finally {
+        reqSig.cleanup();
+      }
     }
 
     yield { type: "done", finalText: accumulatedAllText };
@@ -876,19 +1219,7 @@ export class NativeHttpRuntime implements AgentRuntime {
     maxToolSteps: number,
     signal: AbortSignal,
   ): AsyncIterable<NormalizedAgentEvent> {
-    const contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = history
-      .filter((m) => m.role !== "system")
-      .map((m) => ({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }],
-      }));
-
-    const userParts: Array<Record<string, unknown>> = [{ text: apiUserText }];
-    const img = parseDataUrl(imageDataUrl);
-    if (img) {
-      userParts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
-    }
-    contents.push({ role: "user", parts: userParts });
+    const contents = buildGeminiContents(history, apiUserText, imageDataUrl);
 
     const geminiTools =
       tools && tools.length > 0
@@ -908,149 +1239,209 @@ export class NativeHttpRuntime implements AgentRuntime {
 
     const base = baseUrl.replace(/\/$/, "");
     const streamUrl = `${base}/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`;
+    const requestTimeoutMs = this.opts?.requestTimeoutMs ?? DEFAULT_HTTP_REQUEST_TIMEOUT_MS;
 
     let includeThinkingConfig = Boolean(reasoningEffort);
     let accumulatedAllText = "";
+    let forceFinalNoTools = false;
+    let loopBreakerSummary: string | null = null;
+    let hasToolHistoryInTurn = false;
+    const loopTracker = createToolLoopTracker();
+    const staleToolEntries: StaleToolEntry[] = [];
 
     for (let step = 0; step <= maxToolSteps; step++) {
-      const canOfferTools = Boolean(geminiTools && onToolCall && step < maxToolSteps);
-      let res: Response | null = null;
+      compactStaleToolOutputs(staleToolEntries, step);
+      const mustDisableTools = forceFinalNoTools || step >= maxToolSteps;
+      const canOfferTools = Boolean(geminiTools && onToolCall && !mustDisableTools);
+      const reqSig = createPerRequestSignal(signal, requestTimeoutMs);
 
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const generationConfig: Record<string, unknown> = { temperature: 0.3 };
-        if (includeThinkingConfig && reasoningEffort) {
-          generationConfig.thinkingConfig = {
-            includeThoughts: true,
-            thinkingBudget: GEMINI_THINKING_BUDGET[reasoningEffort],
-          };
-        }
+      try {
+        let res: Response | null = null;
 
-        const body: Record<string, unknown> = {
-          systemInstruction: { parts: [{ text: frozenSystemPrompt }] },
-          contents,
-          generationConfig,
-        };
-        if (canOfferTools && geminiTools) {
-          body.tools = geminiTools;
-        }
-
-        res = await fetch(streamUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal,
-        });
-        if (res.ok) break;
-
-        const errText = await res.text();
-        if (res.status === 400 && includeThinkingConfig && /thinkingConfig|thinkingBudget|thinking/i.test(errText)) {
-          includeThinkingConfig = false;
-          continue;
-        }
-        throw new Error(`Gemini HTTP ${res.status}: ${errText.slice(0, 400)}`);
-      }
-
-      if (!res || !res.ok) {
-        throw new Error("Gemini HTTP request failed");
-      }
-
-      const modelParts: Array<Record<string, unknown>> = [];
-      const functionCalls: Array<{ id: string; name: string; args: Record<string, unknown> }> = [];
-      let latestUsage: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } | null =
-        null;
-
-      const processParts = (parts: Array<Record<string, unknown>>): NormalizedAgentEvent[] => {
-        const events: NormalizedAgentEvent[] = [];
-        for (const part of parts) {
-          modelParts.push(part);
-          if (part.thought === true && typeof part.text === "string" && part.text.length > 0) {
-            events.push({ type: "thought", text: this.scrubber.scrub(part.text) });
-          } else if (typeof part.text === "string" && part.text.length > 0) {
-            const clean = this.scrubber.scrub(part.text);
-            accumulatedAllText += clean;
-            events.push({ type: "text_delta", text: clean });
-          }
-          const fc = part.functionCall as { id?: string; name?: string; args?: Record<string, unknown> } | undefined;
-          if (fc?.name) {
-            functionCalls.push({
-              id: fc.id ?? `call_${crypto.randomUUID().slice(0, 8)}`,
-              name: fc.name,
-              args: fc.args && typeof fc.args === "object" ? fc.args : {},
-            });
-          }
-        }
-        return events;
-      };
-
-      for await (const item of iterSseOrJson(res, signal)) {
-        if (item.kind === "sse") {
-          if (item.data === "[DONE]") break;
-          let chunk: {
-            error?: { message?: string };
-            candidates?: Array<{ content?: { parts?: Array<Record<string, unknown>> } }>;
-            usageMetadata?: {
-              promptTokenCount?: number;
-              candidatesTokenCount?: number;
-              thoughtsTokenCount?: number;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const generationConfig: Record<string, unknown> = { temperature: 0.3 };
+          if (includeThinkingConfig && reasoningEffort) {
+            generationConfig.thinkingConfig = {
+              includeThoughts: true,
+              thinkingBudget: GEMINI_THINKING_BUDGET[reasoningEffort],
             };
+          }
+
+          const body: Record<string, unknown> = {
+            systemInstruction: { parts: [{ text: frozenSystemPrompt }] },
+            contents,
+            generationConfig,
           };
-          try {
-            chunk = JSON.parse(item.data);
-          } catch {
+          if (geminiTools && onToolCall) {
+            if (canOfferTools) {
+              body.tools = geminiTools;
+            } else if (hasToolHistoryInTurn) {
+              body.tools = geminiTools;
+              body.toolConfig = { functionCallingConfig: { mode: "NONE" } };
+            }
+          }
+
+          res = await fetch(streamUrl, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: reqSig.signal,
+          });
+          if (res.ok) break;
+
+          const errText = await res.text();
+          if (res.status === 400 && includeThinkingConfig && /thinkingConfig|thinkingBudget|thinking/i.test(errText)) {
+            includeThinkingConfig = false;
             continue;
           }
-          if (chunk.error) {
-            throw new Error(chunk.error.message || JSON.stringify(chunk.error));
+          throw new Error(`Gemini HTTP ${res.status}: ${errText.slice(0, 400)}`);
+        }
+
+        if (!res || !res.ok) {
+          throw new Error("Gemini HTTP request failed");
+        }
+
+        const modelParts: Array<Record<string, unknown>> = [];
+        const functionCalls: Array<{ id: string; name: string; args: Record<string, unknown> }> = [];
+        let latestUsage: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } | null =
+          null;
+        let stepHasText = false;
+
+        const processParts = (parts: Array<Record<string, unknown>>): NormalizedAgentEvent[] => {
+          const events: NormalizedAgentEvent[] = [];
+          for (const part of parts) {
+            modelParts.push(part);
+            if (part.thought === true && typeof part.text === "string" && part.text.length > 0) {
+              events.push({ type: "thought", text: this.scrubber.scrub(part.text) });
+            } else if (typeof part.text === "string" && part.text.length > 0) {
+              const clean = this.scrubber.scrub(part.text);
+              if (!stepHasText) {
+                stepHasText = true;
+                if (accumulatedAllText.length > 0 && !accumulatedAllText.endsWith("\n")) {
+                  accumulatedAllText += "\n\n";
+                  events.push({ type: "text_delta", text: "\n\n" });
+                }
+              }
+              accumulatedAllText += clean;
+              events.push({ type: "text_delta", text: clean });
+            }
+            const fc = part.functionCall as { id?: string; name?: string; args?: Record<string, unknown> } | undefined;
+            if (fc?.name) {
+              functionCalls.push({
+                id: fc.id ?? `call_${crypto.randomUUID().slice(0, 8)}`,
+                name: fc.name,
+                args: fc.args && typeof fc.args === "object" ? fc.args : {},
+              });
+            }
           }
-          if (chunk.usageMetadata) {
-            latestUsage = chunk.usageMetadata;
-          }
-          const parts = chunk.candidates?.[0]?.content?.parts ?? [];
-          for (const outEvt of processParts(parts)) {
-            yield outEvt;
-          }
-        } else {
-          const data = item.data as {
-            candidates?: Array<{ content?: { parts?: Array<Record<string, unknown>> } }>;
-            usageMetadata?: {
-              promptTokenCount?: number;
-              candidatesTokenCount?: number;
-              thoughtsTokenCount?: number;
+          return events;
+        };
+
+        for await (const item of iterSseOrJson(res, reqSig.signal)) {
+          if (item.kind === "sse") {
+            if (item.data === "[DONE]") break;
+            let chunk: {
+              error?: { message?: string };
+              candidates?: Array<{ content?: { parts?: Array<Record<string, unknown>> } }>;
+              usageMetadata?: {
+                promptTokenCount?: number;
+                candidatesTokenCount?: number;
+                thoughtsTokenCount?: number;
+              };
             };
-          };
-          if (data.usageMetadata) latestUsage = data.usageMetadata;
-          const parts = data.candidates?.[0]?.content?.parts ?? [];
-          for (const outEvt of processParts(parts)) {
-            yield outEvt;
+            try {
+              chunk = JSON.parse(item.data);
+            } catch {
+              continue;
+            }
+            if (chunk.error) {
+              throw new Error(chunk.error.message || JSON.stringify(chunk.error));
+            }
+            if (chunk.usageMetadata) {
+              latestUsage = chunk.usageMetadata;
+            }
+            const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+            for (const outEvt of processParts(parts)) {
+              yield outEvt;
+            }
+          } else {
+            const data = item.data as {
+              candidates?: Array<{ content?: { parts?: Array<Record<string, unknown>> } }>;
+              usageMetadata?: {
+                promptTokenCount?: number;
+                candidatesTokenCount?: number;
+                thoughtsTokenCount?: number;
+              };
+            };
+            if (data.usageMetadata) latestUsage = data.usageMetadata;
+            const parts = data.candidates?.[0]?.content?.parts ?? [];
+            for (const outEvt of processParts(parts)) {
+              yield outEvt;
+            }
           }
         }
-      }
 
-      if (latestUsage) {
-        yield {
-          type: "usage",
-          tokenIn: latestUsage.promptTokenCount ?? 0,
-          tokenOut: (latestUsage.candidatesTokenCount ?? 0) + (latestUsage.thoughtsTokenCount ?? 0),
-        };
-      }
+        if (latestUsage) {
+          yield {
+            type: "usage",
+            tokenIn: latestUsage.promptTokenCount ?? 0,
+            tokenOut: (latestUsage.candidatesTokenCount ?? 0) + (latestUsage.thoughtsTokenCount ?? 0),
+          };
+        }
 
-      if (functionCalls.length > 0 && onToolCall && step < maxToolSteps) {
-        contents.push({ role: "model", parts: modelParts });
-        const toolResults = yield* this.executeToolCalls(functionCalls, onToolCall);
-        contents.push({
-          role: "user",
-          parts: toolResults.map((r) => ({
-            functionResponse: {
-              name: r.name,
-              response: r.isError ? { error: r.output } : { output: r.output },
-            },
-          })),
-        });
-        continue;
-      }
+        if (functionCalls.length > 0 && onToolCall && !mustDisableTools) {
+          contents.push({ role: "model", parts: modelParts });
+          const batchCheck = loopTracker.evaluateBatch(functionCalls);
+          const toolResults = yield* this.executeToolCalls(functionCalls, onToolCall, batchCheck.blockedCallIds);
+          const consecErrReason = loopTracker.recordStepOutcomes(toolResults);
+          const breakerReason = batchCheck.trippedReason ?? consecErrReason;
+          hasToolHistoryInTurn = true;
 
-      yield { type: "done", finalText: accumulatedAllText };
-      return;
+          const responseParts: Array<Record<string, unknown>> = [];
+          for (let i = 0; i < toolResults.length; i++) {
+            const r = toolResults[i]!;
+            let bounded = boundToolOutputForContext(r.output, MAX_TOOL_OUTPUT_CONTEXT_CHARS);
+            if (consecErrReason && i === toolResults.length - 1 && !bounded.includes("[Loop Breaker]")) {
+              bounded = `${bounded}\n\n${consecErrReason}`;
+            }
+            const respObj: Record<string, unknown> = r.isError ? { error: bounded } : { output: bounded };
+            responseParts.push({
+              functionResponse: {
+                name: r.name,
+                response: respObj,
+              },
+            });
+            if (bounded.length > STALE_TOOL_OUTPUT_COMPACT_MIN_CHARS) {
+              const origLen = bounded.length;
+              staleToolEntries.push({
+                step,
+                compacted: false,
+                compact: () => {
+                  const compactNote = `[compacted tool output from step ${step + 1}: ${r.name} (${origLen} chars, ${r.isError ? "error" : "ok"})]`;
+                  if (r.isError) respObj.error = compactNote;
+                  else respObj.output = compactNote;
+                },
+              });
+            }
+          }
+          contents.push({ role: "user", parts: responseParts });
+
+          if (breakerReason) {
+            forceFinalNoTools = true;
+            loopBreakerSummary = breakerReason;
+          }
+          continue;
+        }
+
+        if (forceFinalNoTools && !accumulatedAllText.trim() && loopBreakerSummary) {
+          accumulatedAllText = loopBreakerSummary;
+          yield { type: "text_delta", text: accumulatedAllText };
+        }
+        yield { type: "done", finalText: accumulatedAllText };
+        return;
+      } finally {
+        reqSig.cleanup();
+      }
     }
 
     yield { type: "done", finalText: accumulatedAllText };
@@ -1070,18 +1461,7 @@ export class NativeHttpRuntime implements AgentRuntime {
     maxToolSteps: number,
     signal: AbortSignal,
   ): AsyncIterable<NormalizedAgentEvent> {
-    const messages: Array<Record<string, unknown>> = history
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({ role: m.role, content: m.content }));
-
-    const img = parseDataUrl(imageDataUrl);
-    const currentUserContent = img
-      ? [
-          { type: "image", source: { type: "base64", media_type: img.mimeType, data: img.data } },
-          { type: "text", text: apiUserText },
-        ]
-      : apiUserText;
-    messages.push({ role: "user", content: currentUserContent });
+    const messages = buildAnthropicMessages(history, apiUserText, imageDataUrl);
 
     const anthropicTools =
       tools && tools.length > 0
@@ -1100,229 +1480,323 @@ export class NativeHttpRuntime implements AgentRuntime {
       "anthropic-version": "2023-06-01",
     };
     if (apiKey) headers["x-api-key"] = apiKey;
+    const requestTimeoutMs = this.opts?.requestTimeoutMs ?? DEFAULT_HTTP_REQUEST_TIMEOUT_MS;
 
     let allowThinking = reasoningEffort === "high" || reasoningEffort === "max";
+    let includePromptCache = true;
+    let includeToolChoiceNone = true;
     let accumulatedAllText = "";
+    let forceFinalNoTools = false;
+    let loopBreakerSummary: string | null = null;
+    let hasToolHistoryInTurn = false;
+    const loopTracker = createToolLoopTracker();
+    const staleToolEntries: StaleToolEntry[] = [];
 
     for (let step = 0; step <= maxToolSteps; step++) {
-      const canOfferTools = Boolean(anthropicTools && onToolCall && step < maxToolSteps);
-      let res: Response | null = null;
+      compactStaleToolOutputs(staleToolEntries, step);
+      const mustDisableTools = forceFinalNoTools || step >= maxToolSteps;
+      const canOfferTools = Boolean(anthropicTools && onToolCall && !mustDisableTools);
+      const reqSig = createPerRequestSignal(signal, requestTimeoutMs);
 
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const body: Record<string, unknown> = {
-          model: modelId,
-          system: frozenSystemPrompt,
-          messages,
-          stream: true,
-        };
-        if (allowThinking && (reasoningEffort === "high" || reasoningEffort === "max")) {
-          const budgetTokens = reasoningEffort === "max" ? 16384 : 8192;
-          body.max_tokens = reasoningEffort === "max" ? 32768 : 16384;
-          body.thinking = { type: "enabled", budget_tokens: budgetTokens };
-        } else {
-          body.max_tokens = 8192;
-          body.temperature = 0.3;
-        }
-        if (canOfferTools && anthropicTools) {
-          body.tools = anthropicTools;
-        }
+      try {
+        let res: Response | null = null;
 
-        res = await fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal,
-        });
-        if (res.ok) break;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const systemPayload = includePromptCache
+            ? [{ type: "text", text: frozenSystemPrompt, cache_control: { type: "ephemeral" } }]
+            : frozenSystemPrompt;
+          const cachedTools =
+            includePromptCache && anthropicTools
+              ? anthropicTools.map((t, idx) =>
+                  idx === anthropicTools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t,
+                )
+              : anthropicTools;
 
-        const errText = await res.text();
-        if (res.status === 400 && allowThinking && /thinking|budget_tokens/i.test(errText)) {
-          allowThinking = false;
-          continue;
-        }
-        throw new Error(`Anthropic HTTP ${res.status}: ${errText.slice(0, 400)}`);
-      }
-
-      if (!res || !res.ok) {
-        throw new Error("Anthropic HTTP request failed");
-      }
-
-      let stepInTokens = 0;
-      let stepOutTokens = 0;
-      const blockBuilders = new Map<
-        number,
-        {
-          type: string;
-          text?: string;
-          thinking?: string;
-          signature?: string;
-          id?: string;
-          name?: string;
-          jsonChunks?: string;
-        }
-      >();
-
-      for await (const item of iterSseOrJson(res, signal)) {
-        if (item.kind === "sse") {
-          if (item.data === "[DONE]") break;
-          let payload: Record<string, unknown>;
-          try {
-            payload = JSON.parse(item.data) as Record<string, unknown>;
-          } catch {
-            continue;
-          }
-          const evType = String(payload.type ?? item.event ?? "");
-          if (evType === "error") {
-            const errObj = payload.error as { message?: string } | undefined;
-            throw new Error(errObj?.message || JSON.stringify(payload));
-          } else if (evType === "message_start") {
-            const msg = payload.message as { usage?: { input_tokens?: number; output_tokens?: number } } | undefined;
-            stepInTokens = msg?.usage?.input_tokens ?? stepInTokens;
-            stepOutTokens = msg?.usage?.output_tokens ?? stepOutTokens;
-          } else if (evType === "content_block_start") {
-            const idx = Number(payload.index ?? 0);
-            const cb = (payload.content_block ?? {}) as { type?: string; id?: string; name?: string };
-            blockBuilders.set(idx, {
-              type: String(cb.type ?? "text"),
-              id: cb.id,
-              name: cb.name,
-              text: "",
-              thinking: "",
-              signature: "",
-              jsonChunks: "",
-            });
-          } else if (evType === "content_block_delta") {
-            const idx = Number(payload.index ?? 0);
-            const builder = blockBuilders.get(idx) ?? { type: "text", text: "", thinking: "", signature: "", jsonChunks: "" };
-            blockBuilders.set(idx, builder);
-            const delta = (payload.delta ?? {}) as {
-              type?: string;
-              text?: string;
-              thinking?: string;
-              signature?: string;
-              partial_json?: string;
-            };
-            if (delta.type === "thinking_delta" && delta.thinking) {
-              builder.thinking = (builder.thinking ?? "") + delta.thinking;
-              yield { type: "thought", text: this.scrubber.scrub(delta.thinking) };
-            } else if (delta.type === "signature_delta" && delta.signature) {
-              builder.signature = (builder.signature ?? "") + delta.signature;
-            } else if (delta.type === "text_delta" && delta.text) {
-              const clean = this.scrubber.scrub(delta.text);
-              builder.text = (builder.text ?? "") + clean;
-              accumulatedAllText += clean;
-              yield { type: "text_delta", text: clean };
-            } else if (delta.type === "input_json_delta" && delta.partial_json) {
-              builder.jsonChunks = (builder.jsonChunks ?? "") + delta.partial_json;
-            }
-          } else if (evType === "message_delta") {
-            const usage = payload.usage as { output_tokens?: number } | undefined;
-            if (usage?.output_tokens !== undefined) {
-              stepOutTokens = usage.output_tokens;
-            }
-          }
-        } else {
-          const data = item.data as {
-            content?: Array<{
-              type: string;
-              text?: string;
-              thinking?: string;
-              signature?: string;
-              id?: string;
-              name?: string;
-              input?: Record<string, unknown>;
-            }>;
-            usage?: { input_tokens?: number; output_tokens?: number };
+          const body: Record<string, unknown> = {
+            model: modelId,
+            system: systemPayload,
+            messages,
+            stream: true,
           };
-          if (data.usage) {
-            stepInTokens = data.usage.input_tokens ?? 0;
-            stepOutTokens = data.usage.output_tokens ?? 0;
+          if (allowThinking && (reasoningEffort === "high" || reasoningEffort === "max")) {
+            const budgetTokens = reasoningEffort === "max" ? 16384 : 8192;
+            body.max_tokens = reasoningEffort === "max" ? 32768 : 16384;
+            body.thinking = { type: "enabled", budget_tokens: budgetTokens };
+          } else {
+            body.max_tokens = 8192;
+            body.temperature = 0.3;
           }
-          const contentBlocks = data.content ?? [];
-          for (let idx = 0; idx < contentBlocks.length; idx++) {
-            const block = contentBlocks[idx]!;
-            if (block.type === "thinking" && block.thinking) {
-              yield { type: "thought", text: this.scrubber.scrub(block.thinking) };
-              blockBuilders.set(idx, {
-                type: "thinking",
-                thinking: block.thinking,
-                signature: block.signature,
-              });
-            } else if (block.type === "text" && block.text) {
-              const clean = this.scrubber.scrub(block.text);
-              accumulatedAllText += clean;
-              yield { type: "text_delta", text: clean };
-              blockBuilders.set(idx, { type: "text", text: clean });
-            } else if (block.type === "tool_use" && block.name) {
-              blockBuilders.set(idx, {
-                type: "tool_use",
-                id: block.id ?? `call_${crypto.randomUUID().slice(0, 8)}`,
-                name: block.name,
-                jsonChunks: JSON.stringify(block.input ?? {}),
-              });
-            }
-          }
-        }
-      }
-
-      if (stepInTokens > 0 || stepOutTokens > 0) {
-        yield { type: "usage", tokenIn: stepInTokens, tokenOut: stepOutTokens };
-      }
-
-      const orderedBlocks = [...blockBuilders.entries()].sort((a, b) => a[0] - b[0]).map(([, b]) => b);
-      const toolUseBlocks = orderedBlocks.filter((b) => b.type === "tool_use" && b.name);
-
-      if (toolUseBlocks.length > 0 && onToolCall && step < maxToolSteps) {
-        const assistantBlocks: Array<Record<string, unknown>> = [];
-        const parsedCalls: Array<{ id: string; name: string; args: Record<string, unknown>; parseError?: string }> = [];
-
-        for (const b of orderedBlocks) {
-          if (b.type === "thinking") {
-            assistantBlocks.push({
-              type: "thinking",
-              thinking: b.thinking ?? "",
-              ...(b.signature ? { signature: b.signature } : {}),
-            });
-          } else if (b.type === "text" && b.text) {
-            assistantBlocks.push({ type: "text", text: b.text });
-          } else if (b.type === "tool_use" && b.name) {
-            const id = b.id ?? `call_${crypto.randomUUID().slice(0, 8)}`;
-            const rawJson = (b.jsonChunks ?? "").trim();
-            let inputObj: Record<string, unknown> = {};
-            let parseError: string | undefined;
-            if (rawJson) {
-              try {
-                const parsed = JSON.parse(rawJson);
-                if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-                  inputObj = parsed as Record<string, unknown>;
-                } else {
-                  inputObj = { value: parsed };
-                }
-              } catch (err) {
-                parseError = err instanceof Error ? err.message : String(err);
+          if (cachedTools && onToolCall) {
+            if (canOfferTools) {
+              body.tools = cachedTools;
+            } else if (hasToolHistoryInTurn) {
+              body.tools = cachedTools;
+              if (includeToolChoiceNone) {
+                body.tool_choice = { type: "none" };
               }
             }
-            assistantBlocks.push({ type: "tool_use", id, name: b.name, input: inputObj });
-            parsedCalls.push({ id, name: b.name, args: inputObj, parseError });
+          }
+
+          res = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: reqSig.signal,
+          });
+          if (res.ok) break;
+
+          const errText = await res.text();
+          if (res.status === 400 && attempt < 3) {
+            let retried = false;
+            if (allowThinking && /thinking|budget_tokens/i.test(errText)) {
+              allowThinking = false;
+              retried = true;
+            }
+            if (includePromptCache && /cache_control|ephemeral|system/i.test(errText)) {
+              includePromptCache = false;
+              retried = true;
+            }
+            if (includeToolChoiceNone && !canOfferTools && /tool_choice/i.test(errText)) {
+              includeToolChoiceNone = false;
+              retried = true;
+            }
+            if (retried) continue;
+          }
+          throw new Error(`Anthropic HTTP ${res.status}: ${errText.slice(0, 400)}`);
+        }
+
+        if (!res || !res.ok) {
+          throw new Error("Anthropic HTTP request failed");
+        }
+
+        let stepInTokens = 0;
+        let stepOutTokens = 0;
+        let stepHasText = false;
+        const blockBuilders = new Map<
+          number,
+          {
+            type: string;
+            text?: string;
+            thinking?: string;
+            signature?: string;
+            id?: string;
+            name?: string;
+            jsonChunks?: string;
+          }
+        >();
+
+        const appendAnthropicText = (clean: string): string | null => {
+          let sepText: string | null = null;
+          if (!stepHasText) {
+            stepHasText = true;
+            if (accumulatedAllText.length > 0 && !accumulatedAllText.endsWith("\n")) {
+              accumulatedAllText += "\n\n";
+              sepText = "\n\n";
+            }
+          }
+          accumulatedAllText += clean;
+          return sepText;
+        };
+
+        for await (const item of iterSseOrJson(res, reqSig.signal)) {
+          if (item.kind === "sse") {
+            if (item.data === "[DONE]") break;
+            let payload: Record<string, unknown>;
+            try {
+              payload = JSON.parse(item.data) as Record<string, unknown>;
+            } catch {
+              continue;
+            }
+            const evType = String(payload.type ?? item.event ?? "");
+            if (evType === "error") {
+              const errObj = payload.error as { message?: string } | undefined;
+              throw new Error(errObj?.message || JSON.stringify(payload));
+            } else if (evType === "message_start") {
+              const msg = payload.message as { usage?: { input_tokens?: number; output_tokens?: number } } | undefined;
+              stepInTokens = msg?.usage?.input_tokens ?? stepInTokens;
+              stepOutTokens = msg?.usage?.output_tokens ?? stepOutTokens;
+            } else if (evType === "content_block_start") {
+              const idx = Number(payload.index ?? 0);
+              const cb = (payload.content_block ?? {}) as { type?: string; id?: string; name?: string };
+              blockBuilders.set(idx, {
+                type: String(cb.type ?? "text"),
+                id: cb.id,
+                name: cb.name,
+                text: "",
+                thinking: "",
+                signature: "",
+                jsonChunks: "",
+              });
+            } else if (evType === "content_block_delta") {
+              const idx = Number(payload.index ?? 0);
+              const builder = blockBuilders.get(idx) ?? { type: "text", text: "", thinking: "", signature: "", jsonChunks: "" };
+              blockBuilders.set(idx, builder);
+              const delta = (payload.delta ?? {}) as {
+                type?: string;
+                text?: string;
+                thinking?: string;
+                signature?: string;
+                partial_json?: string;
+              };
+              if (delta.type === "thinking_delta" && delta.thinking) {
+                builder.thinking = (builder.thinking ?? "") + delta.thinking;
+                yield { type: "thought", text: this.scrubber.scrub(delta.thinking) };
+              } else if (delta.type === "signature_delta" && delta.signature) {
+                builder.signature = (builder.signature ?? "") + delta.signature;
+              } else if (delta.type === "text_delta" && delta.text) {
+                const clean = this.scrubber.scrub(delta.text);
+                builder.text = (builder.text ?? "") + clean;
+                const sep = appendAnthropicText(clean);
+                if (sep) yield { type: "text_delta", text: sep };
+                yield { type: "text_delta", text: clean };
+              } else if (delta.type === "input_json_delta" && delta.partial_json) {
+                builder.jsonChunks = (builder.jsonChunks ?? "") + delta.partial_json;
+              }
+            } else if (evType === "message_delta") {
+              const usage = payload.usage as { output_tokens?: number } | undefined;
+              if (usage?.output_tokens !== undefined) {
+                stepOutTokens = usage.output_tokens;
+              }
+            }
+          } else {
+            const data = item.data as {
+              content?: Array<{
+                type: string;
+                text?: string;
+                thinking?: string;
+                signature?: string;
+                id?: string;
+                name?: string;
+                input?: Record<string, unknown>;
+              }>;
+              usage?: { input_tokens?: number; output_tokens?: number };
+            };
+            if (data.usage) {
+              stepInTokens = data.usage.input_tokens ?? 0;
+              stepOutTokens = data.usage.output_tokens ?? 0;
+            }
+            const contentBlocks = data.content ?? [];
+            for (let idx = 0; idx < contentBlocks.length; idx++) {
+              const block = contentBlocks[idx]!;
+              if (block.type === "thinking" && block.thinking) {
+                yield { type: "thought", text: this.scrubber.scrub(block.thinking) };
+                blockBuilders.set(idx, {
+                  type: "thinking",
+                  thinking: block.thinking,
+                  signature: block.signature,
+                });
+              } else if (block.type === "text" && block.text) {
+                const clean = this.scrubber.scrub(block.text);
+                const sep = appendAnthropicText(clean);
+                if (sep) yield { type: "text_delta", text: sep };
+                yield { type: "text_delta", text: clean };
+                blockBuilders.set(idx, { type: "text", text: clean });
+              } else if (block.type === "tool_use" && block.name) {
+                blockBuilders.set(idx, {
+                  type: "tool_use",
+                  id: block.id ?? `call_${crypto.randomUUID().slice(0, 8)}`,
+                  name: block.name,
+                  jsonChunks: JSON.stringify(block.input ?? {}),
+                });
+              }
+            }
           }
         }
 
-        messages.push({ role: "assistant", content: assistantBlocks });
-        const toolResults = yield* this.executeToolCalls(parsedCalls, onToolCall);
-        messages.push({
-          role: "user",
-          content: toolResults.map((r) => ({
-            type: "tool_result",
-            tool_use_id: r.id,
-            content: r.output,
-            ...(r.isError ? { is_error: true } : {}),
-          })),
-        });
-        continue;
-      }
+        if (stepInTokens > 0 || stepOutTokens > 0) {
+          yield { type: "usage", tokenIn: stepInTokens, tokenOut: stepOutTokens };
+        }
 
-      yield { type: "done", finalText: accumulatedAllText };
-      return;
+        const orderedBlocks = [...blockBuilders.entries()].sort((a, b) => a[0] - b[0]).map(([, b]) => b);
+        const toolUseBlocks = orderedBlocks.filter((b) => b.type === "tool_use" && b.name);
+
+        if (toolUseBlocks.length > 0 && onToolCall && !mustDisableTools) {
+          const assistantBlocks: Array<Record<string, unknown>> = [];
+          const parsedCalls: Array<{ id: string; name: string; args: Record<string, unknown>; parseError?: string }> = [];
+
+          for (const b of orderedBlocks) {
+            if (b.type === "thinking") {
+              if ((b.thinking && b.thinking.trim().length > 0) || (b.signature && b.signature.length > 0)) {
+                assistantBlocks.push({
+                  type: "thinking",
+                  thinking: b.thinking ?? "",
+                  ...(b.signature ? { signature: b.signature } : {}),
+                });
+              }
+            } else if (b.type === "text" && b.text) {
+              assistantBlocks.push({ type: "text", text: b.text });
+            } else if (b.type === "tool_use" && b.name) {
+              const id = b.id ?? `call_${crypto.randomUUID().slice(0, 8)}`;
+              const rawJson = (b.jsonChunks ?? "").trim();
+              let inputObj: Record<string, unknown> = {};
+              let parseError: string | undefined;
+              if (rawJson) {
+                try {
+                  const parsed = JSON.parse(rawJson);
+                  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                    inputObj = parsed as Record<string, unknown>;
+                  } else {
+                    inputObj = { value: parsed };
+                  }
+                } catch (err) {
+                  parseError = err instanceof Error ? err.message : String(err);
+                }
+              }
+              assistantBlocks.push({ type: "tool_use", id, name: b.name, input: inputObj });
+              parsedCalls.push({ id, name: b.name, args: inputObj, parseError });
+            }
+          }
+
+          messages.push({ role: "assistant", content: assistantBlocks });
+          const batchCheck = loopTracker.evaluateBatch(parsedCalls);
+          const toolResults = yield* this.executeToolCalls(parsedCalls, onToolCall, batchCheck.blockedCallIds);
+          const consecErrReason = loopTracker.recordStepOutcomes(toolResults);
+          const breakerReason = batchCheck.trippedReason ?? consecErrReason;
+          hasToolHistoryInTurn = true;
+
+          const resultBlocks: Array<Record<string, unknown>> = [];
+          for (let i = 0; i < toolResults.length; i++) {
+            const r = toolResults[i]!;
+            let bounded = boundToolOutputForContext(r.output, MAX_TOOL_OUTPUT_CONTEXT_CHARS);
+            if (consecErrReason && i === toolResults.length - 1 && !bounded.includes("[Loop Breaker]")) {
+              bounded = `${bounded}\n\n${consecErrReason}`;
+            }
+            const block: Record<string, unknown> = {
+              type: "tool_result",
+              tool_use_id: r.id,
+              content: bounded,
+              ...(r.isError ? { is_error: true } : {}),
+            };
+            resultBlocks.push(block);
+            if (bounded.length > STALE_TOOL_OUTPUT_COMPACT_MIN_CHARS) {
+              const origLen = bounded.length;
+              staleToolEntries.push({
+                step,
+                compacted: false,
+                compact: () => {
+                  block.content = `[compacted tool output from step ${step + 1}: ${r.name} (${origLen} chars, ${r.isError ? "error" : "ok"})]`;
+                },
+              });
+            }
+          }
+          messages.push({ role: "user", content: resultBlocks });
+
+          if (breakerReason) {
+            forceFinalNoTools = true;
+            loopBreakerSummary = breakerReason;
+          }
+          continue;
+        }
+
+        if (forceFinalNoTools && !accumulatedAllText.trim() && loopBreakerSummary) {
+          accumulatedAllText = loopBreakerSummary;
+          yield { type: "text_delta", text: accumulatedAllText };
+        }
+        yield { type: "done", finalText: accumulatedAllText };
+        return;
+      } finally {
+        reqSig.cleanup();
+      }
     }
 
     yield { type: "done", finalText: accumulatedAllText };

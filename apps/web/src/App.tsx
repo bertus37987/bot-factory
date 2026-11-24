@@ -3,26 +3,30 @@ import {
   Brain,
   ChevronDown,
   ChevronRight,
+  Columns2,
   Folder,
   FolderPlus,
   GitBranch,
   Kanban,
   Layers,
   Lock,
-  MessageSquareWarning,
+  Moon,
   OctagonX,
   Pause,
   Play,
   Plus,
   Search,
   Settings,
+  Sun,
   WifiOff,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRecord, ArtifactEntry, RepoFileEntry } from "@bot-factory/shared";
-import { BotsTab, type BotsTabProps } from "./bots/BotsTab";
+import { BotsTab, type BotsSubView } from "./bots/BotsTab";
+import { BrowserWorkspaceShell } from "./browser/BrowserWorkspaceShell";
 import { InAppBrowser, type BrowserTab, type BrowserTabKind } from "./browser/InAppBrowser";
+import type { BrowserDockMode, ComposerAttachment } from "./browser/types";
 import { ChatTab } from "./chat/ChatTab";
 import { useBotFactory } from "./client/useBotFactory";
 import { BotAvatar, GroupAvatarCluster, JobTitlePill, resolveBotRole } from "./components/BotAvatars";
@@ -40,13 +44,64 @@ import {
 import { BotThinkingOrb } from "./components/BotThinkingOrb";
 import type { AutonomyLevel, ModelTargetSelection } from "./components/PrecisionComposer";
 import type { ReasoningEffort } from "./components/ReasoningEffortSlider";
+import { ResizeSplitter } from "./components/ResizeSplitter";
 import { BotSpawnModal } from "./studio/BotSpawnModal";
 import { EscalationInbox } from "./studio/EscalationInbox";
 import { MemoryL1Studio } from "./studio/MemoryL1Studio";
 import { ProjectModal } from "./studio/ProjectModal";
 import { SettingsView } from "./studio/SettingsView";
 
-type BotsSubView = BotsTabProps["activeSubView"];
+type ThemeMode = "vanta" | "light";
+
+const LS_THEME = "bf_theme";
+const LS_DRAWER_W = "bf_drawer_w";
+const LS_BROWSER_DOCK = "bf_browser_dock";
+const LS_SPLIT_PCT = "bf_split_pct";
+
+function readStoredTheme(): ThemeMode {
+  try {
+    const raw = localStorage.getItem(LS_THEME);
+    return raw === "light" ? "light" : "vanta";
+  } catch {
+    return "vanta";
+  }
+}
+
+function readStoredNumber(key: string, fallback: number): number {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredNumber(key: string, value: number): void {
+  try {
+    localStorage.setItem(key, String(Math.round(value)));
+  } catch {
+    // Ignore storage write errors.
+  }
+}
+
+function readStoredDockMode(): BrowserDockMode {
+  try {
+    const raw = localStorage.getItem(LS_BROWSER_DOCK);
+    if (raw === "right" || raw === "bottom" || raw === "float") return raw;
+    return "right";
+  } catch {
+    return "right";
+  }
+}
+
+const clampDrawerWidth = (w: number) => Math.max(180, Math.min(420, Math.round(w)));
+const clampSplitPercent = (pct: number) => Math.max(36, Math.min(64, Math.round(pct * 10) / 10));
+
+if (typeof document !== "undefined") {
+  document.documentElement.dataset.theme = readStoredTheme();
+}
 
 interface ToastItem {
   id: string;
@@ -72,10 +127,29 @@ function makeTabId(): string {
 
 export function App() {
   const bf = useBotFactory();
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    const initial = readStoredTheme();
+    if (typeof document !== "undefined") {
+      document.documentElement.dataset.theme = initial;
+    }
+    return initial;
+  });
   const [world, setWorld] = useState<"chat" | "bots">("chat");
   const [drawerOpen, setDrawerOpen] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth >= 1000 : true,
   );
+  const [drawerWidth, setDrawerWidth] = useState<number>(() =>
+    clampDrawerWidth(readStoredNumber(LS_DRAWER_W, 256)),
+  );
+  const [splitChatOpen, setSplitChatOpen] = useState(false);
+  const [splitPercent, setSplitPercent] = useState<number>(() =>
+    clampSplitPercent(readStoredNumber(LS_SPLIT_PCT, 48)),
+  );
+  const [focusedChatPane, setFocusedChatPane] = useState<"chat" | "bots">("chat");
+  const [composerAttachmentsByTarget, setComposerAttachmentsByTarget] = useState<
+    Record<string, ComposerAttachment[]>
+  >({});
+
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [botsSubView, setBotsSubView] = useState<BotsSubView>("chat_group");
@@ -85,8 +159,7 @@ export function App() {
   const [selectedChatTarget, setSelectedChatTarget] = useState<ModelTargetSelection | null>(null);
 
   const [browserOpen, setBrowserOpen] = useState(false);
-  const [browserExpanded, setBrowserExpanded] = useState(false);
-  const [browserWidth, setBrowserWidth] = useState(520);
+  const [browserDockMode, setBrowserDockMode] = useState<BrowserDockMode>(() => readStoredDockMode());
   const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([]);
   const [activeTabIdByProject, setActiveTabIdByProject] = useState<Record<string, string>>({});
 
@@ -108,10 +181,23 @@ export function App() {
   const [unlockBusy, setUnlockBusy] = useState(false);
   const [unlockError, setUnlockError] = useState<string | null>(null);
 
-  const draggingBrowserRef = useRef(false);
+  const drawerWidthRef = useRef(drawerWidth);
+  drawerWidthRef.current = drawerWidth;
+  const splitPercentRef = useRef(splitPercent);
+  splitPercentRef.current = splitPercent;
+  const worldContainerRef = useRef<HTMLElement | null>(null);
   const browserTabsRef = useRef<BrowserTab[]>([]);
   browserTabsRef.current = browserTabs;
   const toastTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem(LS_THEME, theme);
+    } catch {
+      // Ignore storage write errors.
+    }
+  }, [theme]);
 
   const pushToast = useCallback((message: string, tone: ToastItem["tone"] = "info") => {
     const id = `toast_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -220,10 +306,11 @@ export function App() {
     };
   }, [activeProject?.id, activeAgent?.id, bf.subscribe, bf.unsubscribe, bf.refreshProjectCodeContext]);
 
-  // Pause heavy BotsTab subscriptions (bot timelines, debates, selfmod) when world !== "bots"
+  // Keep BotsTab subscriptions active when Bots world OR Split-Chat is visible
+  const botsVisible = world === "bots" || splitChatOpen;
   const projectAgentIdsKey = projectAgents.map((a) => a.id).join(",");
   useEffect(() => {
-    if (world !== "bots" || !activeProject) return;
+    if (!botsVisible || !activeProject) return;
     const debatesTopic = `project:${activeProject.id}:debates` as const;
     const selfModTopic = "global:selfmod" as const;
     const timelineTopics = projectAgents.map((a) => `bot:${a.id}:timeline` as const);
@@ -239,7 +326,7 @@ export function App() {
         bf.unsubscribe(topic);
       }
     };
-  }, [world, activeProject?.id, projectAgentIdsKey, bf.subscribe, bf.unsubscribe]);
+  }, [botsVisible, activeProject?.id, projectAgentIdsKey, bf.subscribe, bf.unsubscribe]);
 
   // Responsive <1000px drawer auto-collapse
   useEffect(() => {
@@ -251,12 +338,19 @@ export function App() {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  // Global keyboard shortcuts (Ctrl+E world switch, Ctrl+K quick palette, Ctrl+B toggle drawer)
+  // Global keyboard shortcuts (Ctrl+E world switch, Ctrl+K quick palette, Ctrl+B toggle drawer, Ctrl+Shift+S split chat)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        setWorld((w) => (w === "chat" ? "bots" : "chat"));
+        setSplitChatOpen((s) => !s);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        setWorld((w) => {
+          const next = w === "chat" ? "bots" : "chat";
+          setFocusedChatPane(next);
+          return next;
+        });
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
@@ -271,25 +365,6 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // Drag resize for In-App Browser Sidebar
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (!draggingBrowserRef.current) return;
-      const next = Math.min(Math.max(360, window.innerWidth - e.clientX), Math.round(window.innerWidth * 0.65));
-      setBrowserWidth(next);
-    };
-    const onUp = () => {
-      draggingBrowserRef.current = false;
-      document.body.style.cursor = "";
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
   }, []);
 
   const openBrowserTab = useCallback((tab: Omit<BrowserTab, "id">) => {
@@ -329,11 +404,11 @@ export function App() {
         });
         if (activeProject?.id === targetTab.projectId && remainingForProject.length === 0) {
           setBrowserOpen(false);
-          setBrowserExpanded(false);
+          if (browserDockMode === "fullscreen") setBrowserDockMode("right");
         }
       }
     },
-    [activeProject?.id],
+    [activeProject?.id, browserDockMode],
   );
 
   const openBrowserItem = useCallback(
@@ -386,7 +461,7 @@ export function App() {
   const toggleBrowserSidebar = useCallback(() => {
     if (browserOpen) {
       setBrowserOpen(false);
-      setBrowserExpanded(false);
+      if (browserDockMode === "fullscreen") setBrowserDockMode("right");
       return;
     }
     if (projectBrowserTabs.length === 0 && activeProject) {
@@ -410,6 +485,7 @@ export function App() {
     setBrowserOpen(true);
   }, [
     browserOpen,
+    browserDockMode,
     projectBrowserTabs.length,
     activeProject,
     activeArtifacts,
@@ -418,6 +494,49 @@ export function App() {
     openBrowserTab,
     openDiffInBrowser,
   ]);
+
+  const chatTargetKey = "chat";
+  const botsTargetKey =
+    botsSubView === "chat_single" && activeAgent
+      ? `bots:${activeAgent.id}`
+      : `bots:group:${activeProject?.id ?? "none"}`;
+  const activeAttachmentTarget = (splitChatOpen ? focusedChatPane === "bots" : world === "bots")
+    ? botsTargetKey
+    : chatTargetKey;
+
+  const handleImportAttachment = useCallback(
+    (att: ComposerAttachment) => {
+      setComposerAttachmentsByTarget((prev) => {
+        const current = prev[activeAttachmentTarget] ?? [];
+        const deduped = current.filter((item) => item.id !== att.id);
+        return {
+          ...prev,
+          [activeAttachmentTarget]: [...deduped, att],
+        };
+      });
+      if (browserOpen && browserDockMode === "fullscreen") {
+        pushToast(
+          `Attached "${att.label}" to ${activeAttachmentTarget === "chat" ? "Main Agent" : "Team"} composer`,
+          "info",
+        );
+      }
+    },
+    [activeAttachmentTarget, browserOpen, browserDockMode, pushToast],
+  );
+
+  const removeComposerAttachment = useCallback((targetKey: string, id: string) => {
+    setComposerAttachmentsByTarget((prev) => ({
+      ...prev,
+      [targetKey]: (prev[targetKey] ?? []).filter((item) => item.id !== id),
+    }));
+  }, []);
+
+  const clearComposerAttachments = useCallback((targetKey: string) => {
+    setComposerAttachmentsByTarget((prev) => {
+      if (!(targetKey in prev) || (prev[targetKey]?.length ?? 0) === 0) return prev;
+      return { ...prev, [targetKey]: [] };
+    });
+  }, []);
 
   const handleSelectSubView = useCallback(
     (view: BotsSubView, agentId?: string | null) => {
@@ -526,7 +645,7 @@ export function App() {
           kind: "bot",
           id: `bot:${a.id}`,
           title: a.name,
-          subtitle: `${a.scope === "sidekick" ? "Subagent" : resolveBotRole(a).jobTitle} · ${proj?.name ?? "Project"} · ${a.model}`,
+          subtitle: `${resolveBotRole(a).jobTitle} · ${proj?.name ?? "Project"} · ${a.model}`,
           agent: a,
         });
       }
@@ -579,6 +698,7 @@ export function App() {
         setSelectedAgentId(entry.agent.id);
         setBotsSubView("chat_single");
         setWorld("bots");
+        setFocusedChatPane("bots");
       } else if (entry.kind === "artifact") {
         setSelectedProjectId(entry.projectId);
         openArtifactInBrowser(entry.artifact);
@@ -685,7 +805,10 @@ export function App() {
           <button
             type="button"
             className={`rail-mode-btn ${world === "chat" ? "active" : ""}`}
-            onClick={() => setWorld("chat")}
+            onClick={() => {
+              setWorld("chat");
+              setFocusedChatPane("chat");
+            }}
             title="Main Agent (Ctrl+E)"
             aria-label="Main Agent"
           >
@@ -695,7 +818,10 @@ export function App() {
           <button
             type="button"
             className={`rail-mode-btn ${world === "bots" ? "active" : ""}`}
-            onClick={() => setWorld("bots")}
+            onClick={() => {
+              setWorld("bots");
+              setFocusedChatPane("bots");
+            }}
             title="Engineering Teams (Ctrl+E)"
             aria-label="Engineering Teams"
           >
@@ -762,6 +888,16 @@ export function App() {
         </div>
 
         <div className="icon-rail-bottom">
+          <button
+            type="button"
+            data-testid="theme-toggle-btn"
+            className="rail-util-btn"
+            onClick={() => setTheme((t) => (t === "vanta" ? "light" : "vanta"))}
+            title={theme === "vanta" ? "Switch to Light Mode" : "Switch to Vanta Black"}
+            aria-label={theme === "vanta" ? "Switch to Light theme" : "Switch to Vanta Black theme"}
+          >
+            {theme === "vanta" ? <Sun size={15} strokeWidth={1.6} /> : <Moon size={15} strokeWidth={1.6} />}
+          </button>
           <BotThinkingOrb
             activity={brandActivity}
             size={20}
@@ -776,9 +912,10 @@ export function App() {
         </div>
       </nav>
 
-      {/* Secondary 248px Collapsible Contextual Drawer */}
+      {/* Secondary Resizable & Collapsible Contextual Drawer */}
       {drawerOpen && (
-        <aside className="side-drawer">
+        <>
+          <aside className="side-drawer" style={{ width: drawerWidth }}>
           {world === "chat" ? (
             <>
               <div className="drawer-header">
@@ -834,6 +971,7 @@ export function App() {
                       onClick={() => {
                         setBotsSubView("chat_group");
                         setWorld("bots");
+                        setFocusedChatPane("bots");
                       }}
                     >
                       <BotsLatticeIcon size={14} />
@@ -861,7 +999,10 @@ export function App() {
                   <div className="drawer-section">
                     <div className="section-eyebrow">
                       <span>Browser Files</span>
-                      <span className="mono-tag">{activeArtifacts.length}</span>
+                      <span className="mono-tag">
+                        {activeArtifacts.length +
+                          (activeRepoFiles.some((f) => f.relativePath === "README.md") ? 1 : 0)}
+                      </span>
                     </div>
                     {activeArtifacts.map((art) => (
                       <button
@@ -953,6 +1094,8 @@ export function App() {
                               role={meta.role}
                               size={28}
                               active={bot.status === "working" || bot.status === "debating"}
+                              agentStatus={bot.status}
+                              seed={bot.id}
                             />
                             <span className="pinned-bot-name">{bot.name}</span>
                           </button>
@@ -986,6 +1129,8 @@ export function App() {
                             role={meta.role}
                             size={30}
                             active={bot.status === "working" || bot.status === "debating"}
+                            agentStatus={bot.status}
+                            seed={bot.id}
                             badgeCount={
                               bot.status === "waiting_review" || bot.status === "requires_action" ? 1 : undefined
                             }
@@ -993,7 +1138,7 @@ export function App() {
                           <div className="bot-roster-copy">
                             <div className="bot-roster-top">
                               <span className="bot-roster-name">{bot.name}</span>
-                              <JobTitlePill label={meta.jobTitle} />
+                              <JobTitlePill label={meta.jobTitle} role={meta.role} />
                             </div>
                             <div className="bot-roster-sub">{bot.lastSummary ?? bot.status}</div>
                           </div>
@@ -1089,6 +1234,8 @@ export function App() {
                                 role={meta.role}
                                 size={30}
                                 active={bot.status === "working" || bot.status === "debating"}
+                                agentStatus={bot.status}
+                                seed={bot.id}
                                 badgeCount={
                                   bot.status === "waiting_review" || bot.status === "requires_action" ? 1 : undefined
                                 }
@@ -1096,7 +1243,7 @@ export function App() {
                               <div className="bot-roster-copy">
                                 <div className="bot-roster-top">
                                   <span className="bot-roster-name">{bot.name}</span>
-                                  <JobTitlePill label={meta.jobTitle} />
+                                  <JobTitlePill label={meta.jobTitle} role={meta.role} />
                                 </div>
                                 <div className="bot-roster-sub">
                                   {bot.model}
@@ -1135,7 +1282,13 @@ export function App() {
                                           setBotsSubView("chat_single");
                                         }}
                                       >
-                                        <BotThinkingOrb status={sub.status} size={20} shell={false} />
+                                        <BotAvatar
+                                          role="cub"
+                                          size={22}
+                                          active={sub.status === "working"}
+                                          agentStatus={sub.status}
+                                          seed={sub.id}
+                                        />
                                         <span className="drawer-item-label">{sub.name}</span>
                                         <span className="mono-tag">{sub.subagentMode ?? "readonly"}</span>
                                       </button>
@@ -1174,15 +1327,6 @@ export function App() {
                   </button>
                   <button
                     type="button"
-                    className={`drawer-item ${botsSubView === "debates" ? "active" : ""}`}
-                    onClick={() => setBotsSubView("debates")}
-                  >
-                    <MessageSquareWarning size={14} strokeWidth={1.6} />
-                    <span className="drawer-item-label">Debates &amp; Verifier</span>
-                    <span className="mono-tag">{activeDebates.length}</span>
-                  </button>
-                  <button
-                    type="button"
                     className={`drawer-item ${botsSubView === "selfmod" ? "active" : ""}`}
                     onClick={() => setBotsSubView("selfmod")}
                   >
@@ -1195,11 +1339,25 @@ export function App() {
             </>
           )}
         </aside>
+        <ResizeSplitter
+          orientation="vertical"
+          edge="right"
+          className="side-drawer-splitter"
+          ariaLabel="Resize sidebar width"
+          onDelta={(dx) => setDrawerWidth((prev) => clampDrawerWidth(prev + dx))}
+          onResizeEnd={() => writeStoredNumber(LS_DRAWER_W, drawerWidthRef.current)}
+        />
+        </>
       )}
 
-      {/* Center Primary Column + Resizable Right In-App Browser Sidebar */}
-      <div className="workspace-split">
-        <section className={`center-column ${browserOpen && browserExpanded ? "hidden" : ""}`}>
+      {/* Center Primary Column + Resizable 4-Mode In-App Browser Shell */}
+      <div
+        className="workspace-split"
+        style={{
+          flexDirection: browserOpen && browserDockMode === "bottom" ? "column" : "row",
+        }}
+      >
+        <section className={`center-column ${browserOpen && browserDockMode === "fullscreen" ? "hidden" : ""}`}>
           {!bf.connected && (
             <div className="ws-banner" role="status">
               <div className="ws-banner-left">
@@ -1215,11 +1373,32 @@ export function App() {
 
           <header className="center-header">
             <div className="center-header-left">
-              {world === "chat" ? (
+              {splitChatOpen ? (
                 <>
-                  <BotAvatar role="orchestrator" size={24} active={bf.quietStatus.runningBots > 0} />
+                  <BotAvatar
+                    role="orchestrator"
+                    size={24}
+                    active={bf.quietStatus.runningBots > 0}
+                    seed="main-agent"
+                  />
+                  <span className="center-header-title">
+                    Main Agent ⇄ {activeProject?.name ?? "Engineering Teams"}
+                  </span>
+                  <JobTitlePill
+                    label={`Focus: ${focusedChatPane === "chat" ? "Main Agent" : "Team"}`}
+                    role={focusedChatPane === "chat" ? "orchestrator" : "team_lead"}
+                  />
+                </>
+              ) : world === "chat" ? (
+                <>
+                  <BotAvatar
+                    role="orchestrator"
+                    size={24}
+                    active={bf.quietStatus.runningBots > 0}
+                    seed="main-agent"
+                  />
                   <span className="center-header-title">Main Agent</span>
-                  <JobTitlePill label="Quiet Mode" />
+                  <JobTitlePill label="Quiet Mode" role="orchestrator" />
                   {activeProject && <span className="mono-tag">{activeProject.name}</span>}
                 </>
               ) : botsSubView === "chat_group" && activeProject ? (
@@ -1233,7 +1412,7 @@ export function App() {
                     size={26}
                   />
                   <span className="center-header-title">{activeProject.name}</span>
-                  <JobTitlePill label={`${projectAgents.length} Bots`} tone="accent" />
+                  <JobTitlePill label={`${projectAgents.length} Bots`} tone="accent" role="team_lead" />
                 </>
               ) : botsSubView === "chat_single" && activeAgent && activeBotMeta ? (
                 <>
@@ -1241,9 +1420,11 @@ export function App() {
                     role={activeBotMeta.role}
                     size={26}
                     active={activeAgent.status === "working" || activeAgent.status === "debating"}
+                    agentStatus={activeAgent.status}
+                    seed={activeAgent.id}
                   />
                   <span className="center-header-title">{activeAgent.name}</span>
-                  <JobTitlePill label={activeBotMeta.jobTitle} />
+                  <JobTitlePill label={activeBotMeta.jobTitle} role={activeBotMeta.role} />
                   {activeAgent.worktreeBranch && (
                     <span className="mono-tag">{activeAgent.worktreeBranch}</span>
                   )}
@@ -1254,9 +1435,7 @@ export function App() {
                     ? `Task Board · ${activeProject?.name ?? ""}`
                     : botsSubView === "checkpoints"
                       ? `Checkpoints & Merge · ${activeProject?.name ?? ""}`
-                      : botsSubView === "debates"
-                        ? `Debates & Verifier · ${activeProject?.name ?? ""}`
-                        : "Self-Mod Sandbox"}
+                      : "Self-Mod Sandbox"}
                 </span>
               )}
             </div>
@@ -1274,7 +1453,9 @@ export function App() {
                 </button>
               )}
 
-              {world === "bots" && activeAgent && (botsSubView === "chat_single" || botsSubView === "chat_group") && (
+              {(world === "bots" || (splitChatOpen && focusedChatPane === "bots")) &&
+                activeAgent &&
+                (botsSubView === "chat_single" || botsSubView === "chat_group") && (
                 <div className="safety-controls">
                   {(activeAgent.status === "paused" ||
                     activeAgent.status === "stopped" ||
@@ -1342,6 +1523,18 @@ export function App() {
 
               <button
                 type="button"
+                data-testid="split-chat-toggle-btn"
+                className={`btn xs ${splitChatOpen ? "active-outline" : ""}`}
+                onClick={() => setSplitChatOpen((s) => !s)}
+                title="Split Chat: Main Agent + Engineering Teams (Ctrl+Shift+S)"
+                aria-pressed={splitChatOpen}
+              >
+                <Columns2 size={14} strokeWidth={1.6} />
+                <span>Split</span>
+              </button>
+
+              <button
+                type="button"
                 className={`btn xs ${browserOpen ? "active-outline" : ""}`}
                 onClick={toggleBrowserSidebar}
                 title="Toggle In-App Browser"
@@ -1352,8 +1545,17 @@ export function App() {
             </div>
           </header>
 
-          <main className="world-container">
-            <div className={`world-pane ${world === "chat" ? "" : "hidden"}`}>
+          <main ref={worldContainerRef} className={`world-container ${splitChatOpen ? "split-active" : ""}`}>
+            <div
+              className={`world-pane ${
+                splitChatOpen
+                  ? `split-left ${focusedChatPane === "chat" ? "focused" : ""}`
+                  : world === "chat"
+                    ? ""
+                    : "hidden"
+              }`.trim()}
+              style={splitChatOpen ? { width: `${splitPercent}%` } : undefined}
+            >
               <ChatTab
                 messages={bf.chatMessages}
                 cards={bf.chatCards}
@@ -1379,6 +1581,10 @@ export function App() {
                 autonomy={autonomy}
                 onChangeEffort={setEffort}
                 onChangeAutonomy={setAutonomy}
+                attachments={composerAttachmentsByTarget[chatTargetKey] ?? []}
+                onRemoveAttachment={(id) => removeComposerAttachment(chatTargetKey, id)}
+                onClearAttachments={() => clearComposerAttachments(chatTargetKey)}
+                onFocusPane={() => setFocusedChatPane("chat")}
                 onSelectProject={setSelectedProjectId}
                 onSendChat={async (text) => {
                   await bf.sendCommand({
@@ -1412,6 +1618,7 @@ export function App() {
                   if (projectId) setSelectedProjectId(projectId);
                   setBotsSubView("chat_group");
                   setWorld("bots");
+                  setFocusedChatPane("bots");
                 }}
                 onOpenMemoryStudio={() => {
                   setMemoryStudioOpen(true);
@@ -1429,12 +1636,34 @@ export function App() {
               />
             </div>
 
-            <div className={`world-pane ${world === "bots" ? "" : "hidden"}`}>
+            {splitChatOpen && (
+              <ResizeSplitter
+                orientation="vertical"
+                edge="left"
+                ariaLabel="Resize split chat panes"
+                onDelta={(dx) => {
+                  const containerW = worldContainerRef.current?.getBoundingClientRect().width || 900;
+                  setSplitPercent((prev) => clampSplitPercent(prev + (dx / Math.max(320, containerW)) * 100));
+                }}
+                onResizeEnd={() => writeStoredNumber(LS_SPLIT_PCT, splitPercentRef.current)}
+              />
+            )}
+
+            <div
+              className={`world-pane ${
+                splitChatOpen
+                  ? `split-right ${focusedChatPane === "bots" ? "focused" : ""}`
+                  : world === "bots"
+                    ? ""
+                    : "hidden"
+              }`.trim()}
+            >
               <BotsTab
-                isVisible={world === "bots"}
+                isVisible={botsVisible}
                 projects={bf.projects}
                 activeProject={activeProject}
                 agents={bf.agents}
+                metaAgentId={metaAgent?.id ?? null}
                 providers={bf.providers}
                 tasks={activeTasks}
                 goals={activeGoals}
@@ -1450,6 +1679,11 @@ export function App() {
                 activeSubView={botsSubView}
                 activeAgentId={activeAgent?.id ?? null}
                 selfModProposals={bf.selfModProposals}
+                attachments={composerAttachmentsByTarget[botsTargetKey] ?? []}
+                onRemoveAttachment={(id) => removeComposerAttachment(botsTargetKey, id)}
+                onClearAttachments={() => clearComposerAttachments(botsTargetKey)}
+                onFocusPane={() => setFocusedChatPane("bots")}
+                compactSplit={splitChatOpen}
                 onSelectSubView={handleSelectSubView}
                 onSelectProject={setSelectedProjectId}
                 onOpenProjectModal={() => setProjectModalOpen(true)}
@@ -1464,65 +1698,68 @@ export function App() {
         </section>
 
         {browserOpen && (
-          <>
-            {!browserExpanded && (
-              <div
-                className="browser-resize-gutter"
-                onMouseDown={() => {
-                  draggingBrowserRef.current = true;
-                  document.body.style.cursor = "col-resize";
-                }}
-                title="Drag to resize"
-              />
-            )}
-            <aside
-              className={`browser-sidebar-pane ${browserExpanded ? "expanded" : ""}`}
-              style={browserExpanded ? undefined : { width: browserWidth }}
-            >
-              <InAppBrowser
-                project={activeProject}
-                artifacts={activeArtifacts}
-                annotations={activeAnnotations}
-                repoFiles={activeRepoFiles}
-                gitDiff={activeGitDiff}
-                activeAgentId={activeAgent?.id ?? null}
-                tabs={projectBrowserTabs}
-                activeTabId={activeBrowserTabId}
-                expanded={browserExpanded}
-                onSelectTab={(tabId) => {
-                  if (activeProject) {
-                    setActiveTabIdByProject((prev) => ({ ...prev, [activeProject.id]: tabId }));
-                  }
-                }}
-                onCloseTab={closeBrowserTab}
-                onOpenTab={openBrowserTab}
-                onToggleExpand={() => setBrowserExpanded((e) => !e)}
-                onCloseSidebar={() => {
-                  setBrowserOpen(false);
-                  setBrowserExpanded(false);
-                }}
-                onRefreshContext={() => {
-                  if (activeProject) {
-                    void bf.refreshProjectCodeContext(activeProject.id, activeAgent?.id);
-                  }
-                }}
-                onCreateAnnotation={async (params) => {
-                  if (!activeProject) return;
-                  await bf.sendCommand({
-                    type: "annotation.create",
-                    projectId: activeProject.id,
-                    anchor: params.anchor,
-                    comment: params.comment,
-                    snapshotDataUrl: params.snapshotDataUrl,
-                    requestFixNow: params.requestFixNow,
-                  });
-                }}
-                onResolveAnnotation={async (annotationId, status) => {
-                  await bf.sendCommand({ type: "annotation.resolve", annotationId, status });
-                }}
-              />
-            </aside>
-          </>
+          <BrowserWorkspaceShell dockMode={browserDockMode}>
+            <InAppBrowser
+              project={activeProject}
+              artifacts={activeArtifacts}
+              annotations={activeAnnotations}
+              repoFiles={activeRepoFiles}
+              gitDiff={activeGitDiff}
+              activeAgentId={activeAgent?.id ?? null}
+              tabs={projectBrowserTabs}
+              activeTabId={activeBrowserTabId}
+              expanded={browserDockMode === "fullscreen"}
+              dockMode={browserDockMode}
+              onChangeDockMode={(next) => {
+                setBrowserDockMode(next);
+                try {
+                  localStorage.setItem(LS_BROWSER_DOCK, next);
+                } catch {
+                  // Ignore storage write errors.
+                }
+              }}
+              onImportToChat={handleImportAttachment}
+              onArtifactSaved={(filePath) => {
+                if (activeProject) {
+                  void bf.refreshProjectCodeContext(activeProject.id, activeAgent?.id);
+                  pushToast(`Saved ${filePath}`, "success");
+                }
+              }}
+              onSelectTab={(tabId) => {
+                if (activeProject) {
+                  setActiveTabIdByProject((prev) => ({ ...prev, [activeProject.id]: tabId }));
+                }
+              }}
+              onCloseTab={closeBrowserTab}
+              onOpenTab={openBrowserTab}
+              onToggleExpand={() =>
+                setBrowserDockMode((m) => (m === "fullscreen" ? "right" : "fullscreen"))
+              }
+              onCloseSidebar={() => {
+                setBrowserOpen(false);
+                if (browserDockMode === "fullscreen") setBrowserDockMode("right");
+              }}
+              onRefreshContext={() => {
+                if (activeProject) {
+                  void bf.refreshProjectCodeContext(activeProject.id, activeAgent?.id);
+                }
+              }}
+              onCreateAnnotation={async (params) => {
+                if (!activeProject) return;
+                await bf.sendCommand({
+                  type: "annotation.create",
+                  projectId: activeProject.id,
+                  anchor: params.anchor,
+                  comment: params.comment,
+                  snapshotDataUrl: params.snapshotDataUrl,
+                  requestFixNow: params.requestFixNow,
+                });
+              }}
+              onResolveAnnotation={async (annotationId, status) => {
+                await bf.sendCommand({ type: "annotation.resolve", annotationId, status });
+              }}
+            />
+          </BrowserWorkspaceShell>
         )}
       </div>
 
@@ -1546,6 +1783,7 @@ export function App() {
         onJumpToProjectMerge={(projectId) => {
           setSelectedProjectId(projectId);
           setWorld("bots");
+          setFocusedChatPane("bots");
           setBotsSubView("checkpoints");
         }}
       />
@@ -1589,6 +1827,7 @@ export function App() {
           setSelectedAgentId(res.agent.id);
           setBotsSubView("chat_single");
           setWorld("bots");
+          setFocusedChatPane("bots");
           pushToast(`Spawned ${res.agent.name}`, "success");
         }}
       />
@@ -1678,6 +1917,8 @@ export function App() {
                           role={resolveBotRole(entry.agent).role}
                           size={24}
                           active={entry.agent.status === "working"}
+                          agentStatus={entry.agent.status}
+                          seed={entry.agent.id}
                         />
                       ) : entry.kind === "project" ? (
                         <Folder size={15} strokeWidth={1.6} color="var(--ink-muted)" />

@@ -7,8 +7,22 @@ import type {
   ProjectRecord,
   RepoFileEntry,
 } from "@bot-factory/shared";
+import type { PointerEvent as ReactPointerEvent } from "react";
 
 export type BrowserTabKind = "doc" | "image" | "model_3d" | "code" | "diff" | "web";
+
+export type BrowserDockMode = "right" | "bottom" | "float" | "fullscreen";
+
+export interface ComposerAttachment {
+  id: string;
+  kind: "doc_comment" | "image_comment" | "model3d_comment";
+  filePath: string;
+  label: string;
+  quote?: string;
+  comment: string;
+  thumbnailDataUrl?: string;
+  region?: { x: number; y: number; w: number; h: number };
+}
 
 export interface BrowserTab {
   id: string;
@@ -28,19 +42,24 @@ export interface InAppBrowserProps {
   tabs: BrowserTab[];
   activeTabId: string | null;
   expanded: boolean;
+  dockMode?: BrowserDockMode;
+  onChangeDockMode?: (mode: BrowserDockMode) => void;
+  onImportToChat?: (attachment: ComposerAttachment) => void;
+  onArtifactSaved?: (filePath: string) => void;
+  onStartFloatDrag?: (e: ReactPointerEvent<HTMLElement>) => void;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onOpenTab: (tab: Omit<BrowserTab, "id">) => void;
   onToggleExpand: () => void;
   onCloseSidebar: () => void;
   onRefreshContext: () => void;
-  onCreateAnnotation: (params: {
+  onCreateAnnotation?: (params: {
     anchor: AnnotationAnchor;
     comment: string;
     snapshotDataUrl?: string;
     requestFixNow: boolean;
   }) => Promise<void>;
-  onResolveAnnotation: (annotationId: string, status: AnnotationStatus) => Promise<void>;
+  onResolveAnnotation?: (annotationId: string, status: AnnotationStatus) => Promise<void>;
 }
 
 export type ImageZoomMode = "fit" | "75%" | "100%";
