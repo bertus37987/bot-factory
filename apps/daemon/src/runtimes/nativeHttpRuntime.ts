@@ -175,12 +175,13 @@ function checkRawRelativeSegmentsWithinRealRoot(inputRoot: string, realRoot: str
 }
 
 export function isPathStrictlyWithinRoot(rootDir: string, candidatePath: string): { ok: boolean; absTarget: string } {
+  const hasWindowsDrivePrefix = /^[a-zA-Z]:/.test(candidatePath);
   if (
     !candidatePath ||
     candidatePath.includes("\0") ||
     candidatePath.startsWith("\\\\") ||
     candidatePath.startsWith("//") ||
-    /^[a-zA-Z]:/.test(candidatePath)
+    (hasWindowsDrivePrefix && process.platform !== "win32")
   ) {
     return { ok: false, absTarget: "" };
   }
