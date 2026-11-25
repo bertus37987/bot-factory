@@ -300,11 +300,13 @@ export class AutonomyLoop {
   public markTaskAutonomous(taskId: string, projectId?: string): void {
     this.autonomousTaskIds.add(taskId);
     if (projectId) {
-      const active = this.getActiveGoalForProject(projectId);
-      if (active && !active.taskIds.includes(taskId)) {
-        active.taskIds.push(taskId);
-        active.updatedAt = Date.now();
-        this.persistGoal(active, [taskId]);
+      const existingGoalId = this.db.getTask(taskId)?.goalId;
+      const owningGoal = existingGoalId ? this.goals.get(existingGoalId) : null;
+      const targetGoal = owningGoal ?? this.getActiveGoalForProject(projectId);
+      if (targetGoal && !targetGoal.taskIds.includes(taskId)) {
+        targetGoal.taskIds.push(taskId);
+        targetGoal.updatedAt = Date.now();
+        this.persistGoal(targetGoal, [taskId]);
       }
     }
   }
@@ -315,13 +317,12 @@ export class AutonomyLoop {
 
   public resumePersistedGoals(): number {
     let dispatched = 0;
-    const activeProjectIds = new Set<string>();
-    for (const goal of this.goals.values()) {
-      if (goal.status === "active") activeProjectIds.add(goal.projectId);
-    }
-    for (const projectId of activeProjectIds) {
+    const resumableGoals = [...this.goals.values()]
+      .filter((goal) => goal.status === "active" || goal.status === "blocked")
+      .sort((a, b) => a.updatedAt - b.updatedAt);
+    for (const goal of resumableGoals) {
       try {
-        dispatched += this.dispatchUnblockedTasks(projectId);
+        dispatched += this.dispatchUnblockedTasks(goal.projectId, goal.goalId);
       } catch {
         // Restart recovery must never prevent daemon boot.
       }
@@ -576,8 +577,10 @@ export class AutonomyLoop {
     maxConcurrent: number,
   ): AgentRecord | null {
     const allAgents = this.db.listAgents(projectId);
+    const crashBlockedAgentIds = new Set(this.db.listUnknownAdmissions().map((a) => a.agentId));
     const activePeers = allAgents.filter((a) => a.scope === "peer" && a.status !== "stopped");
-    const idlePeers = activePeers.filter((a) => a.status === "idle");
+    const selectablePeers = activePeers.filter((a) => !crashBlockedAgentIds.has(a.id));
+    const idlePeers = selectablePeers.filter((a) => a.status === "idle");
 
     if (task.assignedAgentId) {
       const preferred = idlePeers.find((a) => a.id === task.assignedAgentId);

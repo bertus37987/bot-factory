@@ -904,6 +904,252 @@ describe("Wave 2 Harness & Multi-Agent Upgrades", () => {
     }
   });
 
+  it("preserves original goal links and resumes independent branches across multiple persisted goals", () => {
+    const rootDir = makeTempDir();
+    const dbPath = join(rootDir, "state.db");
+    const cfg = makeBaseTestConfig(rootDir);
+    cfg.guardrails.maxConcurrentBotsPerProject = 1;
+    const scrubber = new SecretScrubber({});
+    const now = Date.now();
+    const projectId = newId("prj");
+    const agentId = newId("agt");
+    const sessionId = newId("ses");
+    const makeTask = (id: string, title: string): TaskRecord => ({
+      id,
+      projectId,
+      parentTaskId: null,
+      title,
+      specMd: `${title} spec`,
+      status: "ready",
+      priority: 1,
+      assignedAgentId: null,
+      sourceAnnotationId: null,
+      worktreeBranch: null,
+      handoffPath: null,
+      retryCount: 0,
+      dependsOn: [],
+      autoRetryCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const makeLoop = (
+      db: StateDatabase,
+      dispatchTask: (params: { projectId: string; taskId: string; agentId?: string; autonomous: boolean }) => void = () => {},
+    ) =>
+      new AutonomyLoop(db, new CommandCore(db, 1), scrubber, {
+        getConfig: () => cfg,
+        getQuietStatusProjection: () => ({
+          activeProjects: 0,
+          runningBots: 0,
+          waitingReviews: 0,
+          openAnnotations: 0,
+          activeDebates: 0,
+          stagedSelfMods: 0,
+          inboxNotices: [],
+        }),
+        getProjectBoardSnapshot: () => ({}),
+        spawnPeerBot: () => {
+          throw new Error("capacity_exhausted");
+        },
+        dispatchTask,
+        runAgentTurn: async () => ({ ok: true, text: "ok" }),
+        onGoalReportFallback: async () => {},
+      });
+
+    const firstDb = new StateDatabase(dbPath);
+    let oldGoalId = "";
+    let blockedGoalId = "";
+    let newerGoalId = "";
+    try {
+      firstDb.insertProject({
+        id: projectId,
+        name: "Goal Branch Lab",
+        slug: "goal-branch-lab",
+        rootPath: rootDir,
+        repoPath: rootDir,
+        routingOverrides: {},
+        verifyChecks: [],
+        status: "active",
+        createdAt: now,
+      });
+      firstDb.upsertAgent({
+        id: agentId,
+        projectId,
+        parentAgentId: null,
+        scope: "peer",
+        name: "Restart-Peer",
+        runtimeType: "native_http",
+        provider: "mock",
+        model: "smart",
+        status: "idle",
+        worktreePath: rootDir,
+        worktreeBranch: "main",
+        pid: null,
+        activeSessionId: sessionId,
+        lastSummary: "",
+        updatedAt: now,
+      });
+      firstDb.createSession({
+        id: sessionId,
+        agentId,
+        parentSessionId: null,
+        systemPrompt: "sys",
+        systemPromptHash: "hash",
+        generation: 1,
+        tokenIn: 0,
+        tokenOut: 0,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      });
+      for (const task of [makeTask("tsk_old", "Old goal branch"), makeTask("tsk_blocked", "Blocked goal independent branch"), makeTask("tsk_new", "New goal branch")]) {
+        firstDb.upsertTask(task);
+      }
+
+      const loop = makeLoop(firstDb);
+      const oldGoal = loop.startGoal({ projectId, goal: "Old goal" });
+      oldGoalId = oldGoal.goalId;
+      loop.attachTasks(projectId, ["tsk_old"], oldGoalId);
+      const blockedGoal = loop.startGoal({ projectId, goal: "Blocked goal with independent branch" });
+      blockedGoalId = blockedGoal.goalId;
+      loop.attachTasks(projectId, ["tsk_blocked"], blockedGoalId);
+      loop.markGoalReported(projectId, "blocked", blockedGoalId);
+      const newerGoal = loop.startGoal({ projectId, goal: "Newer goal" });
+      newerGoalId = newerGoal.goalId;
+      loop.attachTasks(projectId, ["tsk_new"], newerGoalId);
+
+      loop.markTaskAutonomous("tsk_old", projectId);
+      expect(firstDb.getTask("tsk_old")?.goalId).toBe(oldGoalId);
+      expect(loop.getGoal(oldGoalId)?.taskIds).toContain("tsk_old");
+      expect(loop.getGoal(newerGoalId)?.taskIds).not.toContain("tsk_old");
+    } finally {
+      firstDb.close();
+    }
+
+    const restartedDb = new StateDatabase(dbPath);
+    try {
+      const dispatched: string[] = [];
+      const restartedLoop = makeLoop(restartedDb, ({ taskId }) => {
+        dispatched.push(taskId);
+      });
+      expect(restartedLoop.getGoal(blockedGoalId)?.status).toBe("blocked");
+      expect(restartedLoop.getGoal(newerGoalId)?.status).toBe("active");
+      expect(restartedLoop.resumePersistedGoals()).toBe(3);
+      expect(dispatched).toEqual(expect.arrayContaining(["tsk_old", "tsk_blocked", "tsk_new"]));
+    } finally {
+      restartedDb.close();
+    }
+  });
+
+  it("does not restart autonomous work on bots with unresolved crash admissions", () => {
+    const rootDir = makeTempDir();
+    const dbPath = join(rootDir, "state.db");
+    const cfg = makeBaseTestConfig(rootDir);
+    cfg.guardrails.maxConcurrentBotsPerProject = 1;
+    const scrubber = new SecretScrubber({});
+    const now = Date.now();
+    const projectId = newId("prj");
+    const agentId = newId("agt");
+    const sessionId = newId("ses");
+    const taskId = newId("tsk");
+
+    const db = new StateDatabase(dbPath);
+    try {
+      db.insertProject({
+        id: projectId,
+        name: "Crash Admission Lab",
+        slug: "crash-admission-lab",
+        rootPath: rootDir,
+        repoPath: rootDir,
+        routingOverrides: {},
+        verifyChecks: [],
+        status: "active",
+        createdAt: now,
+      });
+      db.upsertAgent({
+        id: agentId,
+        projectId,
+        parentAgentId: null,
+        scope: "peer",
+        name: "Crash-Blocked-Peer",
+        runtimeType: "native_http",
+        provider: "mock",
+        model: "smart",
+        status: "idle",
+        worktreePath: rootDir,
+        worktreeBranch: "main",
+        pid: null,
+        activeSessionId: sessionId,
+        lastSummary: "",
+        updatedAt: now,
+      });
+      db.createSession({
+        id: sessionId,
+        agentId,
+        parentSessionId: null,
+        systemPrompt: "sys",
+        systemPromptHash: "hash",
+        generation: 1,
+        tokenIn: 0,
+        tokenOut: 0,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      });
+      const admission = db.enqueueAdmission(sessionId, "crashed turn", "started");
+      db.updateAdmissionStatus(admission.id, "unknown");
+      db.upsertTask({
+        id: taskId,
+        projectId,
+        parentTaskId: null,
+        title: "Ready after restart",
+        specMd: "spec",
+        status: "ready",
+        priority: 1,
+        assignedAgentId: agentId,
+        sourceAnnotationId: null,
+        worktreeBranch: null,
+        handoffPath: null,
+        retryCount: 0,
+        dependsOn: [],
+        autoRetryCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const dispatched: string[] = [];
+      const loop = new AutonomyLoop(db, new CommandCore(db, 1), scrubber, {
+        getConfig: () => cfg,
+        getQuietStatusProjection: () => ({
+          activeProjects: 0,
+          runningBots: 0,
+          waitingReviews: 0,
+          openAnnotations: 0,
+          activeDebates: 0,
+          stagedSelfMods: 0,
+          inboxNotices: [],
+        }),
+        getProjectBoardSnapshot: () => ({}),
+        spawnPeerBot: () => {
+          throw new Error("capacity_exhausted");
+        },
+        dispatchTask: ({ taskId: dispatchedTaskId }) => {
+          dispatched.push(dispatchedTaskId);
+        },
+        runAgentTurn: async () => ({ ok: true, text: "ok" }),
+        onGoalReportFallback: async () => {},
+      });
+      const goal = loop.startGoal({ projectId, goal: "Recover safely" });
+      loop.attachTasks(projectId, [taskId], goal.goalId);
+
+      expect(loop.resumePersistedGoals()).toBe(0);
+      expect(dispatched).toEqual([]);
+      expect(db.getTask(taskId)?.status).toBe("ready");
+    } finally {
+      db.close();
+    }
+  });
+
   it("enforces symlink & path-escape rejection in extractAndApplySubagentPatch, returns typed SubagentResultEnvelope, and honors 60s MCP wait default", async () => {
     // 1. mcpBridge default 60s wait timeout
     expect(DEFAULT_SUBAGENT_WAIT_MS).toBe(60_000);
