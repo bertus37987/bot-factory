@@ -315,14 +315,25 @@ export class AutonomyLoop {
     return this.autonomousTaskIds.has(taskId);
   }
 
-  public resumePersistedGoals(): number {
+  public resumePersistedGoalsForProject(projectId: string): number {
     let dispatched = 0;
     const resumableGoals = [...this.goals.values()]
-      .filter((goal) => goal.status === "active" || goal.status === "blocked")
+      .filter((goal) => goal.projectId === projectId && (goal.status === "active" || goal.status === "blocked"))
       .sort((a, b) => a.updatedAt - b.updatedAt);
     for (const goal of resumableGoals) {
+      dispatched += this.dispatchUnblockedTasks(projectId, goal.goalId);
+    }
+    return dispatched;
+  }
+
+  public resumePersistedGoals(): number {
+    let dispatched = 0;
+    const projectIds = new Set(
+      [...this.goals.values()].filter((goal) => goal.status === "active" || goal.status === "blocked").map((goal) => goal.projectId),
+    );
+    for (const projectId of projectIds) {
       try {
-        dispatched += this.dispatchUnblockedTasks(goal.projectId, goal.goalId);
+        dispatched += this.resumePersistedGoalsForProject(projectId);
       } catch {
         // Restart recovery must never prevent daemon boot.
       }
@@ -331,11 +342,10 @@ export class AutonomyLoop {
   }
 
   public markGoalReported(projectId: string, status: "milestone" | "completed" | "blocked", goalId?: string): GoalContext | null {
-    const goal =
-      (goalId ? this.goals.get(goalId) : null) ??
-      this.getActiveGoalForProject(projectId) ??
-      this.findLatestGoalForProject(projectId);
-    if (!goal) return null;
+    const goal = goalId
+      ? (this.goals.get(goalId) ?? null)
+      : (this.getActiveGoalForProject(projectId) ?? this.findLatestGoalForProject(projectId));
+    if (!goal || goal.projectId !== projectId) return null;
     if (status === "completed") {
       goal.status = "completed";
       goal.reported = true;
@@ -694,8 +704,8 @@ export class AutonomyLoop {
       `Tasks:\n${statusLines || "(none)"}`,
       findingsBlock,
       payload.outcome === "all_verified"
-        ? "All tasks passed independent verification! Call `bf_report_to_manager` with status='completed', verifiedTaskIds, and a concise verified summary."
-        : "A task is blocked or needs review. Inspect/resolve if possible, or call `bf_report_to_manager` with status='blocked' and blockedReasons.",
+        ? `All tasks passed independent verification! Call \`bf_report_to_manager\` with goalId='${goal.goalId}', status='completed', verifiedTaskIds, and a concise verified summary.`
+        : `A task is blocked or needs review. Inspect/resolve if possible, or call \`bf_report_to_manager\` with goalId='${goal.goalId}', status='blocked', and blockedReasons.`,
     ]
       .filter(Boolean)
       .join("\n\n");

@@ -672,6 +672,15 @@ export class OrchestrationEngine {
     );
 
     this.core.registerEffectHandler(
+      "autonomy.resume_project",
+      async (eff) => {
+        const projectId = String(eff.payload.projectId ?? "");
+        if (projectId) this.autonomyLoop.resumePersistedGoalsForProject(projectId);
+      },
+      { lane: "work", concurrencyKey: (eff) => `project:${String(eff.payload.projectId ?? "")}` },
+    );
+
+    this.core.registerEffectHandler(
       "meta.team_report",
       async (eff) => {
         const projectId = String(eff.payload.projectId ?? "");
@@ -1656,17 +1665,23 @@ export class OrchestrationEngine {
   }
 
   private handleResolveUnknownAdmission(cmd: Extract<RpcCommand, { type: "session.resolve_unknown" }>) {
-    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
-      result: { admissionId: cmd.admissionId, status: "terminal" },
-      applyProjections: () => {
-        const row = this.db.getAdmission(cmd.admissionId);
-        if (!row || row.status !== "unknown") throw new Error("admission_not_unknown");
-        if (row.executionGeneration !== cmd.expectedGeneration) throw new Error("stale_generation");
-        this.db.updateAdmissionStatus(cmd.admissionId, "terminal");
-      },
-      events: [{ topic: "global:status", eventType: "status.updated", payload: this.getQuietStatusProjection() }],
-      effects: [],
-    }));
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => {
+      const admission = this.db.getAdmission(cmd.admissionId);
+      const session = admission ? this.db.getSession(admission.sessionId) : null;
+      const agent = session ? this.db.getAgent(session.agentId) : null;
+      const projectId = agent?.projectId ?? null;
+      return {
+        result: { admissionId: cmd.admissionId, status: "terminal" },
+        applyProjections: () => {
+          const row = this.db.getAdmission(cmd.admissionId);
+          if (!row || row.status !== "unknown") throw new Error("admission_not_unknown");
+          if (row.executionGeneration !== cmd.expectedGeneration) throw new Error("stale_generation");
+          this.db.updateAdmissionStatus(cmd.admissionId, "terminal");
+        },
+        events: [{ topic: "global:status" as const, eventType: "status.updated", payload: this.getQuietStatusProjection() }],
+        effects: projectId ? [{ effectType: "autonomy.resume_project", payload: { projectId } }] : [],
+      };
+    });
   }
 
   private async cleanupUnusedWorktreeOnHardStop(agentId: string): Promise<void> {
