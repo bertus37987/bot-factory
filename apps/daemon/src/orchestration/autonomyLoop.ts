@@ -415,7 +415,7 @@ export class AutonomyLoop {
       goal.status = "blocked";
       goal.updatedAt = Date.now();
       this.persistGoal(goal);
-      this.dispatchUnblockedTasks(projectId, goal.goalId);
+      this.resumePersistedGoalsForProject(projectId);
       this.enqueuePmGoalCheck(projectId, goal.goalId, "task_blocked", task.id, [errorMsg]);
     }
   }
@@ -429,7 +429,7 @@ export class AutonomyLoop {
     if (report.verdict === "pass") {
       this.releaseAuthorAgentIfIdleable(projectId, taskId, task?.assignedAgentId ?? null, `Verified: ${task?.title.slice(0, 60) ?? taskId}`);
       if (goal) {
-        this.dispatchUnblockedTasks(projectId, goal.goalId);
+        this.resumePersistedGoalsForProject(projectId);
         this.checkGoalCompletion(projectId, goal);
       }
       return;
@@ -450,7 +450,7 @@ export class AutonomyLoop {
         goal.status = "blocked";
         goal.updatedAt = Date.now();
         this.persistGoal(goal);
-        this.dispatchUnblockedTasks(projectId, goal.goalId);
+        this.resumePersistedGoalsForProject(projectId);
         this.enqueuePmGoalCheck(projectId, goal.goalId, "task_blocked", task.id, report.findings);
       }
       return;
@@ -458,7 +458,7 @@ export class AutonomyLoop {
 
     if (report.verdict === "needs_human" && goal) {
       this.releaseAuthorAgentIfIdleable(projectId, taskId, task?.assignedAgentId ?? null, `Needs review: ${task?.title.slice(0, 50) ?? taskId}`);
-      this.dispatchUnblockedTasks(projectId, goal.goalId);
+      this.resumePersistedGoalsForProject(projectId);
       this.enqueuePmGoalCheck(projectId, goal.goalId, "needs_human", taskId, report.findings);
     }
   }
