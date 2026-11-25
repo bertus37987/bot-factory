@@ -48,6 +48,7 @@ export interface L1TargetSnapshot {
   usedChars: number;
   maxChars: number;
   gaugeHeader: string;
+  truncated: boolean;
 }
 
 export interface HybridSearchResult {
@@ -96,7 +97,11 @@ export interface MemoryProvider {
   getProfile(namespace: string): MemoryProfile;
   queuePrefetch(namespace: string, queryHint: string, scopeKey?: string): void;
   prefetch(namespace: string, scopeKey?: string): string;
-  readL1File(filePath: string, maxChars: number): { content: string; usedChars: number; maxChars: number; gaugeHeader: string };
+  readL1File(
+    filePath: string,
+    maxChars: number,
+    opts?: { maxReadChars?: number },
+  ): { content: string; usedChars: number; maxChars: number; gaugeHeader: string; truncated: boolean };
   writeL1File(filePath: string, content: string, maxChars: number): { usedChars: number; maxChars: number };
   ingestDocument(params: { docId: string; namespace: string; content: string; metadata?: Record<string, unknown>; instant?: boolean }): Promise<void>;
   search(namespace: string, query: string, limit?: number): { facts: MemoryFactRecord[]; messages: Array<{ id: string; agentId: string; content: string; createdAt: number }> };
@@ -170,16 +175,22 @@ export class LocalSuperHermesMemory implements MemoryProvider {
     }
   }
 
-  public readL1File(filePath: string, maxChars: number): { content: string; usedChars: number; maxChars: number; gaugeHeader: string } {
-    const raw = existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
+  public readL1File(
+    filePath: string,
+    maxChars: number,
+    opts?: { maxReadChars?: number },
+  ): { content: string; usedChars: number; maxChars: number; gaugeHeader: string; truncated: boolean } {
+    const raw = this.scrubber.scrub(existsSync(filePath) ? readFileSync(filePath, "utf8") : "");
     const usedChars = raw.length;
-    const truncated = usedChars > maxChars;
-    const content = truncated ? raw.slice(0, maxChars) : raw;
+    const readCap = Math.max(maxChars, opts?.maxReadChars ?? maxChars);
+    const truncated = usedChars > readCap;
+    const content = truncated ? raw.slice(0, readCap) : raw;
     const pct = Math.min(100, Math.round((usedChars / maxChars) * 100));
     return {
       content,
       usedChars,
       maxChars,
+      truncated,
       gaugeHeader: `[${pct}% — ${Math.min(usedChars, maxChars)}/${maxChars} chars${truncated ? " — truncated" : ""}]`,
     };
   }
@@ -695,14 +706,15 @@ export class LocalSuperHermesMemory implements MemoryProvider {
 
   public getL1Target(target: L1TargetName, projectRoot?: string): L1TargetSnapshot {
     const { filePath, maxChars } = this.resolveL1Spec(target, projectRoot);
-    const read = this.readL1File(filePath, maxChars);
+    const read = this.readL1File(filePath, maxChars, { maxReadChars: 64 * 1024 });
     return {
       target,
       filePath,
-      content: this.scrubber.scrub(read.content),
+      content: read.content,
       usedChars: read.usedChars,
       maxChars: read.maxChars,
       gaugeHeader: read.gaugeHeader,
+      truncated: read.truncated,
     };
   }
 

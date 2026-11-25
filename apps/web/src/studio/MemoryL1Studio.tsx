@@ -23,7 +23,7 @@ export interface MemoryL1StudioProps {
   onClose: () => void;
   projects: ProjectRecord[];
   activeProject: ProjectRecord | null;
-  l1Memory: Record<string, { target: string; content: string; usedChars: number; maxChars: number; gaugeHeader: string }>;
+  l1Memory: Record<string, { target: string; content: string; usedChars: number; maxChars: number; gaugeHeader: string; truncated?: boolean }>;
   l2Facts: MemoryFactRecord[];
   onRefreshMemory: (projectId?: string, query?: string) => Promise<void>;
   onSendCommand: <T = unknown>(cmd: RpcCommandInput) => Promise<T>;
@@ -141,6 +141,7 @@ export function MemoryL1Studio({
   const isOverCap = usedChars > maxChars;
   const isNearCap = !isOverCap && pct >= 85;
   const isDirty = draftContent !== (activeEntry?.content ?? "");
+  const isTruncatedSnapshot = activeEntry?.truncated === true;
 
   const handleSaveL1 = async () => {
     if (busy) return;
@@ -373,7 +374,7 @@ export function MemoryL1Studio({
               <textarea
                 className="field-textarea mono"
                 rows={14}
-                disabled={busy || (activeTab === "project" && !selectedProjectId)}
+                disabled={busy || isTruncatedSnapshot || (activeTab === "project" && !selectedProjectId)}
                 placeholder={`Write concise curated memory for ${TAB_LABELS[activeTab].filename}…`}
                 value={draftContent}
                 onChange={(e) => setDraftContent(e.target.value)}
@@ -383,7 +384,7 @@ export function MemoryL1Studio({
                 <button
                   type="button"
                   className="btn sm"
-                  disabled={busy || !isDirty}
+                  disabled={busy || !isDirty || isTruncatedSnapshot}
                   onClick={() => setDraftContent(activeEntry?.content ?? "")}
                 >
                   Revert Changes
@@ -391,7 +392,7 @@ export function MemoryL1Studio({
                 <button
                   type="button"
                   className="btn sm primary"
-                  disabled={busy || isOverCap || (activeTab === "project" && !selectedProjectId)}
+                  disabled={busy || isOverCap || isTruncatedSnapshot || (activeTab === "project" && !selectedProjectId)}
                   onClick={() => void handleSaveL1()}
                 >
                   {busy ? (

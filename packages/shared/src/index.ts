@@ -479,6 +479,7 @@ export interface MemoryL1Snapshot {
   usedChars: number;
   maxChars: number;
   gaugeHeader: string;
+  truncated?: boolean;
 }
 
 export const TeamGoalStatusSchema = z.enum(["active", "completed", "blocked"]);
