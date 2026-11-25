@@ -446,9 +446,9 @@ kbd {
 .bot-roster-row {
   width: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 9px;
-  padding: 7px 8px;
+  padding: 8px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
@@ -471,6 +471,7 @@ kbd {
 .bot-roster-copy {
   flex: 1;
   min-width: 0;
+  align-self: center;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -479,8 +480,14 @@ kbd {
 .bot-roster-top {
   display: flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  column-gap: 6px;
   min-width: 0;
+}
+
+.bot-roster-row:has(> .bear-avatar-wrap) {
+  min-height: 108px;
 }
 
 .bot-roster-name {
@@ -941,33 +948,6 @@ kbd {
    BotAvatars (vector Feltworks bears and SVG eye rigs) & JobTitlePill
    ========================================================================== */
 
-@keyframes bear-work-scan {
-  0%,
-  100% {
-    transform: translate3d(-1.8px, 0, 0);
-  }
-  34% {
-    transform: translate3d(1.8px, -0.5px, 0);
-  }
-  67% {
-    transform: translate3d(0.6px, 0.2px, 0);
-  }
-}
-
-@keyframes bear-idle-glance {
-  0%,
-  78%,
-  100% {
-    transform: translate3d(0, 0, 0);
-  }
-  84% {
-    transform: translate3d(0.9px, -0.2px, 0);
-  }
-  91% {
-    transform: translate3d(-0.7px, 0.1px, 0);
-  }
-}
-
 @keyframes bear-blink {
   0%,
   91%,
@@ -979,32 +959,88 @@ kbd {
   }
 }
 
-@keyframes bear-shades-sweep {
-  0%,
-  58%,
-  100% {
-    transform: translateX(-3px);
-    opacity: 0;
-  }
-  68% {
-    opacity: 0.95;
-  }
-  84% {
-    transform: translateX(4px);
-    opacity: 0;
-  }
+
+@keyframes bear-eyes-command {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  30% { transform: translate3d(1.5px, -1.6px, 0); }
+  62% { transform: translate3d(-1.2px, 0.8px, 0); }
+}
+
+@keyframes bear-eyes-lead-scan {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  20% { transform: translate3d(-2.4px, -0.2px, 0); }
+  46% { transform: translate3d(2.4px, -0.2px, 0); }
+  72% { transform: translate3d(-1px, 0.3px, 0); }
+}
+
+@keyframes bear-eyes-builder-cross-left {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  34%, 66% { transform: translate3d(2.7px, -0.3px, 0); }
+}
+
+@keyframes bear-eyes-builder-cross-right {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  34%, 66% { transform: translate3d(-2.7px, -0.3px, 0); }
+}
+
+@keyframes bear-eyes-artist-left {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  28% { transform: translate3d(1.7px, -2px, 0); }
+  58% { transform: translate3d(-1.5px, 1.1px, 0); }
+  80% { transform: translate3d(1px, 1px, 0); }
+}
+
+@keyframes bear-eyes-artist-right {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  28% { transform: translate3d(-1.5px, 1.4px, 0); }
+  58% { transform: translate3d(1.6px, -1.8px, 0); }
+  80% { transform: translate3d(-1px, -0.7px, 0); }
+}
+
+@keyframes bear-eyes-research-dart {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  16% { transform: translate3d(-2.8px, 0, 0); }
+  32% { transform: translate3d(2.5px, -0.4px, 0); }
+  48% { transform: translate3d(-1.9px, 0.4px, 0); }
+  72% { transform: translate3d(1.8px, -0.2px, 0); }
+}
+
+@keyframes bear-eyes-verifier-sweep {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  38%, 58% { transform: translate3d(2.4px, -0.1px, 0); }
+  82% { transform: translate3d(-1.8px, 0.2px, 0); }
+}
+
+@keyframes bear-eyes-cub-cross {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  32% { transform: translate3d(1.8px, -1.8px, 0); }
+  62% { transform: translate3d(-1.8px, -0.6px, 0); }
+}
+
+@keyframes bear-working-dot {
+  0%, 68%, 100% { transform: translateY(0) scale(0.78); opacity: 0.42; }
+  28% { transform: translateY(-4px) scale(1); opacity: 1; }
 }
 
 .bear-avatar-wrap,
 .bf-beaver-wrap {
   position: relative;
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   flex-shrink: 0;
   border-radius: 9999px;
+  overflow: visible;
   user-select: none;
 }
+
+.bear-avatar-wrap[data-role="orchestrator"] { --bear-dot: #ffd45f; --bear-glow: #ffd45f66; }
+.bear-avatar-wrap[data-role="team_lead"] { --bear-dot: #fff29a; --bear-glow: #fff29a66; }
+.bear-avatar-wrap[data-role="builder"] { --bear-dot: #5c8cff; --bear-glow: #5c8cff73; }
+.bear-avatar-wrap[data-role="artist_3d"] { --bear-dot: #e2bcff; --bear-glow: #e2bcff66; }
+.bear-avatar-wrap[data-role="research"] { --bear-dot: #b5ffc3; --bear-glow: #b5ffc366; }
+.bear-avatar-wrap[data-role="verifier"] { --bear-dot: #ffb9dc; --bear-glow: #ffb9dc66; }
+.bear-avatar-wrap[data-role="cub"] { --bear-dot: #55d6ff; --bear-glow: #55d6ff66; }
 
 .bear-plush-body {
   position: relative;
@@ -1014,7 +1050,7 @@ kbd {
   display: block;
   pointer-events: none;
   user-select: none;
-  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.18));
+  filter: drop-shadow(0 0 5px var(--bear-glow, rgb(255 255 255 / 0.18))) drop-shadow(0 4px 5px rgb(0 0 0 / 0.48));
 }
 
 .bear-eye-rig {
@@ -1039,10 +1075,6 @@ kbd {
   transform-origin: center;
 }
 
-.bear-shades-gleam {
-  opacity: 0;
-}
-
 .bear-portrait-stage {
   position: relative;
   width: 100%;
@@ -1051,6 +1083,32 @@ kbd {
   transform-origin: 50% 76%;
   transform-box: fill-box;
 }
+
+
+.bear-working-dots {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 8px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.bear-working-dots > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--bear-dot, #ffffff);
+  box-shadow: 0 0 4px var(--bear-dot, #ffffff);
+}
+
+.bear-working-dots > span:nth-child(2) { animation-delay: 0.13s; }
+.bear-working-dots > span:nth-child(3) { animation-delay: 0.26s; }
 
 .bear-waiting-dot {
   position: absolute;
@@ -3714,12 +3772,11 @@ kbd {
   .bf-effort-popover,
   .bear-eye-group,
   .bear-eye-glance,
-  .bear-shades-gleam,
+  .bear-working-dots > span,
   .bear-anim-signal,
   .bear-anim-spyglass,
   .bear-anim-prism,
   .bear-anim-inspect,
-  .bear-anim-gauge,
   .skeleton-bar {
     animation: none;
   }
@@ -3978,11 +4035,6 @@ kbd {
   72% { rotate: 2deg; }
 }
 
-@keyframes bear-ember-glow {
-  0%, 100% { opacity: 0.58; }
-  50% { opacity: 1; }
-}
-
 @media (prefers-reduced-motion: no-preference) {
   :where(.bear-avatar-wrap[data-live][data-status="working"]) > .bear-portrait-stage {
     animation: bear-working-lean 3.8s var(--ease-organic) infinite;
@@ -3998,15 +4050,36 @@ kbd {
   .bear-avatar-wrap[data-live][data-status="working"] .bear-anim-spyglass { animation: bear-spyglass-drift 3.4s ease-in-out infinite; }
   .bear-avatar-wrap[data-live][data-status="working"] .bear-anim-prism { animation: bear-prism-turn 2.8s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
   .bear-avatar-wrap[data-live][data-status="working"] .bear-anim-inspect { animation: bear-inspect-lens 3.2s ease-in-out infinite; transform-box: fill-box; transform-origin: 64px 46px; }
-  .bear-avatar-wrap[data-live][data-status="working"] .bear-anim-gauge { animation: bear-ember-glow 1.4s ease-in-out infinite; }
   .bear-avatar-wrap[data-live] .bear-eye-group { animation: bear-blink 6.8s ease-in-out infinite; }
-  .bear-avatar-wrap[data-live] .bear-eye-glance { animation: bear-idle-glance 8.4s ease-in-out infinite; }
-  .bear-avatar-wrap[data-live][data-status="working"] .bear-eye-glance { animation: bear-work-scan 3.8s ease-in-out infinite; }
-  .bear-avatar-wrap[data-live][data-status="working"] .bear-shades-gleam { animation: bear-shades-sweep 4.8s ease-in-out infinite; }
+  .bear-avatar-wrap[data-live] .bear-eye-glance {
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+    animation-play-state: paused;
+  }
+  .bear-avatar-wrap[data-live][data-role="orchestrator"] .bear-eye-glance { animation-name: bear-eyes-command; }
+  .bear-avatar-wrap[data-live][data-role="team_lead"] .bear-eye-glance { animation-name: bear-eyes-lead-scan; }
+  .bear-avatar-wrap[data-live][data-role="builder"] .bear-eye-glance-left { animation-name: bear-eyes-builder-cross-left; }
+  .bear-avatar-wrap[data-live][data-role="builder"] .bear-eye-glance-right { animation-name: bear-eyes-builder-cross-right; }
+  .bear-avatar-wrap[data-live][data-role="artist_3d"] .bear-eye-glance-left { animation-name: bear-eyes-artist-left; }
+  .bear-avatar-wrap[data-live][data-role="artist_3d"] .bear-eye-glance-right { animation-name: bear-eyes-artist-right; }
+  .bear-avatar-wrap[data-live][data-role="research"] .bear-eye-glance { animation-name: bear-eyes-research-dart; }
+  .bear-avatar-wrap[data-live][data-role="verifier"] .bear-eye-glance { animation-name: bear-eyes-verifier-sweep; }
+  .bear-avatar-wrap[data-live][data-role="cub"] .bear-eye-glance { animation-name: bear-eyes-cub-cross; }
+  .bear-avatar-wrap[data-live][data-status="working"] .bear-eye-glance,
+  :is(.agent-profile-trigger, .bot-roster-row, .subagent-node):focus-visible .bear-avatar-wrap[data-live] .bear-eye-glance {
+    animation-play-state: running;
+  }
+  .bear-avatar-wrap[data-live][data-status="working"] .bear-working-dots > span {
+    animation: bear-working-dot 0.95s ease-in-out infinite;
+  }
   :is(.agent-profile-trigger, .bot-roster-row, .subagent-node):focus-visible [data-live] .bear-portrait-stage {
     animation: bear-acknowledge 1.15s var(--ease-organic) 2;
   }
   @media (hover: hover) {
+    .bear-avatar-wrap[data-live]:hover .bear-eye-glance,
+    :is(.agent-profile-trigger, .bot-roster-row, .subagent-node):hover .bear-avatar-wrap[data-live] .bear-eye-glance {
+      animation-play-state: running;
+    }
     :is(.agent-profile-trigger, .bot-roster-row, .subagent-node):hover [data-live] .bear-portrait-stage {
       animation: bear-acknowledge 1.15s var(--ease-organic) 2;
     }

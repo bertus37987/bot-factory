@@ -1174,7 +1174,7 @@ export function App() {
                             >
                               <BotAvatar
                                 role={meta.role}
-                                size={46}
+                                size={92}
                                 live
                                 agentStatus={bot.status}
                                 seed={bot.id}

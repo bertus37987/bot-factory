@@ -167,10 +167,12 @@ export function BotAvatar({
   const badgeSize = Math.max(13, Math.round(size * 0.4));
   const badgeLabel =
     badgeCount !== undefined && badgeCount > 0 ? (badgeCount > 9 ? "9+" : `${badgeCount}`) : null;
+  const isWorking = effectiveStatus === "working";
+  const loaderHeight = isWorking ? Math.max(10, Math.round(size * 0.16)) : 0;
 
   const wrapStyle = {
     width: size,
-    height: size,
+    height: size + loaderHeight,
   } as CSSProperties;
 
   return (
@@ -184,10 +186,18 @@ export function BotAvatar({
       title={`${meta.displayName} · ${meta.jobTitle}`}
       style={wrapStyle}
     >
-      <span className="bear-portrait-stage">
+      <span className="bear-portrait-stage" style={{ width: size, height: size }}>
         <PlushBearBody role={role} />
         <BearEyeRig role={role} status={effectiveStatus} seed={seed} />
       </span>
+
+      {isWorking && (
+        <span className="bear-working-dots" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+      )}
 
       {effectiveStatus === "waiting" && badgeLabel === null && (
         <span className="bear-waiting-dot" aria-hidden="true" />

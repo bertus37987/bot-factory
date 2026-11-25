@@ -30,15 +30,20 @@ focus visible, respect reduced motion, and test with the offline runtime.
   simultaneous panes.
 - Show the named draft destination on the artifact action itself. A click
   only adds context; the composer has a separate, explicit send action.
-- Use the vector Feltworks bear crew: low-detail plush bears with distinct
-  head/ear proportions, muted role-dyed felt, visible fur tufts, capsule
-  eyes, and role-specific workwear (spectacles, hardhat, beret, spyglass,
-  inspector lens, radio cap, or beanie). Live bears blink and glance on
-  seeded individual timing; each role has its own working motion, and
-  hover/focus produces a brief plush acknowledgement. Older messages and
-  team clusters stay still. Empty bot timelines introduce the bot as a
-  large bear portrait rather than a generic thinking orb. Click the live
-  header portrait to read the agent's role, status, and model.
+- Use the vector Feltworks bear crew: head-only round plush bears with
+  ears, expressive white eyes, contrasting muzzles, and vivid role colors
+  that read sharply against Vanta Black (yellow Team Lead, dark-blue
+  Builder, light-purple 3D Artist, light-green Research, and light-pink
+  Verifier). Each role wears a large legible hat or tool accessory contained
+  inside the portrait, sitting high between the ears. Rounded highlights,
+  lower-face shading, and a restrained role-colored glow give the heads a
+  dimensional vinyl-plush presence on black. Live bears blink on seeded
+  individual timing; hover/focus and working states run role-specific pupil motion (scanning,
+  crossing, darting, or asymmetrical glances). Working bears also get a
+  three-dot loading indicator directly underneath the portrait. Older
+  messages and team clusters stay still. Empty bot timelines introduce the
+  bot as a large bear portrait rather than a generic thinking orb. Click
+  the live header portrait to read the agent's role, status, and model.
 
 - Prefer the handcrafted Bot-Factory geometric icon set for shell
   navigation. Use familiar control glyphs only where recognition matters

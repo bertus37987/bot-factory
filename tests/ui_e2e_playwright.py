@@ -377,8 +377,11 @@ def main() -> int:
         expect(user_bubble).to_be_visible()
         expect(user_bubble).to_contain_text(user_prompt)
 
-        main_portrait = page.get_by_role("button", name="Main Agent profile").locator(".bear-portrait-stage")
+        main_avatar = page.get_by_role("button", name="Main Agent profile").locator(".bear-avatar-wrap")
+        main_portrait = main_avatar.locator(".bear-portrait-stage")
         expect(main_portrait).to_have_css("animation-name", "bear-work-command")
+        expect(main_avatar.locator(".bear-working-dots")).to_be_visible()
+        expect(main_avatar.locator(".bear-working-dots > span")).to_have_count(3)
         page.emulate_media(reduced_motion="reduce")
         expect(main_portrait).to_have_css("animation-name", "none")
         page.emulate_media(reduced_motion="no-preference")
@@ -612,7 +615,7 @@ def main() -> int:
 
         roster_avatars = sidebar.locator(".bot-roster-row > .bear-avatar-wrap")
         if roster_avatars.count() > 0:
-            assert roster_avatars.first.evaluate("el => parseFloat(getComputedStyle(el).width)") >= 42
+            assert roster_avatars.first.evaluate("el => parseFloat(getComputedStyle(el).width)") >= 92
 
         expect(sidebar.locator("button.drawer-item", has_text="Debates & Verifier")).to_have_count(0)
         if "Debates & Verifier" in sidebar.inner_text():

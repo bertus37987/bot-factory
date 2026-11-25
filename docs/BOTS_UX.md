@@ -12,7 +12,9 @@ names or role labels.
   tools. Archived projects are not switch targets.
 - Individual bot conversations show that bot's activity. Empty timelines
   introduce the selected bot with a large live bear portrait instead of a
-  generic orb. The composer still steers the Team Lead. Pause, Resume and
+  generic orb. Actively working bears show a compact animated three-dot
+  loader directly underneath the portrait. The composer still steers the
+  Team Lead. Pause, Resume and
   Stop stay in a retractable bear-paw control dock at the conversation edge
   and explicitly name their separate target; the dock opens on hover, focus,
   or tap so touch and keyboard users are not dependent on hover alone.

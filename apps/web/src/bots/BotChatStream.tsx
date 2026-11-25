@@ -555,18 +555,18 @@ export function BotChatStream({
             <GroupAvatarCluster
               roles={agents.map((agent) => resolveBotRole(agent).role)}
               totalCount={agents.length}
-              size={72}
+              size={144}
             />
           ) : activeAgent ? (
             <BotAvatar
               role={resolveBotRole(activeAgent).role}
-              size={84}
+              size={168}
               live
               agentStatus={activeAgent.status}
               seed={activeAgent.id}
             />
           ) : (
-            <BotAvatar role="cub" size={84} seed="empty-bot" />
+            <BotAvatar role="cub" size={168} seed="empty-bot" />
           )}
           <div className="bcs-empty-title">
             {mode === "group" ? `${project.name} · Group Chat` : (activeAgent?.name ?? "Bot")}
@@ -642,7 +642,7 @@ export function BotChatStream({
                   >
                     <BotAvatar
                       role={speaker.meta.role}
-                      size={42}
+                      size={84}
                       seed={speaker.agent?.id ?? speaker.meta.role}
                     />
                   </button>
@@ -847,7 +847,7 @@ export function BotChatStream({
               <span style={{ display: "inline-flex", flexShrink: 0 }}>
                 <BotAvatar
                   role={meta.role}
-                  size={42}
+                  size={84}
                   live
                   status="working"
                   seed={agent.id}
@@ -992,7 +992,7 @@ export function BotChatStream({
               <span style={{ display: "inline-flex", flexShrink: 0 }}>
                 <BotAvatar
                   role={liveMeta.role}
-                  size={40}
+                  size={80}
                   live
                   agentStatus={a.status}
                   seed={a.id}
