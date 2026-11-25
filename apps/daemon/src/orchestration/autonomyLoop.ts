@@ -592,11 +592,6 @@ export class AutonomyLoop {
     const selectablePeers = activePeers.filter((a) => !crashBlockedAgentIds.has(a.id));
     const idlePeers = selectablePeers.filter((a) => a.status === "idle");
 
-    if (task.assignedAgentId) {
-      const preferred = idlePeers.find((a) => a.id === task.assignedAgentId);
-      if (preferred) return preferred;
-    }
-
     const allTasks = this.db.listTasks(projectId);
     const hasUnmergedWork = (agentId: string): boolean =>
       allTasks.some(
@@ -604,6 +599,11 @@ export class AutonomyLoop {
           t.assignedAgentId === agentId &&
           (t.status === "claimed" || t.status === "in_review" || t.status === "verified"),
       );
+
+    if (task.assignedAgentId) {
+      const preferred = idlePeers.find((a) => a.id === task.assignedAgentId && !hasUnmergedWork(a.id));
+      if (preferred) return preferred;
+    }
 
     const cleanIdle = idlePeers.find((a) => !hasUnmergedWork(a.id));
     if (cleanIdle) return cleanIdle;
@@ -617,7 +617,7 @@ export class AutonomyLoop {
       });
     }
 
-    return idlePeers[0] ?? null;
+    return null;
   }
 
   private checkGoalCompletion(projectId: string, goal: GoalContext): void {

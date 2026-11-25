@@ -1099,6 +1099,24 @@ describe("Wave 2 Harness & Multi-Agent Upgrades", () => {
       const admission = db.enqueueAdmission(sessionId, "crashed turn", "started");
       db.updateAdmissionStatus(admission.id, "unknown");
       db.upsertTask({
+        id: "tsk_crashed_unmerged",
+        projectId,
+        parentTaskId: null,
+        title: "Crashed unmerged task",
+        specMd: "spec",
+        status: "claimed",
+        priority: 1,
+        assignedAgentId: agentId,
+        sourceAnnotationId: null,
+        worktreeBranch: null,
+        handoffPath: null,
+        retryCount: 0,
+        dependsOn: [],
+        autoRetryCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+      db.upsertTask({
         id: taskId,
         projectId,
         parentTaskId: null,
@@ -1142,6 +1160,11 @@ describe("Wave 2 Harness & Multi-Agent Upgrades", () => {
       const goal = loop.startGoal({ projectId, goal: "Recover safely" });
       loop.attachTasks(projectId, [taskId], goal.goalId);
 
+      expect(loop.resumePersistedGoals()).toBe(0);
+      expect(dispatched).toEqual([]);
+      expect(db.getTask(taskId)?.status).toBe("ready");
+
+      db.updateAdmissionStatus(admission.id, "terminal");
       expect(loop.resumePersistedGoals()).toBe(0);
       expect(dispatched).toEqual([]);
       expect(db.getTask(taskId)?.status).toBe("ready");
