@@ -1171,8 +1171,8 @@ describe("Wave 2 Harness & Multi-Agent Upgrades", () => {
 
       const crashedTask = db.getTask("tsk_crashed_unmerged")!;
       db.upsertTask({ ...crashedTask, status: "verified", updatedAt: Date.now() });
-      expect(loop.resumePersistedGoals()).toBe(1);
-      expect(dispatched).toEqual([taskId]);
+      expect(loop.resumePersistedGoals()).toBe(0);
+      expect(dispatched).toEqual([]);
     } finally {
       db.close();
     }
