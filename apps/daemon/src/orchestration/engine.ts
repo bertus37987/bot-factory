@@ -3622,7 +3622,7 @@ export class OrchestrationEngine {
       }
       this.core.emitDirectEvent(`project:${project.id}:board`, "board.updated", this.getProjectBoardSnapshot(project.id));
       this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
-      this.autonomyLoop.dispatchUnblockedTasks(project.id);
+      this.autonomyLoop.resumePersistedGoalsForProject(project.id);
       return;
     }
 
