@@ -309,12 +309,26 @@ export function BearEyeRig({ role, status, seed }: { role: BotRoleKind; status: 
         }
         const wide = status === "waiting" ? 1.1 : 1;
         return (
-          <g key={side} className="bear-eye-group" style={{ animationDelay: blinkDelay, animationDuration: blinkDuration }}>
+          <g key={side} className={`bear-eye-group bear-eye-group-${side}`} style={{ animationDelay: blinkDelay, animationDuration: blinkDuration }}>
             <ellipse cx={cx} cy={cy} rx={face.eyeRx * wide} ry={face.eyeRy * wide} fill="#fff8ec" stroke="#100906" strokeWidth="1.7" />
             <g className={`bear-eye-glance bear-eye-glance-${side}`} style={{ animationDelay: glanceDelay, animationDuration: glanceDuration }}>
               <circle cx={cx + 0.7} cy={cy + 0.5} r={face.pupilR} fill="#08070a" />
               <circle cx={cx + 1.7} cy={cy - 1.1} r={Math.max(0.9, face.pupilR * 0.36)} fill="#ffffff" />
             </g>
+            {((role === "team_lead" && side === "right") ||
+              (role === "artist_3d" && side === "left") ||
+              (role === "verifier" && side === "right") ||
+              (role === "cub" && side === "left")) && (
+              <ellipse
+                className="bear-eye-wink-lid"
+                cx={cx}
+                cy={cy}
+                rx={face.eyeRx * wide + 0.7}
+                ry={face.eyeRy * wide + 0.7}
+                fill={palette.fur}
+                style={{ animationDelay: glanceDelay, animationDuration: `${(7.8 + (h % 5) * 0.7).toFixed(2)}s` }}
+              />
+            )}
           </g>
         );
       })}

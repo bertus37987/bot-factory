@@ -397,7 +397,7 @@ def main() -> int:
         expect(assistant_row.locator(".bear-eye-rig")).to_be_visible()
         expect(assistant_row.locator(".bear-portrait-stage")).to_have_css("animation-name", "none")
         assert_all_images_loaded(page, require_bear_avatar=True)
-        expect(assistant_turn).to_have_css("background-color", "rgb(28, 28, 26)")
+        expect(assistant_turn).to_have_css("background-color", "rgba(10, 13, 19, 0.68)")
         capture_studio(page, "main-agent-vanta")
         theme_toggle_btn.click()
         expect(assistant_turn).to_have_css("background-color", "rgb(242, 240, 238)")

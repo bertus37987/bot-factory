@@ -1,5 +1,5 @@
 import type { GitDiffResponse, ProjectRecord } from "@bot-factory/shared";
-import { Box, Check, ChevronDown, FileText, FolderGit2, Image as ImageIcon, Plus, X } from "lucide-react";
+import { Box, ChevronDown, FileText, FolderGit2, Image as ImageIcon, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useId, type JSX } from "react";
 import type { ComposerAttachment } from "../browser/types";
 import type { ProviderSummary } from "../client/useBotFactory";
@@ -81,10 +81,69 @@ const COMPOSER_MIN_H = 56;
 const COMPOSER_MAX_H = 300;
 
 function formatRuntimeLabel(runtime: string): string {
-  if (runtime === "native_http") return "HTTP";
+  if (runtime === "native_http") return "API";
   if (runtime === "acp_stdio") return "ACP";
   if (runtime === "cli_stream") return "CLI";
   return runtime.replaceAll("_", " ").toUpperCase();
+}
+
+function formatProviderLabel(provider: string): string {
+  return provider
+    .split(/[-_]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function ProviderLogo({ provider, size = 18 }: { provider: string; size?: number }): JSX.Element {
+  const gradientId = useId().replace(/:/g, "");
+  const key = provider.toLowerCase();
+  const label = formatProviderLabel(provider);
+  let mark: JSX.Element;
+  if (key.includes("mistral")) {
+    mark = (
+      <>
+        <rect x="4" y="4" width="16" height="3" rx="1.5" fill="#ff9d42" />
+        <rect x="6" y="9" width="12" height="3" rx="1.5" fill="#ff5f45" />
+        <rect x="8" y="14" width="8" height="3" rx="1.5" fill="#d93662" />
+      </>
+    );
+  } else if (key.includes("google") || key.includes("gemini")) {
+    mark = (
+      <path d="M12 3 L14 10 L21 12 L14 14 L12 21 L10 14 L3 12 L10 10 Z" fill={`url(#${gradientId})`} />
+    );
+  } else if (key.includes("anthropic") || key.includes("claude")) {
+    mark = <path d="M5 18 L12 5 L19 18 H15.7 L12 10.8 L8.3 18 Z" fill="#f4b183" />;
+  } else if (key.includes("openai")) {
+    mark = (
+      <g fill="none" stroke="#d8f3ff" strokeWidth="2" strokeLinecap="round">
+        <circle cx="12" cy="12" r="7" />
+        <path d="M12 5 V19 M5 12 H19 M7 7 L17 17 M17 7 L7 17" opacity="0.58" />
+      </g>
+    );
+  } else if (key.includes("devin") || key.includes("acp")) {
+    mark = (
+      <>
+        <path d="M12 3 L19 7 V17 L12 21 L5 17 V7 Z" fill="#8fd8ff" opacity="0.92" />
+        <path d="M9 8 H12.3 A4.2 4.2 0 0 1 12.3 16 H9 Z" fill="#06101a" />
+      </>
+    );
+  } else {
+    const initials = label.split(" ").map((part) => part.charAt(0)).join("").slice(0, 2).toUpperCase();
+    mark = <text x="12" y="15" textAnchor="middle" fontSize="8.5" fontWeight="700" fill="#dff6ff">{initials}</text>;
+  }
+  return (
+    <svg className="pc-provider-logo" width={size} height={size} viewBox="0 0 24 24" role="img" aria-label={`${label} provider`}>
+      <defs>
+        <linearGradient id={gradientId} x1="4" y1="4" x2="20" y2="20">
+          <stop offset="0" stopColor="#8fd8ff" />
+          <stop offset="1" stopColor="#b99cff" />
+        </linearGradient>
+      </defs>
+      <rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="rgba(125, 211, 252, 0.1)" stroke="rgba(191, 232, 255, 0.24)" />
+      {mark}
+    </svg>
+  );
 }
 
 type PopKind = "slash" | "autonomy" | "project" | "attach" | "model" | null;
@@ -269,6 +328,9 @@ export function PrecisionComposer({
   const displayModelLabel = selectedTarget
     ? `${selectedTarget.provider}/${selectedTarget.model}`
     : activeModelLabel;
+  const activeProviderName = selectedTarget?.provider ?? displayModelLabel.split("/")[0] ?? "";
+  const activeModelName = selectedTarget?.model ?? (displayModelLabel.includes("/") ? displayModelLabel.split("/").slice(1).join("/") : displayModelLabel);
+  const activeRuntime = providers?.find((provider) => provider.name === activeProviderName)?.runtime ?? "";
 
   const filteredModelChoices = useMemo(() => {
     const q = modelQuery.trim().toLowerCase();
@@ -728,7 +790,9 @@ export function PrecisionComposer({
                 disabled={isDisabled}
                 onClick={() => togglePop("model")}
               >
-                <span className="pc-model-label">{displayModelLabel}</span>
+                <ProviderLogo provider={activeProviderName} size={17} />
+                <span className="pc-model-label">{activeModelName}</span>
+                {activeRuntime && <span className="pc-model-type">{formatRuntimeLabel(activeRuntime)}</span>}
                 <ChevronDown size={11} strokeWidth={1.6} />
               </button>
               {openPop === "model" && (
@@ -783,7 +847,10 @@ export function PrecisionComposer({
                     )}
                     {modelSections.map((section) => (
                       <div className="pc-model-section" key={section.provider}>
-                        <div className="pc-model-provider-head">{section.provider}</div>
+                        <div className="pc-model-provider-head">
+                          <ProviderLogo provider={section.provider} size={16} />
+                          <span>{formatProviderLabel(section.provider)}</span>
+                        </div>
                         {section.items.map((choice) => {
                           const isCurrent =
                             selectedTarget?.provider === choice.provider &&
@@ -800,12 +867,10 @@ export function PrecisionComposer({
                               onMouseEnter={() => setFocusedModelIdx(choice.flatIndex)}
                               onClick={() => selectModelChoice(choice)}
                             >
-                              <span className="pc-model-radio" aria-hidden="true">
-                                {isCurrent && <Check size={10} strokeWidth={2.2} />}
-                              </span>
+                              <ProviderLogo provider={choice.provider} size={20} />
                               <span className="pc-model-copy">
                                 <span className="pc-model-name">{choice.model}</span>
-                                <span className="pc-model-provider">{choice.provider}</span>
+                                <span className="pc-model-provider">{formatProviderLabel(choice.provider)}</span>
                               </span>
                               <span className="pc-model-runtime">{formatRuntimeLabel(choice.runtime)}</span>
                             </button>

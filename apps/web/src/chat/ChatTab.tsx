@@ -126,7 +126,9 @@ export function ChatTab({
   const timeline = useMemo<StreamEntry[]>(() => {
     const combined: StreamEntry[] = [
       ...messages.map((msg) => ({ kind: "message" as const, ts: msg.createdAt, msg })),
-      ...cards.map((card) => ({ kind: "card" as const, ts: card.createdAt, card })),
+      ...cards
+        .filter((card) => card.kind === "delegation" || card.kind === "review_merge" || card.kind === "blocked" || card.kind === "milestone")
+        .map((card) => ({ kind: "card" as const, ts: card.createdAt, card })),
     ];
     combined.sort((a, b) => a.ts - b.ts);
     return combined;

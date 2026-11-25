@@ -53,6 +53,13 @@
   --accent-orange-border: rgba(232, 107, 44, 0.42);
   --accent-orange-ink: #ff9c66;
 
+  --accent-cyan: #7dd3fc;
+  --accent-cyan-strong: #38bdf8;
+  --accent-cyan-soft: rgba(125, 211, 252, 0.13);
+  --accent-cyan-border: rgba(125, 211, 252, 0.42);
+  --accent-cyan-ink: #b9ecff;
+  --accent-cyan-glow: rgba(56, 189, 248, 0.34);
+
   /* Per-Role Messenger Bubble Tokens (High-Contrast Vanta Black) */
   --bubble-user-bg: #b94815;
   --bubble-user-border: #e26a2e;
@@ -294,6 +301,13 @@
   --accent-orange-soft: #fff7f2;
   --accent-orange-border: #f5d3bf;
   --accent-orange-ink: #b84312;
+
+  --accent-cyan: #0284c7;
+  --accent-cyan-strong: #0369a1;
+  --accent-cyan-soft: rgba(2, 132, 199, 0.09);
+  --accent-cyan-border: rgba(2, 132, 199, 0.28);
+  --accent-cyan-ink: #075985;
+  --accent-cyan-glow: rgba(2, 132, 199, 0.18);
 
   /* Per-Role Messenger Bubble Tokens (Crisp Pastel Light Mode) */
   --bubble-user-bg: #d95d22;

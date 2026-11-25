@@ -151,6 +151,15 @@ export interface BotAvatarProps {
   className?: string;
 }
 
+function avatarSeedHash(input: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
 export function BotAvatar({
   role,
   size = 32,
@@ -174,6 +183,13 @@ export function BotAvatar({
     width: size,
     height: size + loaderHeight,
   } as CSSProperties;
+  const motionSeed = avatarSeedHash(seed ?? role);
+  const portraitStyle = {
+    width: size,
+    height: size,
+    "--bear-idle-duration": `${(7.4 + (motionSeed % 6) * 0.72).toFixed(2)}s`,
+    "--bear-idle-delay": `${(-((motionSeed % 53) * 0.17)).toFixed(2)}s`,
+  } as CSSProperties;
 
   return (
     <div
@@ -186,7 +202,7 @@ export function BotAvatar({
       title={`${meta.displayName} · ${meta.jobTitle}`}
       style={wrapStyle}
     >
-      <span className="bear-portrait-stage" style={{ width: size, height: size }}>
+      <span className="bear-portrait-stage" style={portraitStyle}>
         <PlushBearBody role={role} />
         <BearEyeRig role={role} status={effectiveStatus} seed={seed} />
       </span>
