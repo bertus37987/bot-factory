@@ -1168,6 +1168,11 @@ describe("Wave 2 Harness & Multi-Agent Upgrades", () => {
       expect(loop.resumePersistedGoals()).toBe(0);
       expect(dispatched).toEqual([]);
       expect(db.getTask(taskId)?.status).toBe("ready");
+
+      const crashedTask = db.getTask("tsk_crashed_unmerged")!;
+      db.upsertTask({ ...crashedTask, status: "verified", updatedAt: Date.now() });
+      expect(loop.resumePersistedGoals()).toBe(1);
+      expect(dispatched).toEqual([taskId]);
     } finally {
       db.close();
     }
