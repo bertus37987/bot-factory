@@ -22,6 +22,7 @@ import {
   type SelfModProposalRecord,
   type SelfModStatus,
   type TaskRecord,
+  type TeamGoalStatus,
   type TaskStatus,
   type TimelineItem,
   type VerificationCheckResult,
@@ -29,7 +30,7 @@ import {
   type VerificationVerdict,
 } from "@bot-factory/shared";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export interface OutboxEffectRow {
   id: string;
@@ -63,6 +64,18 @@ export interface AdmissionRow {
   executionGeneration: number;
   inputText: string;
   status: "queued" | "started" | "terminal" | "unknown";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface StoredTeamGoalRecord {
+  goalId: string;
+  projectId: string;
+  goal: string;
+  status: TeamGoalStatus;
+  autonomyLevel: string | null;
+  reasoningEffort: string | null;
+  reported: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -246,7 +259,7 @@ export class StateDatabase {
       CREATE TABLE IF NOT EXISTS runtime_meta (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         epoch INTEGER NOT NULL DEFAULT 0,
-        schema_version INTEGER NOT NULL DEFAULT 3,
+        schema_version INTEGER NOT NULL DEFAULT 4,
         instance_id TEXT NOT NULL,
         daemon_pid INTEGER NOT NULL,
         fts_stale INTEGER NOT NULL DEFAULT 0,
@@ -334,10 +347,24 @@ export class StateDatabase {
       CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq);
       CREATE INDEX IF NOT EXISTS idx_messages_agent_seq ON messages(agent_id, created_at);
 
+      CREATE TABLE IF NOT EXISTS team_goals (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        goal TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('active','completed','blocked')) DEFAULT 'active',
+        autonomy_level TEXT,
+        reasoning_effort TEXT,
+        reported INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_team_goals_project_status ON team_goals(project_id, status, updated_at);
+
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        goal_id TEXT,
         title TEXT NOT NULL,
         spec_md TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT 'ready',
@@ -556,6 +583,9 @@ export class StateDatabase {
     // Idempotent v3 column upgrades for pre-existing v1/v2 databases
     this.ensureColumn("messages", "sender_agent_id", "TEXT");
     this.ensureColumn("messages", "sender_role", "TEXT");
+
+    // Idempotent v4 autonomous DAG persistence upgrades
+    this.ensureColumn("tasks", "goal_id", "TEXT");
 
     // Recreate live_memory_facts view cleanly for epoch-ms forget_after comparisons
     this.db.exec(`
@@ -1432,13 +1462,69 @@ export class StateDatabase {
     }));
   }
 
+  // --- Autonomous Team Goals ---
+
+  public upsertTeamGoal(goal: StoredTeamGoalRecord): void {
+    this.db
+      .query(
+        `INSERT INTO team_goals (id, project_id, goal, status, autonomy_level, reasoning_effort, reported, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           goal = excluded.goal,
+           status = excluded.status,
+           autonomy_level = excluded.autonomy_level,
+           reasoning_effort = excluded.reasoning_effort,
+           reported = excluded.reported,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        goal.goalId,
+        goal.projectId,
+        goal.goal,
+        goal.status,
+        goal.autonomyLevel,
+        goal.reasoningEffort,
+        goal.reported ? 1 : 0,
+        goal.createdAt,
+        goal.updatedAt,
+      );
+  }
+
+  public getTeamGoal(goalId: string): StoredTeamGoalRecord | null {
+    const row = this.db.query("SELECT * FROM team_goals WHERE id = ?").get(goalId) as Record<string, unknown> | null;
+    return row ? this.mapTeamGoal(row) : null;
+  }
+
+  public listTeamGoals(projectId?: string): StoredTeamGoalRecord[] {
+    const rows = projectId
+      ? (this.db.query("SELECT * FROM team_goals WHERE project_id = ? ORDER BY updated_at DESC").all(projectId) as Array<
+          Record<string, unknown>
+        >)
+      : (this.db.query("SELECT * FROM team_goals ORDER BY updated_at DESC").all() as Array<Record<string, unknown>>);
+    return rows.map((row) => this.mapTeamGoal(row));
+  }
+
+  private mapTeamGoal(row: Record<string, unknown>): StoredTeamGoalRecord {
+    return {
+      goalId: String(row.id),
+      projectId: String(row.project_id),
+      goal: String(row.goal),
+      status: String(row.status) as TeamGoalStatus,
+      autonomyLevel: row.autonomy_level ? String(row.autonomy_level) : null,
+      reasoningEffort: row.reasoning_effort ? String(row.reasoning_effort) : null,
+      reported: Number(row.reported) === 1,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    };
+  }
+
   // --- Tasks ---
 
   public upsertTask(t: TaskRecord): void {
     this.db
       .query(
-        `INSERT INTO tasks (id, project_id, parent_task_id, title, spec_md, status, priority, assigned_agent_id, source_annotation_id, worktree_branch, handoff_path, retry_count, depends_on_json, auto_retry_count, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO tasks (id, project_id, parent_task_id, goal_id, title, spec_md, status, priority, assigned_agent_id, source_annotation_id, worktree_branch, handoff_path, retry_count, depends_on_json, auto_retry_count, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            title = excluded.title,
            spec_md = excluded.spec_md,
@@ -1448,6 +1534,7 @@ export class StateDatabase {
            worktree_branch = excluded.worktree_branch,
            handoff_path = excluded.handoff_path,
            retry_count = excluded.retry_count,
+           goal_id = CASE WHEN ? = 1 THEN excluded.goal_id ELSE tasks.goal_id END,
            depends_on_json = CASE WHEN ? = 1 THEN excluded.depends_on_json ELSE tasks.depends_on_json END,
            auto_retry_count = CASE WHEN ? = 1 THEN excluded.auto_retry_count ELSE tasks.auto_retry_count END,
            updated_at = excluded.updated_at`,
@@ -1456,6 +1543,7 @@ export class StateDatabase {
         t.id,
         t.projectId,
         t.parentTaskId,
+        t.goalId ?? null,
         t.title,
         t.specMd,
         t.status,
@@ -1469,6 +1557,7 @@ export class StateDatabase {
         t.autoRetryCount ?? 0,
         t.createdAt,
         t.updatedAt,
+        t.goalId !== undefined ? 1 : 0,
         t.dependsOn !== undefined ? 1 : 0,
         t.autoRetryCount !== undefined ? 1 : 0,
       );
@@ -1493,6 +1582,7 @@ export class StateDatabase {
       id: String(r.id),
       projectId: String(r.project_id),
       parentTaskId: r.parent_task_id ? String(r.parent_task_id) : null,
+      goalId: r.goal_id ? String(r.goal_id) : null,
       title: String(r.title),
       specMd: String(r.spec_md),
       status: String(r.status) as TaskStatus,

@@ -1951,6 +1951,8 @@ export class OrchestrationEngine {
     let thoughtText = "";
     let runtimeError: string | null = null;
     let receivedDone = false;
+    let latestTurnTokenIn = 0;
+    let latestTurnTokenOut = 0;
 
     try {
       if (!handle) {
@@ -2045,11 +2047,11 @@ export class OrchestrationEngine {
 
       let recalled = "";
       try {
-        recalled = await this.memory.recallForTurn(opts.namespace, userText, 6);
+        recalled = await this.memory.recallForTurn(opts.namespace, userText, 6, agent.id);
       } catch {
         recalled = "";
       }
-      const memoryContext = recalled || this.memory.prefetch(opts.namespace);
+      const memoryContext = recalled || this.memory.prefetch(opts.namespace, agent.id);
       const projectSummary = opts.projectId ? this.buildConciseProjectSummary(opts.projectId) : "";
       const ephemeralContext = [projectSummary, memoryContext].filter(Boolean).join("\n\n");
 
@@ -2168,6 +2170,8 @@ export class OrchestrationEngine {
           });
           this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
         } else if (evt.type === "usage") {
+          latestTurnTokenIn = Math.max(0, Math.trunc(evt.tokenIn));
+          latestTurnTokenOut = Math.max(0, Math.trunc(evt.tokenOut));
           this.db.runAtomicWrite(() => this.db.addSessionTokenUsage(session.id, evt.tokenIn, evt.tokenOut));
         } else if (evt.type === "text_delta") {
           finalText += evt.text;
@@ -2287,9 +2291,15 @@ export class OrchestrationEngine {
         }
       }
 
-      const totalTokens = this.db.getSessionTokenTotal(session.id);
-      if (totalTokens >= this.runtimeCfg.config.guardrails.autoCompactThresholdTokens) {
-        const activeMsgs = this.db.listActiveSessionMessages(session.id, 40);
+      const activeMsgs = this.db.listActiveSessionMessages(session.id, 120);
+      const estimatedTranscriptTokens = Math.ceil(
+        (session.systemPrompt.length +
+          activeMsgs.reduce((sum, m) => sum + m.content.length + (m.title?.length ?? 0) + 24, 0)) /
+          4,
+      );
+      const measuredContextTokens = latestTurnTokenIn + latestTurnTokenOut;
+      const currentContextTokens = Math.max(measuredContextTokens, estimatedTranscriptTokens);
+      if (currentContextTokens >= this.runtimeCfg.config.guardrails.autoCompactThresholdTokens) {
         const priorSummary = activeMsgs.find((m) => m.kind === "status" && m.title?.startsWith("Compaction Gen #"));
         const summaryLines = activeMsgs
           .filter((m) => m.kind === "message" && (m.role === "user" || m.role === "assistant"))
@@ -2299,7 +2309,7 @@ export class OrchestrationEngine {
           ? `Prior summary (${priorSummary.title}): ${priorSummary.content.replace(/\s+/g, " ").slice(0, 600)}\n`
           : "";
         const summaryText = this.scrubber.scrub(
-          `Compacted ${activeMsgs.length} active messages (${totalTokens} tokens).\n${priorBlock}${summaryLines.join("\n")}`,
+          `Compacted ${activeMsgs.length} active messages (${currentContextTokens} current-context tokens).\n${priorBlock}${summaryLines.join("\n")}`,
         );
         const freshAgent = this.db.getAgent(agent.id) ?? agent;
         const rebuilt = this.buildAgentSystemPrompt(freshAgent);
@@ -2312,7 +2322,7 @@ export class OrchestrationEngine {
           agentId: agent.id,
           sessionId: session.id,
           generation: nextGen,
-          previousTokens: totalTokens,
+          previousTokens: currentContextTokens,
         };
         this.core.emitDirectEvent(botTimelineTopic, "session.compacted", compactPayload);
         if (opts.emitTopic === "chat:meta") {
@@ -2321,7 +2331,7 @@ export class OrchestrationEngine {
       }
 
       // Non-blocking memory pre-warm for next turn
-      this.memory.queuePrefetch(opts.namespace, `${userText}\n${finalText}`);
+      this.memory.queuePrefetch(opts.namespace, `${userText}\n${finalText}`, agent.id);
       return { ok: true, text: finalText };
     } catch (err) {
       const msg = this.scrubber.scrub(err instanceof Error ? err.message : String(err));

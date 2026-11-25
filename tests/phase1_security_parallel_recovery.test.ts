@@ -1,13 +1,11 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -1117,122 +1115,7 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
     expect(gitRef1.stdout.toString().trim()).toBe(turn1Sha);
   });
 
-  it("cleanly migrates an isolated copy of C:\\Users\\willy\\bot-factory\\system\\state.db* to current schema (v3) and recovers 'verifying' self-mod proposals", () => {
-    const realSystemDir = "C:\\Users\\willy\\bot-factory\\system";
-    const realDbPath = join(realSystemDir, "state.db");
-    expect(existsSync(realDbPath)).toBe(true);
-
-    const beforeStat = statSync(realDbPath);
-    const realWalPath = join(realSystemDir, "state.db-wal");
-    const beforeWalStat = existsSync(realWalPath) ? statSync(realWalPath) : null;
-
-    const tempDir = makeTempRoot("bf-upgrade-copy-");
-    const copyDbPath = join(tempDir, "state.db");
-    for (const fileName of ["state.db", "state.db-wal", "state.db-shm"]) {
-      const src = join(realSystemDir, fileName);
-      if (existsSync(src)) {
-        copyFileSync(src, join(tempDir, fileName));
-      }
-    }
-
-    // Read-only sanity check before migration: confirm copied baseline is schema_version >= 1
-    const preCheck = new Database(copyDbPath, { readonly: true });
-    const preMeta = preCheck.query("SELECT schema_version FROM runtime_meta WHERE id = 1").get() as {
-      schema_version: number;
-    };
-    const preProjects = preCheck.query("SELECT id FROM projects").all() as Array<{ id: string }>;
-    const preAgents = preCheck.query("SELECT id FROM agents").all() as Array<{ id: string }>;
-    const preTasks = preCheck.query("SELECT id FROM tasks").all() as Array<{ id: string }>;
-    preCheck.close();
-
-    expect(preMeta.schema_version).toBeGreaterThanOrEqual(1);
-    expect(preProjects.length).toBeGreaterThanOrEqual(1);
-    expect(preAgents.length).toBeGreaterThanOrEqual(1);
-
-    // Boot StateDatabase + recoverAfterRestart() on the isolated copy
-    const migrated = new StateDatabase(copyDbPath);
-    let closed = false;
-    try {
-      const firstRec = migrated.recoverAfterRestart();
-      expect(firstRec.retiredEffects).toBeGreaterThanOrEqual(0);
-
-      expect(CURRENT_SCHEMA_VERSION).toBe(3);
-      const postMeta = migrated.db.query("SELECT schema_version FROM runtime_meta WHERE id = 1").get() as {
-        schema_version: number;
-      };
-      expect(postMeta.schema_version).toBe(CURRENT_SCHEMA_VERSION);
-      expect(postMeta.schema_version).toBe(3);
-
-      const tables = new Set(
-        (migrated.db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(
-          (r) => r.name,
-        ),
-      );
-      for (const reqTable of ["debates", "debate_messages", "verifications", "self_mod_proposals", "memory_embeddings"]) {
-        expect(tables.has(reqTable)).toBe(true);
-      }
-
-      const msgCols = new Set(
-        (migrated.db.query("PRAGMA table_info(messages)").all() as Array<{ name: string }>).map((c) => c.name),
-      );
-      expect(msgCols.has("sender_agent_id")).toBe(true);
-      expect(msgCols.has("sender_role")).toBe(true);
-
-      // Verify existing projects, agents, and tasks are preserved intact
-      expect(migrated.listProjects().map((p) => p.id)).toEqual(expect.arrayContaining(preProjects.map((p) => p.id)));
-      expect(migrated.listAgents().map((a) => a.id)).toEqual(expect.arrayContaining(preAgents.map((a) => a.id)));
-      const preservedTasks = migrated.db.query("SELECT id FROM tasks").all() as Array<{ id: string }>;
-      expect(preservedTasks.map((t) => t.id)).toEqual(expect.arrayContaining(preTasks.map((t) => t.id)));
-
-      // Verify 'verifying' self_mod_proposals are reset to 'staged' by recoverAfterRestart()
-      const now = Date.now();
-      migrated.runAtomicWrite(() => {
-        migrated.upsertSelfModProposal({
-          id: "smod_stuck_verifying",
-          kind: "plugin",
-          targetId: "upgrade-test-plugin",
-          title: "Stuck Verifying Proposal",
-          rationale: "Simulate crash mid-verification",
-          authorAgentId: null,
-          stagingPath: join(tempDir, "staging", "upgrade-test-plugin.md"),
-          livePath: join(tempDir, "plugins", "upgrade-test-plugin", "plugin.md"),
-          backupPath: null,
-          contentSha256: "deadbeef",
-          status: "verifying",
-          verificationId: null,
-          verificationSummary: null,
-          createdAt: now,
-          updatedAt: now,
-        });
-      });
-
-      migrated.close();
-      closed = true;
-
-      const rebooted = new StateDatabase(copyDbPath);
-      try {
-        const secondRec = rebooted.recoverAfterRestart();
-        expect(secondRec.resetSelfMods).toBe(1);
-        expect(rebooted.getSelfModProposal("smod_stuck_verifying")!.status).toBe("staged");
-      } finally {
-        rebooted.close();
-      }
-    } finally {
-      if (!closed) migrated.close();
-    }
-
-    // Confirm original C:\Users\willy\bot-factory\system\state.db* was NEVER mutated
-    const afterStat = statSync(realDbPath);
-    expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
-    expect(afterStat.size).toBe(beforeStat.size);
-    if (beforeWalStat) {
-      const afterWalStat = statSync(realWalPath);
-      expect(afterWalStat.mtimeMs).toBe(beforeWalStat.mtimeMs);
-      expect(afterWalStat.size).toBe(beforeWalStat.size);
-    }
-  });
-
-  it("deterministically migrates a self-contained v1 SQLite fixture through v2 to v3 while preserving rows and upgrading timestamps", () => {
+  it("deterministically migrates a self-contained v1 SQLite fixture through v2/v3 to v4 while preserving rows, upgrading timestamps, and recovering crashed self-mod verification", () => {
     const tempDir = makeTempRoot("bf-v1-fixture-");
     const v1DbPath = join(tempDir, "state.db");
     const nowMs = Date.now();
@@ -1401,14 +1284,14 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
       const postMeta = migrated.db.query("SELECT schema_version FROM runtime_meta WHERE id = 1").get() as {
         schema_version: number;
       };
-      expect(postMeta.schema_version).toBe(3);
+      expect(postMeta.schema_version).toBe(CURRENT_SCHEMA_VERSION);
 
       const tables = new Set(
         (migrated.db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(
           (r) => r.name,
         ),
       );
-      for (const reqTable of ["debates", "debate_messages", "verifications", "self_mod_proposals", "memory_embeddings"]) {
+      for (const reqTable of ["debates", "debate_messages", "verifications", "self_mod_proposals", "memory_embeddings", "team_goals"]) {
         expect(tables.has(reqTable)).toBe(true);
       }
 
@@ -1420,6 +1303,7 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
       expect(colsOf("agents").has("subagent_mode")).toBe(true);
       expect(colsOf("tasks").has("depends_on_json")).toBe(true);
       expect(colsOf("tasks").has("auto_retry_count")).toBe(true);
+      expect(colsOf("tasks").has("goal_id")).toBe(true);
       expect(colsOf("messages").has("sender_agent_id")).toBe(true);
       expect(colsOf("messages").has("sender_role")).toBe(true);
 
@@ -1442,8 +1326,36 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
 
       const liveCount = (migrated.db.query("SELECT COUNT(*) AS cnt FROM live_memory_facts").get() as { cnt: number }).cnt;
       expect(liveCount).toBe(2);
+
+      const now = Date.now();
+      migrated.upsertSelfModProposal({
+        id: "smod_stuck_verifying",
+        kind: "plugin",
+        targetId: "upgrade-test-plugin",
+        title: "Stuck Verifying Proposal",
+        rationale: "Simulate crash mid-verification",
+        authorAgentId: null,
+        stagingPath: join(tempDir, "staging", "upgrade-test-plugin.md"),
+        livePath: join(tempDir, "plugins", "upgrade-test-plugin", "plugin.md"),
+        backupPath: null,
+        contentSha256: "deadbeef",
+        status: "verifying",
+        verificationId: null,
+        verificationSummary: null,
+        createdAt: now,
+        updatedAt: now,
+      });
     } finally {
       migrated.close();
+    }
+
+    const rebooted = new StateDatabase(v1DbPath);
+    try {
+      const recovery = rebooted.recoverAfterRestart();
+      expect(recovery.resetSelfMods).toBe(1);
+      expect(rebooted.getSelfModProposal("smod_stuck_verifying")?.status).toBe("staged");
+    } finally {
+      rebooted.close();
     }
   });
 });

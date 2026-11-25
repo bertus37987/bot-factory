@@ -36,12 +36,12 @@ import {
   type ModelTargetSelection,
 } from "../components/PrecisionComposer";
 import type { ReasoningEffort } from "../components/ReasoningEffortSlider";
-import { SelfModPanel } from "../phase3/Phase3Panels";
+import { DebatesVerifierPanel, SelfModPanel } from "../phase3/Phase3Panels";
 import { CheckpointsMergePanel } from "../studio/CheckpointsMergePanel";
 import { BotChatStream } from "./BotChatStream";
 import { TodoBoardView, type TodoCreateInput } from "./TodoBoardView";
 
-export type BotsSubView = "chat_group" | "chat_single" | "board" | "checkpoints" | "selfmod";
+export type BotsSubView = "chat_group" | "chat_single" | "board" | "checkpoints" | "debates" | "selfmod";
 
 export interface BotsTabProps {
   isVisible: boolean;
@@ -641,6 +641,27 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
             onSelectBot={(agentId) => onSelectSubView("chat_single", agentId)}
             onOpenBrowserItem={onOpenBrowserItem}
           />
+        )}
+
+        {activeProject && activeSubView === "debates" && (
+          <div className="bots-workbench-pad">
+            <DebatesVerifierPanel
+              projectId={activeProject.id}
+              agents={projectAgents}
+              debates={debates}
+              debateMessages={debateMessagesByDebate}
+              verifications={verifications}
+              onOpenDebate={async (params) => {
+                await onSendCommand({ type: "debate.open", ...params });
+              }}
+              onPostDebate={async (params) => {
+                await onSendCommand({ type: "debate.post", ...params });
+              }}
+              onResolveDebate={async (params) => {
+                await onSendCommand({ type: "debate.resolve", ...params });
+              }}
+            />
+          </div>
         )}
 
         {activeSubView === "checkpoints" && (

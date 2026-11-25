@@ -22,7 +22,7 @@ import {
   type RepoFileEntry,
 } from "@bot-factory/shared";
 import type { StateDatabase } from "../db/database";
-import { isPathStrictlyWithinRoot } from "../runtimes/nativeHttpRuntime";
+import { canonicalRelativePathWithinRoot, isPathStrictlyWithinRoot } from "../runtimes/nativeHttpRuntime";
 
 // --- Low-level git runners ---
 
@@ -1515,7 +1515,7 @@ export function readSafeRepoFile(
   if (!check.ok) {
     throw new Error("path_traversal_blocked");
   }
-  const posixRel = relative(resolve(targetRoot), check.absTarget).split(sep).join("/");
+  const posixRel = canonicalRelativePathWithinRoot(targetRoot, check.absTarget);
   if (posixRel && isSensitiveRepoRelPath(posixRel)) {
     throw new Error("sensitive_path_blocked");
   }

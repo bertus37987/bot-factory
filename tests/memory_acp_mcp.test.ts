@@ -109,6 +109,13 @@ describe("1. Hermes Frozen System-Prompt Invariant & CWD-free Prefix Ordering", 
     expect(() => memory.writeL1File(targetFile, "x".repeat(51), 50)).toThrow("l1_capacity_exceeded");
     const saved = memory.writeL1File(targetFile, "x".repeat(50), 50);
     expect(saved).toEqual({ usedChars: 50, maxChars: 50 });
+    expect(readFileSync(targetFile, "utf8")).toHaveLength(50);
+
+    writeFileSync(targetFile, "y".repeat(80), "utf8");
+    const clamped = memory.readL1File(targetFile, 50);
+    expect(clamped.content).toHaveLength(50);
+    expect(clamped.usedChars).toBe(80);
+    expect(clamped.gaugeHeader).toContain("truncated");
   });
 });
 

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   newId,
   type GitDiffFileSummary,
@@ -17,7 +17,7 @@ import { computeWorkspaceGitDiff } from "../git/worktrees";
 import type { LocalSuperHermesMemory } from "../memory/memoryEngine";
 import type { AcpSubprocessRuntime } from "../runtimes/acpSubprocessRuntime";
 import type { CliStreamRuntime } from "../runtimes/cliStreamRuntime";
-import { isPathStrictlyWithinRoot } from "../runtimes/nativeHttpRuntime";
+import { canonicalRelativePathWithinRoot, isPathStrictlyWithinRoot } from "../runtimes/nativeHttpRuntime";
 import type { NativeHttpRuntime } from "../runtimes/nativeHttpRuntime";
 import type { ModelRouter } from "../runtimes/router";
 import type { AgentRuntime, ResolvedRoute, RuntimeSessionHandle, RuntimeSessionSpec } from "../runtimes/types";
@@ -647,7 +647,7 @@ export class IndependentVerifier {
         content: "",
       };
     }
-    const relFromRoot = relative(resolve(projectRoot), inside.absTarget).replace(/\\/g, "/");
+    const relFromRoot = canonicalRelativePathWithinRoot(projectRoot, inside.absTarget);
     const topDir = relFromRoot.split("/")[0] ?? "";
     if (topDir !== "handoffs") {
       return {
@@ -719,7 +719,7 @@ export class IndependentVerifier {
     for (const relPath of candidates) {
       const inside = isPathStrictlyWithinRoot(project.rootPath, relPath);
       if (!inside.ok) continue;
-      const relFromRoot = relative(resolve(project.rootPath), inside.absTarget).replace(/\\/g, "/");
+      const relFromRoot = canonicalRelativePathWithinRoot(project.rootPath, inside.absTarget);
       if (!relFromRoot.startsWith("plans/") && !relFromRoot.startsWith("handoffs/")) continue;
       if (relFromRoot === handoffRelNorm || relFromRoot === handoffJsonNorm) continue;
       try {

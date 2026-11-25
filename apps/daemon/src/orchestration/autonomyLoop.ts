@@ -157,13 +157,68 @@ export class AutonomyLoop {
     private readonly core: CommandCore,
     private readonly scrubber: SecretScrubber,
     private readonly callbacks: AutonomyLoopCallbacks,
-  ) {}
+  ) {
+    this.rehydrateFromDatabase();
+  }
+
+  private rehydrateFromDatabase(): void {
+    const tasks = this.db.listTasks();
+    for (const stored of this.db.listTeamGoals()) {
+      const taskIds = tasks.filter((t) => t.goalId === stored.goalId).map((t) => t.id);
+      const ctx: GoalContext = {
+        goalId: stored.goalId,
+        projectId: stored.projectId,
+        goal: stored.goal,
+        status: stored.status,
+        autonomyLevel: stored.autonomyLevel as AutonomyLevel | undefined,
+        reasoningEffort: stored.reasoningEffort as ReasoningEffort | undefined,
+        taskIds,
+        reported: stored.reported,
+        createdAt: stored.createdAt,
+        updatedAt: stored.updatedAt,
+      };
+      this.goals.set(ctx.goalId, ctx);
+      for (const taskId of taskIds) this.autonomousTaskIds.add(taskId);
+      if (ctx.status === "active") {
+        const existingId = this.activeGoalByProject.get(ctx.projectId);
+        const existing = existingId ? this.goals.get(existingId) : null;
+        if (!existing || ctx.updatedAt >= existing.updatedAt) {
+          this.activeGoalByProject.set(ctx.projectId, ctx.goalId);
+        }
+      }
+    }
+  }
+
+  public persistGoalWithinTransaction(goal: GoalContext, taskIdsToLink: string[] = []): void {
+    this.db.upsertTeamGoal({
+      goalId: goal.goalId,
+      projectId: goal.projectId,
+      goal: goal.goal,
+      status: goal.status,
+      autonomyLevel: goal.autonomyLevel ?? null,
+      reasoningEffort: goal.reasoningEffort ?? null,
+      reported: goal.reported,
+      createdAt: goal.createdAt,
+      updatedAt: goal.updatedAt,
+    });
+    for (const taskId of taskIdsToLink) {
+      const task = this.db.getTask(taskId);
+      if (task && task.goalId !== goal.goalId) {
+        this.db.upsertTask({ ...task, goalId: goal.goalId });
+      }
+    }
+  }
+
+  private persistGoal(goal: GoalContext, taskIdsToLink: string[] = []): void {
+    this.db.runAtomicWrite(() => this.persistGoalWithinTransaction(goal, taskIdsToLink));
+  }
 
   public startGoal(params: {
     projectId: string;
     goal: string;
     autonomyLevel?: AutonomyLevel;
     reasoningEffort?: ReasoningEffort;
+    deferPersistence?: boolean;
   }): GoalContext {
     const now = Date.now();
     const goalId = newId("goal");
@@ -181,6 +236,9 @@ export class AutonomyLoop {
     };
     this.goals.set(goalId, ctx);
     this.activeGoalByProject.set(params.projectId, goalId);
+    if (!params.deferPersistence) {
+      this.persistGoal(ctx);
+    }
     return ctx;
   }
 
@@ -215,7 +273,7 @@ export class AutonomyLoop {
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  public attachTasks(projectId: string, taskIds: string[], goalId?: string): GoalContext | null {
+  public attachTasks(projectId: string, taskIds: string[], goalId?: string, withinTransaction = false): GoalContext | null {
     for (const tid of taskIds) {
       this.autonomousTaskIds.add(tid);
     }
@@ -231,6 +289,11 @@ export class AutonomyLoop {
     goal.reported = false;
     goal.status = "active";
     goal.updatedAt = Date.now();
+    if (withinTransaction) {
+      this.persistGoalWithinTransaction(goal, taskIds);
+    } else {
+      this.persistGoal(goal, taskIds);
+    }
     return goal;
   }
 
@@ -241,12 +304,29 @@ export class AutonomyLoop {
       if (active && !active.taskIds.includes(taskId)) {
         active.taskIds.push(taskId);
         active.updatedAt = Date.now();
+        this.persistGoal(active, [taskId]);
       }
     }
   }
 
   public isAutonomousTask(taskId: string): boolean {
     return this.autonomousTaskIds.has(taskId);
+  }
+
+  public resumePersistedGoals(): number {
+    let dispatched = 0;
+    const activeProjectIds = new Set<string>();
+    for (const goal of this.goals.values()) {
+      if (goal.status === "active") activeProjectIds.add(goal.projectId);
+    }
+    for (const projectId of activeProjectIds) {
+      try {
+        dispatched += this.dispatchUnblockedTasks(projectId);
+      } catch {
+        // Restart recovery must never prevent daemon boot.
+      }
+    }
+    return dispatched;
   }
 
   public markGoalReported(projectId: string, status: "milestone" | "completed" | "blocked", goalId?: string): GoalContext | null {
@@ -263,6 +343,7 @@ export class AutonomyLoop {
       goal.reported = true;
     }
     goal.updatedAt = Date.now();
+    this.persistGoal(goal);
     return goal;
   }
 
@@ -322,6 +403,7 @@ export class AutonomyLoop {
     if (goal) {
       goal.status = "blocked";
       goal.updatedAt = Date.now();
+      this.persistGoal(goal);
       this.dispatchUnblockedTasks(projectId, goal.goalId);
       this.enqueuePmGoalCheck(projectId, goal.goalId, "task_blocked", task.id, [errorMsg]);
     }
@@ -356,6 +438,7 @@ export class AutonomyLoop {
       if (goal) {
         goal.status = "blocked";
         goal.updatedAt = Date.now();
+        this.persistGoal(goal);
         this.dispatchUnblockedTasks(projectId, goal.goalId);
         this.enqueuePmGoalCheck(projectId, goal.goalId, "task_blocked", task.id, report.findings);
       }
@@ -536,6 +619,7 @@ export class AutonomyLoop {
 
     goal.status = "completed";
     goal.updatedAt = Date.now();
+    this.persistGoal(goal);
     if (!goal.reported) {
       this.enqueuePmGoalCheck(projectId, goal.goalId, "all_verified");
     }

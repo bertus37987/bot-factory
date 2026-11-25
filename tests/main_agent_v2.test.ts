@@ -136,7 +136,7 @@ afterEach(() => {
 });
 
 describe("Main Agent V2 Backend — Migration, Bot Model/Message, Tools, Delegation & Artifact PUT", () => {
-  it("migrates schema v2 -> v3 idempotently while preserving rows, hydrates senderAgentId/senderRole, and updates agent models atomically", () => {
+  it("migrates schema v2 -> v4 idempotently while preserving rows, hydrates senderAgentId/senderRole, and updates agent models atomically", () => {
     const dir = makeTempRoot("bf-v2-db-");
     const dbPath = join(dir, "state.db");
     const now = Date.now();
@@ -245,20 +245,24 @@ describe("Main Agent V2 Backend — Migration, Bot Model/Message, Tools, Delegat
       .run(now);
     rawDb.close();
 
-    expect(CURRENT_SCHEMA_VERSION).toBe(3);
+    expect(CURRENT_SCHEMA_VERSION).toBe(4);
 
     const migrated = new StateDatabase(dbPath);
     try {
       const metaRow = migrated.db.query("SELECT schema_version FROM runtime_meta WHERE id = 1").get() as {
         schema_version: number;
       };
-      expect(metaRow.schema_version).toBe(3);
+      expect(metaRow.schema_version).toBe(CURRENT_SCHEMA_VERSION);
 
       const cols = (migrated.db.query("PRAGMA table_info(messages)").all() as Array<{ name: string }>).map(
         (c) => c.name,
       );
       expect(cols).toContain("sender_agent_id");
       expect(cols).toContain("sender_role");
+      const taskCols = (migrated.db.query("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name);
+      expect(taskCols).toContain("goal_id");
+      const tables = (migrated.db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((r) => r.name);
+      expect(tables).toContain("team_goals");
 
       // Legacy v2 message row must be preserved intact
       const legacy = migrated.getMessage("msg_v2_legacy");
@@ -315,7 +319,7 @@ describe("Main Agent V2 Backend — Migration, Bot Model/Message, Tools, Delegat
       const meta2 = reopened.db.query("SELECT schema_version FROM runtime_meta WHERE id = 1").get() as {
         schema_version: number;
       };
-      expect(meta2.schema_version).toBe(3);
+      expect(meta2.schema_version).toBe(CURRENT_SCHEMA_VERSION);
       expect(reopened.getMessage("msg_v2_legacy")?.content).toBe("Preserved v2 message content");
       expect(reopened.getMessage("msg_v3_orch")?.senderRole).toBe("orchestrator");
     } finally {

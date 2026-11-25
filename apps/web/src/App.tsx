@@ -18,6 +18,7 @@ import {
   Search,
   Settings,
   Sun,
+  Users,
   WifiOff,
   X,
 } from "lucide-react";
@@ -1315,6 +1316,15 @@ export function App() {
                     <Kanban size={14} strokeWidth={1.6} />
                     <span className="drawer-item-label">Task Board</span>
                     <span className="mono-tag">{activeTasks.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`drawer-item ${botsSubView === "debates" ? "active" : ""}`}
+                    onClick={() => setBotsSubView("debates")}
+                  >
+                    <Users size={14} strokeWidth={1.6} />
+                    <span className="drawer-item-label">Debates &amp; Verifier</span>
+                    <span className="mono-tag">{activeDebates.length}</span>
                   </button>
                   <button
                     type="button"

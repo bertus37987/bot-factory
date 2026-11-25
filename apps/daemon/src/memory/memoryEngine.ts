@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { HubConfig, MemoryFactRecord, MemoryKind } from "@bot-factory/shared";
 import { SecretScrubber } from "../config";
@@ -94,8 +94,8 @@ export interface MemoryProvider {
   isAvailable(): boolean;
   buildFrozenSystemPrompt(input: FrozenPromptInput): { systemPrompt: string; hash: string };
   getProfile(namespace: string): MemoryProfile;
-  queuePrefetch(namespace: string, queryHint: string): void;
-  prefetch(namespace: string): string;
+  queuePrefetch(namespace: string, queryHint: string, scopeKey?: string): void;
+  prefetch(namespace: string, scopeKey?: string): string;
   readL1File(filePath: string, maxChars: number): { content: string; usedChars: number; maxChars: number; gaugeHeader: string };
   writeL1File(filePath: string, content: string, maxChars: number): { usedChars: number; maxChars: number };
   ingestDocument(params: { docId: string; namespace: string; content: string; metadata?: Record<string, unknown>; instant?: boolean }): Promise<void>;
@@ -171,14 +171,16 @@ export class LocalSuperHermesMemory implements MemoryProvider {
   }
 
   public readL1File(filePath: string, maxChars: number): { content: string; usedChars: number; maxChars: number; gaugeHeader: string } {
-    const content = existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
-    const usedChars = content.length;
+    const raw = existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
+    const usedChars = raw.length;
+    const truncated = usedChars > maxChars;
+    const content = truncated ? raw.slice(0, maxChars) : raw;
     const pct = Math.min(100, Math.round((usedChars / maxChars) * 100));
     return {
       content,
       usedChars,
       maxChars,
-      gaugeHeader: `[${pct}% — ${usedChars}/${maxChars} chars]`,
+      gaugeHeader: `[${pct}% — ${Math.min(usedChars, maxChars)}/${maxChars} chars${truncated ? " — truncated" : ""}]`,
     };
   }
 
@@ -188,7 +190,18 @@ export class LocalSuperHermesMemory implements MemoryProvider {
       throw new Error(`l1_capacity_exceeded: ${clean.length}/${maxChars} chars in ${filePath}. Consolidate before saving.`);
     }
     mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, clean, "utf8");
+    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      writeFileSync(tmpPath, clean, "utf8");
+      renameSync(tmpPath, filePath);
+    } catch (err) {
+      try {
+        rmSync(tmpPath, { force: true });
+      } catch {
+        // best-effort temp cleanup
+      }
+      throw err;
+    }
     return { usedChars: clean.length, maxChars };
   }
 
@@ -267,16 +280,20 @@ export class LocalSuperHermesMemory implements MemoryProvider {
     return { namespace, staticFacts, dynamicFacts };
   }
 
-  public queuePrefetch(namespace: string, queryHint: string): void {
+  private prefetchCacheKey(namespace: string, scopeKey?: string): string {
+    return `${namespace}\u001f${scopeKey ?? "shared"}`;
+  }
+
+  public queuePrefetch(namespace: string, queryHint: string, scopeKey?: string): void {
     queueMicrotask(() => {
-      void this.recallForTurn(namespace, queryHint, 6).catch(() => {
+      void this.recallForTurn(namespace, queryHint, 6, scopeKey).catch(() => {
         // Fail-open invariant: memory prefetch must never break a turn
       });
     });
   }
 
-  public prefetch(namespace: string): string {
-    return this.prefetchCache.get(namespace) ?? "";
+  public prefetch(namespace: string, scopeKey?: string): string {
+    return this.prefetchCache.get(this.prefetchCacheKey(namespace, scopeKey)) ?? "";
   }
 
   public async ingestDocument(params: {
@@ -585,11 +602,12 @@ export class LocalSuperHermesMemory implements MemoryProvider {
     return { facts, relatedFacts, messages, usedEmbeddings };
   }
 
-  public async recallForTurn(namespace: string, query: string, limit = 6): Promise<string> {
+  public async recallForTurn(namespace: string, query: string, limit = 6, scopeKey?: string): Promise<string> {
+    const cacheKey = this.prefetchCacheKey(namespace, scopeKey);
     try {
       const cleanQuery = this.scrubber.scrub(query).trim();
       if (!cleanQuery) {
-        this.prefetchCache.delete(namespace);
+        this.prefetchCache.delete(cacheKey);
         return "";
       }
       const res = await this.hybridSearch(namespace, cleanQuery, limit);
@@ -608,14 +626,14 @@ export class LocalSuperHermesMemory implements MemoryProvider {
       }
 
       if (lines.length === 0) {
-        this.prefetchCache.delete(namespace);
+        this.prefetchCache.delete(cacheKey);
         return "";
       }
 
       const block = this.scrubber.scrub(
         `<ephemeral_memory_recall namespace="${namespace}">\n${lines.join("\n")}\n</ephemeral_memory_recall>`,
       );
-      this.prefetchCache.set(namespace, block);
+      this.prefetchCache.set(cacheKey, block);
       return block;
     } catch {
       return "";

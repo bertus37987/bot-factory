@@ -794,6 +794,7 @@ export function createMainManagerToolExecutor(ctx: MainManagerToolContext): Tool
           goal: cleanGoal,
           autonomyLevel,
           reasoningEffort,
+          deferPersistence: true,
         });
 
         const now = Date.now();
@@ -839,6 +840,7 @@ export function createMainManagerToolExecutor(ctx: MainManagerToolContext): Tool
         ctx.core.commitCommand(newId("cmd"), "team.delegate", () => ({
           result: { ok: true, goalId: goalCtx.goalId, projectId: project.id, pmAgentId: pm.id, status: goalCtx.status },
           applyProjections: () => {
+            ctx.autonomyLoop.persistGoalWithinTransaction(goalCtx);
             if (pmTimelineItem) ctx.db.appendMessage(pmTimelineItem);
             ctx.db.updateAgentStatus(pm.id, "working", {
               lastSummary: `Planning goal: ${cleanGoal.slice(0, 60)}`,
@@ -1274,6 +1276,12 @@ export function createTeamLeadToolExecutor(ctx: TeamLeadToolContext): ToolCallEx
             for (const task of createdTasks) {
               ctx.db.upsertTask(task);
             }
+            ctx.autonomyLoop.attachTasks(
+              project.id,
+              createdTasks.map((t) => t.id),
+              undefined,
+              true,
+            );
           },
           events: [
             ...createdTasks.map((task) => ({
@@ -1289,11 +1297,6 @@ export function createTeamLeadToolExecutor(ctx: TeamLeadToolContext): ToolCallEx
           ],
           effects: [],
         }));
-
-        ctx.autonomyLoop.attachTasks(
-          project.id,
-          createdTasks.map((t) => t.id),
-        );
 
         return {
           tasks: createdTasks,

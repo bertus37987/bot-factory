@@ -806,6 +806,104 @@ describe("Wave 2 Harness & Multi-Agent Upgrades", () => {
     expect(dispatchedTasks).toContain(taskCId);
   });
 
+  it("persists and rehydrates autonomous goal DAG state across database restarts", () => {
+    const rootDir = makeTempDir();
+    const dbPath = join(rootDir, "state.db");
+    const cfg = makeBaseTestConfig(rootDir);
+    const scrubber = new SecretScrubber({});
+    const now = Date.now();
+    const projectId = newId("prj");
+    const taskAId = newId("tsk");
+    const taskBId = newId("tsk");
+
+    const makeLoop = (db: StateDatabase) =>
+      new AutonomyLoop(db, new CommandCore(db, 1), scrubber, {
+        getConfig: () => cfg,
+        getQuietStatusProjection: () => ({
+          activeProjects: 0,
+          runningBots: 0,
+          waitingReviews: 0,
+          openAnnotations: 0,
+          activeDebates: 0,
+          stagedSelfMods: 0,
+          inboxNotices: [],
+        }),
+        getProjectBoardSnapshot: () => ({}),
+        spawnPeerBot: () => {
+          throw new Error("not_needed");
+        },
+        dispatchTask: () => {},
+        runAgentTurn: async () => ({ ok: true, text: "ok" }),
+        onGoalReportFallback: async () => {},
+      });
+
+    const firstDb = new StateDatabase(dbPath);
+    let goalId = "";
+    try {
+      firstDb.insertProject({
+        id: projectId,
+        name: "Restart DAG Lab",
+        slug: "restart-dag-lab",
+        rootPath: rootDir,
+        repoPath: rootDir,
+        routingOverrides: {},
+        verifyChecks: [],
+        status: "active",
+        createdAt: now,
+      });
+      for (const [id, title, deps] of [
+        [taskAId, "Restart root", []],
+        [taskBId, "Restart dependent", [taskAId]],
+      ] as Array<[string, string, string[]]>) {
+        firstDb.upsertTask({
+          id,
+          projectId,
+          parentTaskId: null,
+          title,
+          specMd: `${title} spec`,
+          status: "ready",
+          priority: 1,
+          assignedAgentId: null,
+          sourceAnnotationId: null,
+          worktreeBranch: null,
+          handoffPath: null,
+          retryCount: 0,
+          dependsOn: deps,
+          autoRetryCount: 0,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      const firstLoop = makeLoop(firstDb);
+      const goal = firstLoop.startGoal({ projectId, goal: "Survive restart", autonomyLevel: "high" });
+      goalId = goal.goalId;
+      firstLoop.attachTasks(projectId, [taskAId, taskBId], goal.goalId);
+      expect(firstDb.getTask(taskAId)?.goalId).toBe(goalId);
+      expect(firstDb.getTask(taskBId)?.goalId).toBe(goalId);
+    } finally {
+      firstDb.close();
+    }
+
+    const restartedDb = new StateDatabase(dbPath);
+    try {
+      const restartedLoop = makeLoop(restartedDb);
+      const goals = restartedLoop.listGoals(projectId);
+      expect(goals).toHaveLength(1);
+      expect(goals[0]).toMatchObject({
+        goalId,
+        projectId,
+        goal: "Survive restart",
+        status: "active",
+      });
+      expect(goals[0]?.taskIds).toEqual(expect.arrayContaining([taskAId, taskBId]));
+      expect(restartedLoop.isAutonomousTask(taskAId)).toBe(true);
+      expect(restartedLoop.isAutonomousTask(taskBId)).toBe(true);
+      expect(restartedLoop.getActiveGoalForProject(projectId)?.goalId).toBe(goalId);
+    } finally {
+      restartedDb.close();
+    }
+  });
+
   it("enforces symlink & path-escape rejection in extractAndApplySubagentPatch, returns typed SubagentResultEnvelope, and honors 60s MCP wait default", async () => {
     // 1. mcpBridge default 60s wait timeout
     expect(DEFAULT_SUBAGENT_WAIT_MS).toBe(60_000);

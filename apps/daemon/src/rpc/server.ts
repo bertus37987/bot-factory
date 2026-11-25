@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import type { Server, ServerWebSocket } from "bun";
 import {
   RpcCommandSchema,
@@ -21,7 +21,7 @@ import type { StateDatabase } from "../db/database";
 import { computeWorkspaceGitDiff, listSafeRepoFiles, readSafeRepoFile } from "../git/worktrees";
 import type { L1TargetName, L1TargetSnapshot, LocalSuperHermesMemory } from "../memory/memoryEngine";
 import type { OrchestrationEngine } from "../orchestration/engine";
-import { isPathStrictlyWithinRoot } from "../runtimes/nativeHttpRuntime";
+import { canonicalRelativePathWithinRoot, isPathStrictlyWithinRoot } from "../runtimes/nativeHttpRuntime";
 
 interface WsClientData {
   id: string;
@@ -139,7 +139,10 @@ export function resolveSafeProjectFile(projectRoot: string, relPath: string): st
   if (!check.ok) {
     throw new Error("path_traversal_blocked");
   }
-  const normalizedRel = relative(resolve(projectRoot), check.absTarget).replace(/\\/g, "/");
+  // Scope by the caller's logical artifact path, not the canonical filesystem path:
+  // on macOS /var is a symlink to /private/var, so relative(resolve(projectRoot), absTarget)
+  // can incorrectly escape the logical root even when containment passed.
+  const normalizedRel = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
   const topDir = normalizedRel.split("/")[0] ?? "";
   if (!ALLOWED_ARTIFACT_TOP_DIRS.has(topDir)) {
     throw new Error("artifact_scope_restricted");
@@ -601,7 +604,7 @@ export class DaemonServer {
           try {
             writeArtifactAtomically(abs, payloadBuf);
             const st = statSync(abs);
-            const relativePath = relative(resolve(project.rootPath), abs).replace(/\\/g, "/");
+            const relativePath = canonicalRelativePathWithinRoot(project.rootPath, abs);
             const updatedAt = Math.floor(st.mtimeMs) || Date.now();
             this.core.emitDirectEvent(`project:${project.id}:previews`, "artifact.updated", {
               projectId: project.id,
@@ -720,8 +723,10 @@ export class DaemonServer {
       throw new Error("project_root_required_for_project_l1");
     }
     const filePath = join(baseDir, spec.file);
-    const content = this.scrubber.scrub(existsSync(filePath) ? readFileSync(filePath, "utf8") : "");
-    const usedChars = content.length;
+    const raw = this.scrubber.scrub(existsSync(filePath) ? readFileSync(filePath, "utf8") : "");
+    const usedChars = raw.length;
+    const truncated = usedChars > spec.maxChars;
+    const content = truncated ? raw.slice(0, spec.maxChars) : raw;
     const pct = Math.min(100, Math.round((usedChars / spec.maxChars) * 100));
     return {
       target,
@@ -729,7 +734,7 @@ export class DaemonServer {
       content,
       usedChars,
       maxChars: spec.maxChars,
-      gaugeHeader: `[${pct}% — ${usedChars}/${spec.maxChars} chars]`,
+      gaugeHeader: `[${pct}% — ${Math.min(usedChars, spec.maxChars)}/${spec.maxChars} chars${truncated ? " — truncated" : ""}]`,
     };
   }
 

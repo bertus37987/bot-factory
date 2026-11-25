@@ -291,6 +291,7 @@ export interface TaskRecord {
   id: string;
   projectId: string;
   parentTaskId: string | null;
+  goalId?: string | null;
   title: string;
   specMd: string;
   status: TaskStatus;
