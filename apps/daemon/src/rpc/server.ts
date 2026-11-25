@@ -139,11 +139,11 @@ export function resolveSafeProjectFile(projectRoot: string, relPath: string): st
   if (!check.ok) {
     throw new Error("path_traversal_blocked");
   }
-  // Scope by the caller's logical artifact path, not the canonical filesystem path:
-  // on macOS /var is a symlink to /private/var, so relative(resolve(projectRoot), absTarget)
-  // can incorrectly escape the logical root even when containment passed.
-  const normalizedRel = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
-  const topDir = normalizedRel.split("/")[0] ?? "";
+  // Scope by the canonical resolved artifact path. The caller-controlled spelling may
+  // contain ../ segments, so using its first segment would allow paths such as
+  // plans/../config.json to inherit the plans/ scope after containment succeeds.
+  const canonicalRel = canonicalRelativePathWithinRoot(projectRoot, check.absTarget).replace(/\\/g, "/").replace(/^\/+/, "");
+  const topDir = canonicalRel.split("/")[0] ?? "";
   if (!ALLOWED_ARTIFACT_TOP_DIRS.has(topDir)) {
     throw new Error("artifact_scope_restricted");
   }
@@ -725,8 +725,9 @@ export class DaemonServer {
     const filePath = join(baseDir, spec.file);
     const raw = this.scrubber.scrub(existsSync(filePath) ? readFileSync(filePath, "utf8") : "");
     const usedChars = raw.length;
-    const truncated = usedChars > spec.maxChars;
-    const content = truncated ? raw.slice(0, spec.maxChars) : raw;
+    const readCap = Math.max(spec.maxChars, 64 * 1024);
+    const truncated = usedChars > readCap;
+    const content = truncated ? raw.slice(0, readCap) : raw;
     const pct = Math.min(100, Math.round((usedChars / spec.maxChars) * 100));
     return {
       target,
@@ -734,6 +735,7 @@ export class DaemonServer {
       content,
       usedChars,
       maxChars: spec.maxChars,
+      truncated,
       gaugeHeader: `[${pct}% — ${Math.min(usedChars, spec.maxChars)}/${spec.maxChars} chars${truncated ? " — truncated" : ""}]`,
     };
   }

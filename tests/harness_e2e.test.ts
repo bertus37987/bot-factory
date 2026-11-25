@@ -126,6 +126,8 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
     expect(() => resolveSafeProjectFile(created.project.rootPath, "../../system/secrets.env")).toThrow("path_traversal_blocked");
     expect(() => resolveSafeProjectFile(created.project.rootPath, "\\\\localhost\\c$\\Users\\secret.txt")).toThrow("path_traversal_blocked");
     expect(() => resolveSafeProjectFile(created.project.rootPath, "repo/.git/config")).toThrow("artifact_scope_restricted");
+    expect(() => resolveSafeProjectFile(created.project.rootPath, "plans/../config.json")).toThrow("artifact_scope_restricted");
+    expect(() => resolveSafeProjectFile(created.project.rootPath, "plans/../package.json")).toThrow("artifact_scope_restricted");
     expect(() => resolveSafeWorktreePath(created.project.repoPath, "\\\\localhost\\c$\\secret.txt")).toThrow("worktree_boundary_violation");
     const uncPerm = resolveAcpPermission(
       {
