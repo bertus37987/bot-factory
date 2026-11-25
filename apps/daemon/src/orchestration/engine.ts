@@ -1947,6 +1947,23 @@ export class OrchestrationEngine {
       handle = undefined;
     }
 
+    // A runtime session owns its provider/model at startup. If the operator
+    // changed the agent model while a turn was active, retire the stale cached
+    // session before the next idle turn rather than silently continuing on the
+    // old model.
+    if (
+      handle &&
+      handle.provider !== undefined &&
+      handle.model !== undefined &&
+      (handle.provider !== agent.provider || handle.model !== agent.model)
+    ) {
+      const staleHandle = handle;
+      this.sessionHandles.delete(session.id);
+      this.revokeMcpTokensForAgent(agent.id);
+      handle = undefined;
+      await this.getRuntime(staleHandle.runtimeKind).closeSession(staleHandle).catch(() => {});
+    }
+
     let finalText = "";
     let thoughtText = "";
     let runtimeError: string | null = null;

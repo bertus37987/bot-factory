@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from playwright.sync_api import expect, sync_playwright
@@ -10,11 +11,189 @@ def require_env(name: str) -> str:
     return val
 
 
+def capture_studio(page, name):
+    if directory := os.environ.get("BF_UI_CAPTURE_DIR"):
+        page.screenshot(path=os.path.join(directory, f"{name}.png"), animations="disabled")
+
+
+def open_bot_controls(scope):
+    scope.locator(".bot-control-tab").click()
+
+
+def check_team_inbox(page, sidebar, theme_toggle, capture_dir, steer_outbox, held_acks):
+    bots = page.locator(".bots-center-shell")
+    close_panel = page.locator(".drawer-close-btn")
+    team = page.get_by_role("button", name="Switch team:")
+    composer = bots.locator("textarea.pc-input")
+    first = "Playwright Smoke Project"
+    second = "Studio Research"
+
+    page.get_by_role("button", name="Engineering Teams").click()
+    sidebar.get_by_role("button", name="Group Chat").click()
+    expect(bots.locator(".bots-compose-destination")).to_contain_text(first)
+
+    # Truthful team seats: five members render three portraits + a compact overflow seat.
+    for bot_name in ("Vega", "Nox", "Iris"):
+        open_bot_controls(bots)
+        bots.locator('button[title="Spawn a new project bot"]').click()
+        spawn_dialog = page.get_by_role("dialog", name="Spawn Project Bot")
+        spawn_dialog.get_by_placeholder("e.g. Forge-2").fill(bot_name)
+        spawn_dialog.get_by_role("button", name="Spawn Bot").click()
+        expect(spawn_dialog).to_have_count(0)
+    sidebar.get_by_role("button", name="Group Chat").click()
+    first_cluster = sidebar.locator(".bot-roster-row.active .bf-group-cluster")
+    expect(first_cluster).to_have_attribute("aria-label", "Bot team (5)")
+    expect(first_cluster.locator(".bf-group-overflow-cell")).to_have_text("+2")
+    expect(first_cluster.locator(".bf-group-empty-cell")).to_have_count(0)
+
+    composer.fill("Draft for the build team")
+    close_panel.click()
+    expect(sidebar).to_have_count(0)
+    team.press("Enter")
+    search = page.get_by_role("combobox", name="Find a team")
+    expect(search).to_be_focused()
+    search.press("Escape")
+    expect(team).to_be_focused()
+
+    page.get_by_role("button", name="Engineering Teams").click()
+    sidebar.get_by_role("button", name="Project", exact=True).click()
+    modal = page.get_by_role("dialog", name="Create Project Workspace")
+    modal.get_by_placeholder("e.g. Payments API").fill(second)
+    modal.get_by_role("button", name="Create Project").click()
+    expect(modal).to_have_count(0)
+    expect(team).to_contain_text(second)
+    expect(composer).to_have_value("")
+    second_cluster = sidebar.locator(".bot-roster-row.active .bf-group-cluster")
+    expect(second_cluster).to_have_attribute("aria-label", "Bot team (1)")
+    expect(second_cluster.locator(".bf-group-overflow-cell")).to_have_count(0)
+    expect(second_cluster.locator(".bf-group-empty-cell")).to_have_count(0)
+    expect(second_cluster.locator(".bear-avatar-wrap")).to_have_count(1)
+    expect(sidebar).not_to_contain_text("Atlas")
+    open_bot_controls(bots)
+    expect(bots.get_by_label("Bot control target").locator("option")).to_have_count(1)
+    composer.fill("Draft for the research team")
+
+    team.click()
+    search.press("ArrowUp")
+    search.press("Enter")
+    expect(team).to_be_focused()
+    expect(team).to_contain_text(first)
+    expect(composer).to_have_value("Draft for the build team")
+    expect(sidebar).to_contain_text("Atlas")
+    expect(bots.get_by_label("Bot control target").locator("option", has_text="Atlas")).to_have_count(1)
+    bots.get_by_label("Bot control target").select_option(label="Atlas (idle)")
+    sidebar.get_by_role("button", name="Task Board").click()
+    expect(bots.locator(".todo-board-row", has_text="Playwright V2 Animated Todo")).to_be_visible()
+
+    team.click()
+    search.fill("research")
+    search.press("Enter")
+    expect(composer).to_have_value("Draft for the research team")
+    expect(bots.get_by_label("Bot control target").locator("option", has_text="Atlas")).to_have_count(0)
+    sidebar.get_by_role("button", name="Task Board").click()
+    expect(bots.locator(".todo-board-row", has_text="Playwright V2 Animated Todo")).to_have_count(0)
+    sidebar.get_by_role("button", name="Group Chat").click()
+    assert not steer_outbox, "Team changes must not dispatch a steer"
+    composer.fill("Sentinel failed steer")
+    composer.press("Enter")
+    expect(bots.get_by_text("Simulated send rejection")).to_be_visible()
+    expect(composer).to_have_value("Sentinel failed steer")
+    assert len(steer_outbox) == 1
+
+    bots.get_by_role("button", name="ui-mockup.svg").click()
+    page.locator(".iab-image-toolbar").get_by_role("button", name="Add to Studio Research team").click()
+    chips = bots.get_by_test_id("pc-attachments")
+    expect(chips).to_contain_text("ui-mockup.svg")
+    page.get_by_role("button", name="Close browser").click()
+
+    composer.fill("Which findings should we include in the release brief?")
+    composer.press("Enter")
+    expect(bots.locator(".bcs-bubble.human")).to_contain_text("release brief")
+    expect(bots.get_by_role("status").filter(has_text="Sending...")).to_be_visible()
+    team.click()
+    search.fill("playwright")
+    search.press("Enter")
+    expect(composer).to_have_value("Draft for the build team")
+    expect(chips).to_have_count(0)
+    assert len(held_acks) == 1
+    socket, ack = held_acks.pop()
+    socket.send(ack)
+    team.click()
+    search.fill("research")
+    search.press("Enter")
+    expect(composer).to_have_value("")
+    expect(chips).to_have_count(0)
+    expect(bots.locator(".bcs-bubble.bot").first).to_be_visible()
+    trace = bots.locator(".bcs-trace-head").first
+    expect(trace).to_be_visible()
+    trace.click()
+    expect(trace).to_have_attribute("aria-expanded", "true")
+    trace.click()
+    expect(trace).to_have_attribute("aria-expanded", "false")
+    toasts = page.get_by_role("button", name="Dismiss notification")
+    for _ in range(toasts.count()):
+        toasts.first.click()
+    if capture_dir:
+        page.screenshot(path=os.path.join(capture_dir, "bots-team-chat-vanta.png"), animations="disabled")
+    theme_toggle.click()
+    expect(page.locator("html")).to_have_attribute("data-theme", "light")
+    if capture_dir:
+        page.screenshot(path=os.path.join(capture_dir, "bots-team-chat-light.png"), animations="disabled")
+    theme_toggle.click()
+
+    close_panel.click()
+    page.set_viewport_size({"width": 1024, "height": 768})
+    expect(page.get_by_test_id("split-chat-toggle-btn")).to_have_count(0)
+    expect(page.locator(".split-active")).to_have_count(0)
+    expect(sidebar).to_have_count(0)
+    team.click()
+    expect(search).to_be_visible()
+    if capture_dir:
+        page.screenshot(path=os.path.join(capture_dir, "bots-team-switch-wide.png"), animations="disabled")
+    search.press("Escape")
+
+    page.emulate_media(reduced_motion="reduce")
+    page.set_viewport_size({"width": 390, "height": 760})
+    expect(page.locator(".split-active")).to_have_count(0)
+    expect(page.get_by_test_id("split-chat-toggle-btn")).to_have_count(0)
+    expect(team).to_be_visible()
+    expect(composer).to_be_visible()
+    team.click()
+    expect(search).to_be_visible()
+    expect(page.locator(".bots-team-pop")).to_have_css("animation-name", "none")
+    if capture_dir:
+        page.screenshot(path=os.path.join(capture_dir, "bots-team-switch-mobile.png"))
+    search.press("Escape")
+    if capture_dir:
+        page.screenshot(path=os.path.join(capture_dir, "bots-team-chat-mobile.png"))
+    assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
+    page.get_by_role("button", name="Engineering Teams").click()
+    expect(sidebar).to_be_visible()
+    sidebar.get_by_role("button", name="Group Chat").click()
+    expect(sidebar).to_have_count(0)
+
+    composer.fill("Research notes\n" + "\n".join(f"Finding {i}: Check the implementation." for i in range(25)))
+    composer.press("Enter")
+    expect(bots.locator(".bcs-bubble.human").last).to_contain_text("Finding 24")
+    scroll = bots.locator(".bots-center-scroll")
+    scroll.evaluate("el => { el.scrollTop = 0; }")
+    jump = bots.get_by_role("button", name="Jump to Latest")
+    expect(jump).to_be_visible()
+    composer.fill("New steer while reading older messages")
+    composer.press("Enter")
+    expect(bots.locator(".bcs-bubble.human").last).to_contain_text("New steer while reading")
+    assert scroll.evaluate("el => el.scrollTop < 56")
+    jump.click()
+    expect(jump).to_have_count(0)
+    assert scroll.evaluate("el => el.scrollHeight - el.clientHeight - el.scrollTop < 56")
+
+
 def assert_all_images_loaded(page, *, require_bear_avatar: bool = True) -> None:
     if require_bear_avatar:
-        bear_imgs = page.locator(".bear-avatar-wrap img.bear-avatar-img")
-        if bear_imgs.count() == 0:
-            raise AssertionError("Expected at least one .bear-avatar-wrap img.bear-avatar-img element")
+        plush_bodies = page.locator(".bear-avatar-wrap svg.bear-plush-body")
+        if plush_bodies.count() == 0:
+            raise AssertionError("Expected at least one .bear-avatar-wrap svg.bear-plush-body element")
+        expect(plush_bodies.first).to_be_visible()
         eye_rigs = page.locator(".bear-avatar-wrap svg.bear-eye-rig")
         if eye_rigs.count() == 0:
             raise AssertionError("Expected at least one .bear-avatar-wrap svg.bear-eye-rig SVG element")
@@ -57,6 +236,51 @@ def main() -> int:
         context = browser.new_context(viewport={"width": 1440, "height": 900})
         page = context.new_page()
         page.set_default_timeout(12_000)
+        steer_outbox = []
+        held_acks = []
+        held_main_reply = []
+        defer_main_reply = True
+
+        def route_commands(socket):
+            server = socket.connect_to_server()
+            hold_commands = set()
+
+            def from_page(message):
+                data = json.loads(message)
+                payload = data.get("payload", {})
+                if payload.get("type") == "steer.submit":
+                    steer_outbox.append(payload)
+                if payload.get("type") == "steer.submit" and payload.get("message") == "Sentinel failed steer":
+                    socket.send(json.dumps({
+                        "kind": "ack",
+                        "commandId": payload["commandId"],
+                        "ok": False,
+                        "error": "Simulated send rejection",
+                    }))
+                else:
+                    if payload.get("type") == "steer.submit" and "release brief" in payload["message"]:
+                        hold_commands.add(payload["commandId"])
+                    server.send(message)
+
+            def from_server(message):
+                data = json.loads(message)
+                if data.get("kind") == "ack" and data.get("commandId") in hold_commands:
+                    held_acks.append((socket, message))
+                elif (
+                    defer_main_reply
+                    and data.get("topic") == "chat:meta"
+                    and data.get("eventType") == "chat.message"
+                    and data["data"].get("role") == "assistant"
+                    and "Hello Main Agent, verify workspace status for Playwright." in data["data"]["content"]
+                ):
+                    held_main_reply.append((socket, message))
+                else:
+                    socket.send(message)
+
+            socket.on_message(from_page)
+            server.on_message(from_server)
+
+        page.route_web_socket("**/ws", route_commands)
 
         page.on("pageerror", lambda err: page_errors.append(f"pageerror: {err}"))
         page.on(
@@ -72,7 +296,10 @@ def main() -> int:
 
         shell = page.locator(".app-shell-v3")
         expect(shell).to_be_visible()
-        expect(page.locator(".icon-rail")).to_be_visible()
+        rail = page.locator(".icon-rail")
+        expect(rail).to_be_visible()
+        for label in ("Main", "Teams", "Browser", "Search", "Inbox", "Memory", "Settings", "Theme"):
+            expect(rail).to_contain_text(label)
         expect(page.locator(".center-header")).to_contain_text("Main Agent")
         expect(page.locator(".hydration-shell")).to_have_count(0)
         expect(page.locator(".auth-gate-backdrop")).to_have_count(0)
@@ -118,8 +345,29 @@ def main() -> int:
         expect(sidebar).to_contain_text("ui-mockup.svg")
         expect(sidebar).to_contain_text("hero-monolith.glb")
 
-        # 3. Send a message in Main Agent (ChatTab) via PrecisionComposer -> verify Messenger bubbles
+        # 3. Inspect the keyboard-accessible model target picker, then send a Main Agent message
         chat_pane = page.locator(".world-pane:not(.hidden)")
+        model_btn = chat_pane.locator(".pc-model-btn")
+        expect(model_btn).to_be_visible()
+        model_btn.click()
+        expect(model_btn).to_have_attribute("aria-expanded", "true")
+        model_pop = page.locator('.pc-pop.pc-model-pop[role="dialog"]')
+        expect(model_pop).to_be_visible()
+        model_search = model_pop.get_by_role("combobox", name="Search models")
+        expect(model_search).to_be_focused()
+        options = model_pop.get_by_role("option")
+        assert options.count() > 0
+        assert model_pop.locator('[role="option"][aria-selected="true"]').count() > 0
+        model_search.press("ArrowDown")
+        assert (model_search.get_attribute("aria-activedescendant") or "").endswith("-option-1")
+        model_search.fill("no-such-model-route")
+        expect(model_pop.locator(".pc-model-empty")).to_contain_text("No models match")
+        model_search.fill("")
+        model_search.press("Escape")
+        expect(model_pop).to_have_count(0)
+        expect(model_btn).to_be_focused()
+        expect(model_btn).to_have_attribute("aria-expanded", "false")
+
         chat_input = chat_pane.locator("textarea.pc-input")
         user_prompt = "Hello Main Agent, verify workspace status for Playwright."
         chat_input.fill(user_prompt)
@@ -129,13 +377,63 @@ def main() -> int:
         expect(user_bubble).to_be_visible()
         expect(user_bubble).to_contain_text(user_prompt)
 
+        main_avatar = page.get_by_role("button", name="Main Agent profile").locator(".bear-avatar-wrap")
+        main_portrait = main_avatar.locator(".bear-portrait-stage")
+        expect(main_portrait).to_have_css("animation-name", "bear-work-command")
+        expect(main_avatar.locator(".bear-working-dots")).to_be_visible()
+        expect(main_avatar.locator(".bear-working-dots > span")).to_have_count(3)
+        page.emulate_media(reduced_motion="reduce")
+        expect(main_portrait).to_have_css("animation-name", "none")
+        page.emulate_media(reduced_motion="no-preference")
+        defer_main_reply = False
+        for socket, reply in held_main_reply:
+            socket.send(reply)
+
         assistant_row = chat_pane.locator(".chat-turn.assistant.msg-side-left").last
         expect(assistant_row).to_be_visible()
         assistant_turn = assistant_row.locator(".chat-prose-assistant.role-orchestrator")
         expect(assistant_turn).to_be_visible()
         expect(assistant_turn).not_to_be_empty()
         expect(assistant_row.locator(".bear-eye-rig")).to_be_visible()
+        expect(assistant_row.locator(".bear-portrait-stage")).to_have_css("animation-name", "none")
         assert_all_images_loaded(page, require_bear_avatar=True)
+        expect(assistant_turn).to_have_css("background-color", "rgba(10, 13, 19, 0.68)")
+        capture_studio(page, "main-agent-vanta")
+        theme_toggle_btn.click()
+        expect(assistant_turn).to_have_css("background-color", "rgb(242, 240, 238)")
+        capture_studio(page, "main-agent-light")
+        theme_toggle_btn.click()
+
+        page.get_by_role("button", name="Quick Jump", exact=True).click()
+        palette = page.get_by_role("dialog", name="Quick Jump Palette")
+        expect(palette).to_be_visible()
+        expect(palette.get_by_role("textbox")).to_be_focused()
+        capture_studio(page, "studio-quick-jump")
+        page.keyboard.press("Escape")
+        expect(palette).to_have_count(0)
+
+        page.set_viewport_size({"width": 390, "height": 760})
+        expect(chat_input).to_be_visible()
+        assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
+        capture_studio(page, "main-agent-mobile")
+        page.set_viewport_size({"width": 1440, "height": 900})
+
+        conversation = chat_pane.get_by_role("region", name="Main Agent conversation")
+        chat_input.fill("Implementation review\n" + "\n".join(f"Review point {i}" for i in range(60)))
+        chat_input.press("Enter")
+        expect(user_bubble).to_contain_text("Review point 59")
+        conversation.evaluate("el => { el.scrollTop = 0; }")
+        jump = chat_pane.get_by_role("button", name="Jump to Latest")
+        expect(jump).to_be_visible()
+        chat_input.fill("Keep my place while this response arrives.")
+        chat_input.press("Enter")
+        expect(user_bubble).to_contain_text("Keep my place")
+        expect(assistant_turn).to_contain_text("Keep my place")
+        assert conversation.evaluate("el => el.scrollTop < 56")
+        jump.click()
+        expect(jump).to_have_count(0)
+        expect(conversation).to_be_focused()
+        assert conversation.evaluate("el => el.scrollHeight - el.clientHeight - el.scrollTop < 56")
 
         # 4. Open Docs, Image, 3D Model, and Diff in 2-row In-App Browser (V2 Inline Edit + Comment->Chat)
         sidebar.locator("button.drawer-item", has_text="roadmap.md").click()
@@ -186,7 +484,7 @@ def main() -> int:
         expect(doc_comment_dialog).to_be_visible()
         doc_comment_text = "Verify roadmap V2 inline comment chip."
         doc_comment_dialog.locator("textarea").fill(doc_comment_text)
-        doc_comment_dialog.get_by_role("button", name="Add to Chat").click()
+        doc_comment_dialog.get_by_role("button", name="Add to Main Agent").click()
         expect(doc_comment_dialog).to_have_count(0)
 
         doc_chip = chat_pane.locator('[data-testid="pc-attachments"] .pc-att-chip').first
@@ -215,8 +513,7 @@ def main() -> int:
         img_toolbar = browser_shell.locator(".iab-image-toolbar")
         expect(img_toolbar).to_be_visible()
         expect(img_toolbar).to_contain_text("Comment")
-        expect(img_toolbar).to_contain_text("Add to Chat")
-        img_toolbar.get_by_role("button", name="Add to Chat").click()
+        img_toolbar.get_by_role("button", name="Add to Main Agent").click()
 
         img_chip = chat_pane.locator('[data-testid="pc-attachments"] .pc-att-chip').first
         expect(img_chip).to_be_visible()
@@ -228,8 +525,12 @@ def main() -> int:
         if not isinstance(thumb_nw, (int, float)) or thumb_nw <= 0:
             raise AssertionError(f"Expected composer thumbnail naturalWidth > 0, got {thumb_nw}")
         assert_all_images_loaded(page, require_bear_avatar=True)
-        img_chip.locator(".pc-att-remove").click()
+        expect(chat_input).to_have_value("")
+        attachment_send = chat_pane.get_by_role("button", name="Send message")
+        expect(attachment_send).to_be_enabled()
+        attachment_send.click()
         expect(chat_pane.locator('[data-testid="pc-attachments"]')).to_have_count(0)
+        expect(chat_pane.locator(".chat-bubble-human").last).to_contain_text("ui-mockup.svg")
 
         # 4d. 3D Model viewer (hero-monolith.glb) — lazy Three.js chunk + canvas mount
         sidebar.locator("button.drawer-item", has_text="hero-monolith.glb").click()
@@ -242,6 +543,7 @@ def main() -> int:
             raise AssertionError(f"Expected 3D canvas non-zero bounding box, got {box}")
         expect(browser_shell.locator(".model3d-preset-toolbar")).to_be_visible()
         expect(browser_shell.locator(".iab-3d-hud")).to_contain_text("GLB loaded")
+        capture_studio(page, "studio-browser")
 
         # 4e. Diff viewer
         sidebar.locator("button.drawer-item", has_text="Git Diff").click()
@@ -274,42 +576,53 @@ def main() -> int:
         browser_shell.locator(".iab-close").click()
         expect(browser_shell).to_have_count(0)
 
-        # 4g. Sidebar collapse & expand toggle + Split-Chat toggle
-        toggle_sidebar_btn = page.locator('nav.icon-rail button[aria-label="Toggle sidebar"]')
-        toggle_sidebar_btn.click()
+        # 4g. Contextual panel close/reopen, disabled split regression, and Main Agent profile motion
+        page.locator(".drawer-close-btn").click()
         expect(page.locator(".side-drawer")).to_have_count(0)
-        toggle_sidebar_btn.click()
+        page.locator('nav.icon-rail button[aria-label="Main Agent"]').click()
         expect(page.locator(".side-drawer")).to_be_visible()
 
-        split_btn = page.locator('[data-testid="split-chat-toggle-btn"]')
-        split_btn.click()
-        expect(split_btn).to_have_attribute("aria-pressed", "true")
-        expect(page.locator(".world-container.split-active")).to_be_visible()
-        expect(page.locator(".world-pane.split-left .chat-root")).to_be_visible()
-        expect(page.locator(".world-pane.split-right .bots-center-shell")).to_be_visible()
-        expect(page.locator(".center-header")).to_contain_text("Main Agent")
-        expect(page.locator(".center-header")).to_contain_text("Playwright Smoke Project")
-        split_btn.click()
-        expect(split_btn).to_have_attribute("aria-pressed", "false")
+        expect(page.locator('[data-testid="split-chat-toggle-btn"]')).to_have_count(0)
+        page.keyboard.press("Control+Shift+S")
         expect(page.locator(".world-container.split-active")).to_have_count(0)
+
+        profile_btn = page.get_by_role("button", name="Main Agent profile")
+        profile_btn.hover()
+        expect(profile_btn.locator(".bear-portrait-stage")).to_have_css("animation-name", "bear-acknowledge")
+        profile_btn.click()
+        expect(page.get_by_role("region", name="Main Agent details")).to_contain_text("Orchestrator")
+        capture_studio(page, "workspace-profile-main")
+        page.keyboard.press("Escape")
+        expect(profile_btn).to_be_focused()
+        expect(profile_btn).to_have_attribute("aria-expanded", "false")
+        page.emulate_media(reduced_motion="reduce")
+        expect(profile_btn.locator(".bear-portrait-stage")).to_have_css("animation-name", "none")
+        page.emulate_media(reduced_motion="no-preference")
 
         # 5. Switch via 44px icon rail to Engineering Teams -> verify NO "Debates & Verifier" -> Spawn Atlas -> TodoBoardView
         page.locator('nav.icon-rail button[aria-label="Engineering Teams"]').click()
         bots_shell = page.locator(".bots-center-shell")
         expect(bots_shell).to_be_visible()
-        expect(bots_shell.locator(".group-target-strip")).to_be_visible()
+        expect(bots_shell.locator(".bot-control-tab")).to_be_visible()
         expect(bots_shell.locator(".bcs-root")).to_be_visible()
         feed_items = bots_shell.locator(".group-msg-row, .bcs-artifact, .bcs-system, .bcs-verify, .bcs-trace")
         if feed_items.count() == 0:
             expect(bots_shell.locator(".bcs-empty-title")).to_contain_text("Group Chat")
+            expect(bots_shell.locator(".bcs-empty .bear-avatar-wrap, .bcs-empty .bf-group-cluster").first).to_be_visible()
+            expect(bots_shell.locator(".bcs-empty .bf-orb-shell")).to_have_count(0)
         else:
             expect(feed_items.first).to_be_visible()
+
+        roster_avatars = sidebar.locator(".bot-roster-row > .bear-avatar-wrap")
+        if roster_avatars.count() > 0:
+            assert roster_avatars.first.evaluate("el => parseFloat(getComputedStyle(el).width)") >= 92
 
         expect(sidebar.locator("button.drawer-item", has_text="Debates & Verifier")).to_have_count(0)
         if "Debates & Verifier" in sidebar.inner_text():
             raise AssertionError("Legacy 'Debates & Verifier' entry must not exist in Engineering Teams sidebar")
 
         # Click + Bot to open BotSpawnModal and spawn peer bot "Atlas"
+        open_bot_controls(bots_shell)
         bots_shell.locator('button[title="Spawn a new project bot"]').click()
         spawn_dialog = page.get_by_role("dialog", name="Spawn Project Bot")
         expect(spawn_dialog).to_be_visible()
@@ -320,6 +633,12 @@ def main() -> int:
         expect(sidebar).to_contain_text("Atlas")
         expect(page.locator(".center-header-title")).to_contain_text("Atlas")
         assert_all_images_loaded(page, require_bear_avatar=True)
+        if capture_dir := os.environ.get("BF_UI_CAPTURE_DIR"):
+            page.screenshot(path=os.path.join(capture_dir, "bots-desktop-vanta.png"))
+            theme_toggle_btn.click()
+            expect(html_el).to_have_attribute("data-theme", "light")
+            page.screenshot(path=os.path.join(capture_dir, "bots-desktop-light.png"))
+            theme_toggle_btn.click()
 
         # Task Board -> V2 TodoBoardView (quick-add, row expand, All / By Bot / By Status tabs)
         sidebar.locator("button.drawer-item", has_text="Task Board").click()
@@ -327,6 +646,7 @@ def main() -> int:
         expect(bots_shell.locator(".todo-board-root")).to_be_visible()
         expect(bots_shell.locator(".todo-board-header")).to_be_visible()
         expect(bots_shell.locator(".todo-board-progress-track")).to_be_visible()
+        capture_studio(page, "studio-task-board")
         expect(bots_shell.locator(".kanban-grid")).to_have_count(0)
 
         quick_add_input = bots_shell.locator('[data-testid="todo-quick-add-input"]')
@@ -369,12 +689,12 @@ def main() -> int:
         page.locator('nav.icon-rail button[data-inbox-trigger="true"]').click()
         inbox_dialog = page.get_by_role("dialog", name="Escalation Inbox")
         expect(inbox_dialog).to_be_visible()
+        capture_studio(page, "studio-inbox")
         inbox_dialog.get_by_role("button", name="Close escalation inbox").click()
         expect(inbox_dialog).to_have_count(0)
 
         # 7. Switch to Main Agent rail, open Memory L1 Studio -> edit + save USER.md -> verify saved
-        page.locator('nav.icon-rail button[aria-label="Main Agent"]').click()
-        sidebar.locator("button.drawer-item", has_text="Memory Studio").click()
+        page.locator('nav.icon-rail button[aria-label="Memory Studio"]').click()
         memory_dialog = page.get_by_role("dialog", name="Memory Studio — L1 Prompt Files & L2 Live Facts")
         expect(memory_dialog).to_be_visible()
         expect(memory_dialog.locator("button.subview-tab.active")).to_contain_text("USER.md")
@@ -388,7 +708,7 @@ def main() -> int:
         # Re-open Memory Studio to confirm persisted state round-trip
         memory_dialog.get_by_role("button", name="Close Memory Studio").click()
         expect(memory_dialog).to_have_count(0)
-        sidebar.locator("button.drawer-item", has_text="Memory Studio").click()
+        page.locator('nav.icon-rail button[aria-label="Memory Studio"]').click()
         memory_dialog = page.get_by_role("dialog", name="Memory Studio — L1 Prompt Files & L2 Live Facts")
         expect(memory_dialog.locator(".memory-studio-l1-col textarea")).to_have_value(l1_text)
         memory_dialog.get_by_role("button", name="Close Memory Studio").click()
@@ -398,6 +718,7 @@ def main() -> int:
         page.locator('nav.icon-rail button[aria-label="Settings"]').click()
         settings_dialog = page.get_by_role("dialog", name="Studio Settings & Open BYOS")
         expect(settings_dialog).to_be_visible()
+        capture_studio(page, "studio-settings")
 
         settings_dialog.locator(".settings-tabs-bar button.subview-tab", has_text="API Keys").click()
         openai_card = settings_dialog.locator(".task-card").filter(
@@ -432,6 +753,12 @@ def main() -> int:
 
         settings_dialog.get_by_role("button", name="Close settings").click()
         expect(settings_dialog).to_have_count(0)
+
+        check_team_inbox(page, sidebar, theme_toggle_btn, os.environ.get("BF_UI_CAPTURE_DIR"), steer_outbox, held_acks)
+        projects = context.request.get(f"{base_url}/api/snapshot").json()["projects"]
+        research_id = next(project["id"] for project in projects if project["name"] == "Studio Research")
+        assert len(steer_outbox) == 4 and all(steer["projectId"] == research_id for steer in steer_outbox)
+        assert "ui-mockup.svg" in steer_outbox[1]["message"]
 
         context.close()
         browser.close()

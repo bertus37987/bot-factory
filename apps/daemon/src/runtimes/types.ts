@@ -35,6 +35,8 @@ export interface RuntimeSessionHandle {
   runtimeKind: RuntimeKind;
   pid: number | null;
   externalSessionId?: string;
+  provider?: string;
+  model?: string;
 }
 
 export interface TurnInput {

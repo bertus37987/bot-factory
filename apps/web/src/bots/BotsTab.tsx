@@ -23,12 +23,11 @@ import {
   Plus,
   RotateCw,
   Target,
-  Users,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type JSX } from "react";
 import type { ProviderSummary, RpcCommandInput } from "../client/useBotFactory";
-import { BotAvatar, resolveBotRole } from "../components/BotAvatars";
+import { BearPawControlIcon } from "../components/BotFactoryIcons";
 import {
   PrecisionComposer,
   type AutonomyLevel,
@@ -40,6 +39,7 @@ import { SelfModPanel } from "../phase3/Phase3Panels";
 import { CheckpointsMergePanel } from "../studio/CheckpointsMergePanel";
 import { BotChatStream } from "./BotChatStream";
 import { TodoBoardView, type TodoCreateInput } from "./TodoBoardView";
+import "./BotsInbox.css";
 
 export type BotsSubView = "chat_group" | "chat_single" | "board" | "checkpoints" | "selfmod";
 
@@ -62,15 +62,14 @@ export interface BotsTabProps {
   checkpoints: CheckpointRecord[];
   gitDiff: GitDiffResponse | null;
   activeSubView: BotsSubView;
+  conversationKey: string;
   activeAgentId: string | null;
   selfModProposals: SelfModProposalRecord[];
   attachments?: ComposerAttachment[];
   onRemoveAttachment?: (id: string) => void;
-  onClearAttachments?: () => void;
+  onClearAttachments?: (sent: ComposerAttachment[]) => void;
   onFocusPane?: () => void;
-  compactSplit?: boolean;
   onSelectSubView: (view: BotsSubView, agentId?: string | null) => void;
-  onSelectProject: (projectId: string) => void;
   onOpenProjectModal: () => void;
   onOpenBotSpawnModal: () => void;
   onOpenBrowserItem: (
@@ -104,15 +103,14 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
     checkpoints,
     gitDiff,
     activeSubView,
+    conversationKey,
     activeAgentId,
     selfModProposals,
     attachments,
     onRemoveAttachment,
     onClearAttachments,
     onFocusPane,
-    compactSplit = false,
     onSelectSubView,
-    onSelectProject,
     onOpenProjectModal,
     onOpenBotSpawnModal,
     onOpenBrowserItem,
@@ -124,8 +122,15 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
   const [effort, setEffort] = useState<ReasoningEffort>("high");
   const [autonomy, setAutonomy] = useState<AutonomyLevel>("medium");
   const [selectedTarget, setSelectedTarget] = useState<ModelTargetSelection | null>(null);
-  const [mentionPrefix, setMentionPrefix] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [mentions, setMentions] = useState<Record<string, string | null>>({});
+  const [sendingByConversation, setSendingByConversation] = useState<Record<string, boolean>>({});
+  const mentionPrefix = mentions[conversationKey] ?? null;
+  const setMentionPrefix = (name: string | null) =>
+    setMentions((prev) => ({ ...prev, [conversationKey]: name }));
+  const chatOpen = activeSubView === "chat_group" || activeSubView === "chat_single";
   const [controlTargetId, setControlTargetId] = useState<string | null>(null);
+  const [controlDockOpen, setControlDockOpen] = useState(false);
 
   const [uiError, setUiError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState(false);
@@ -165,7 +170,6 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
 
   useEffect(() => {
     setSelectedTarget(null);
-    setMentionPrefix(null);
     setUiError(null);
     setControlTargetId(null);
   }, [activeProject?.id]);
@@ -217,12 +221,10 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
 
   const activeModelLabel = useMemo(() => {
     if (selectedTarget) return `${selectedTarget.provider}/${selectedTarget.model}`;
-    const refAgent = activeSubView === "chat_single" ? activeAgent : teamLead ?? activeAgent;
-    if (refAgent) return `${refAgent.provider}/${refAgent.model}`;
     const override = activeProject?.routingOverrides?.project_manager;
     if (override) return `${override.provider}/${override.model}`;
-    return "mistral-hosted/mistral-large-4";
-  }, [selectedTarget, activeSubView, activeAgent, teamLead, activeProject]);
+    return teamLead ? `${teamLead.provider}/${teamLead.model}` : "No Team Lead";
+  }, [selectedTarget, teamLead, activeProject]);
 
   const handleSelectComposerTarget = async (target: ModelTargetSelection) => {
     setSelectedTarget(target);
@@ -234,6 +236,14 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
         intent: "project_manager",
         target,
       });
+      if (teamLead) {
+        await onSendCommand({
+          type: "bot.update_model",
+          agentId: teamLead.id,
+          provider: target.provider,
+          model: target.model,
+        });
+      }
     });
   };
 
@@ -314,52 +324,6 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
       onMouseDown={() => onFocusPane?.()}
       onFocusCapture={() => onFocusPane?.()}
     >
-      {/* Compact Subview Switcher when rendered inside Split-Chat */}
-      {compactSplit && activeProject && (
-        <div className="split-bots-bar">
-          <div className="subview-tabs">
-            <button
-              type="button"
-              className={`subview-tab ${activeSubView === "chat_group" ? "active" : ""}`}
-              onClick={() => onSelectSubView("chat_group")}
-            >
-              <Users size={12} strokeWidth={1.6} />
-              <span>Group</span>
-            </button>
-            <button
-              type="button"
-              className={`subview-tab ${activeSubView === "chat_single" ? "active" : ""}`}
-              onClick={() => onSelectSubView("chat_single", activeAgent?.id ?? null)}
-              disabled={!activeAgent}
-            >
-              <span>{activeAgent?.name ?? "Bot"}</span>
-            </button>
-            <button
-              type="button"
-              className={`subview-tab ${activeSubView === "board" ? "active" : ""}`}
-              onClick={() => onSelectSubView("board")}
-            >
-              <Kanban size={12} strokeWidth={1.6} />
-              <span>Todo Board</span>
-            </button>
-          </div>
-          {activeSubView === "chat_single" && projectAgents.length > 1 && (
-            <select
-              className="todo-board-select"
-              aria-label="Select bot chat"
-              value={activeAgent?.id ?? ""}
-              onChange={(e) => onSelectSubView("chat_single", e.target.value)}
-            >
-              {projectAgents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} ({resolveBotRole(a).jobTitle})
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-      )}
-
       {/* Goal Status Strip + Explicit Target Bot Safety Controls in Chat Views */}
       {activeProject && (activeSubView === "chat_group" || activeSubView === "chat_single") && (
         <>
@@ -417,112 +381,105 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
             </div>
           )}
 
-          <div className="group-target-strip">
-            {activeSubView === "chat_single" && (
-              <button
-                type="button"
-                className="btn xs"
-                onClick={() => onSelectSubView("chat_group")}
-                title="Back to multi-bot Group Chat"
-              >
-                <ArrowLeft size={11} strokeWidth={1.6} />
-                <span>Group Chat</span>
-              </button>
-            )}
-
-            {activeSubView === "chat_group" &&
-              projectAgents.map((bot) => {
-                const meta = resolveBotRole(bot);
-                const selected = controlTargetAgent?.id === bot.id;
-                return (
+          <div className={`bot-control-dock ${controlDockOpen ? "open" : ""}`}>
+            <button
+              type="button"
+              className="bot-control-tab"
+              aria-label="Open bot controls"
+              aria-expanded={controlDockOpen}
+              title="Bot controls"
+              onClick={() => setControlDockOpen((open) => !open)}
+            >
+              <BearPawControlIcon size={16} />
+              <span className="bots-visually-hidden">Bot controls</span>
+            </button>
+            <div className="bot-control-panel" role="group" aria-label="Bot controls panel">
+              <div className="bot-control-panel-head">
+                <span>Bot controls</span>
+                {activeSubView === "chat_single" && (
                   <button
-                    key={bot.id}
                     type="button"
-                    className="group-target-chip"
-                    onClick={() => setControlTargetId(bot.id)}
-                    style={{
-                      cursor: "pointer",
-                      borderColor: selected ? "var(--accent-orange)" : undefined,
-                      background: selected ? "var(--accent-orange-soft)" : undefined,
-                      color: selected ? "var(--ink-primary)" : undefined,
-                      fontWeight: selected ? 600 : undefined,
-                    }}
-                    title={`Select ${bot.name} (${bot.scope} · ${bot.status}) for Pause/Resume/Stop`}
+                    className="btn xs ghost"
+                    onClick={() => onSelectSubView("chat_group")}
+                    title="Back to multi-bot Group Chat"
                   >
-                    <BotAvatar
-                      role={meta.role}
-                      size={18}
-                      active={bot.status === "working" || bot.status === "debating"}
-                      agentStatus={bot.status}
-                      seed={bot.id}
-                    />
-                    <span>{bot.name}</span>
-                    <span className="mono-tag" style={{ fontSize: "9.5px" }}>
-                      {bot.status}
-                    </span>
+                    <ArrowLeft size={11} strokeWidth={1.6} />
+                    <span>Group</span>
                   </button>
-                );
-              })}
-
-            <div className="group-target-actions">
+                )}
+              </div>
               {controlTargetAgent && (
-                <>
-                  <span
-                    className="mono-tag"
-                    style={{ maxWidth: "100%" }}
-                    title={`Confirmed control target: ${controlTargetAgent.name}`}
-                  >
-                    Target: {controlTargetAgent.name} ({controlTargetAgent.status})
-                  </span>
-                  {(controlTargetAgent.status === "paused" ||
-                    controlTargetAgent.status === "stopped" ||
-                    controlTargetAgent.status === "error") && (
+                <div className="bot-control-target-block">
+                  {activeSubView === "chat_group" ? (
+                    <label className="bots-control-label">
+                      Control target
+                      <select
+                        className="todo-board-select"
+                        aria-label="Bot control target"
+                        value={controlTargetAgent.id}
+                        onChange={(e) => setControlTargetId(e.target.value)}
+                      >
+                        {projectAgents.map((bot) => (
+                          <option key={bot.id} value={bot.id}>
+                            {bot.name} ({bot.status.replaceAll("_", " ")})
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <span className="bots-control-label">Target: {controlTargetAgent.name}</span>
+                  )}
+                  <div className="bot-control-actions">
+                    {(controlTargetAgent.status === "paused" ||
+                      controlTargetAgent.status === "stopped" ||
+                      controlTargetAgent.status === "error") && (
+                      <button
+                        type="button"
+                        className="btn xs"
+                        disabled={busyAction}
+                        onClick={() => void handleBotControl(controlTargetAgent, "bot.resume")}
+                        title={`Resume ${controlTargetAgent.name}`}
+                      >
+                        <RotateCw size={11} strokeWidth={1.6} />
+                        <span>Resume</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="btn xs"
-                      disabled={busyAction}
-                      onClick={() => void handleBotControl(controlTargetAgent, "bot.resume")}
-                      title={`Resume ${controlTargetAgent.name}`}
+                      disabled={
+                        busyAction ||
+                        controlTargetAgent.status === "paused" ||
+                        controlTargetAgent.status === "stopped"
+                      }
+                      onClick={() => void handleBotControl(controlTargetAgent, "bot.pause")}
+                      title={`Pause ${controlTargetAgent.name}`}
                     >
-                      <RotateCw size={11} strokeWidth={1.6} />
-                      <span>Resume</span>
+                      <Pause size={11} strokeWidth={1.6} />
+                      <span>Pause</span>
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className="btn xs"
-                    disabled={
-                      busyAction ||
-                      controlTargetAgent.status === "paused" ||
-                      controlTargetAgent.status === "stopped"
-                    }
-                    onClick={() => void handleBotControl(controlTargetAgent, "bot.pause")}
-                    title={`Pause ${controlTargetAgent.name}`}
-                  >
-                    <Pause size={11} strokeWidth={1.6} />
-                    <span>Pause</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn xs danger"
-                    disabled={busyAction || controlTargetAgent.status === "stopped"}
-                    onClick={() => void handleBotControl(controlTargetAgent, "bot.stop")}
-                    title={`Hard-stop ${controlTargetAgent.name}`}
-                  >
-                    <OctagonX size={11} strokeWidth={1.6} />
-                    <span>Stop</span>
-                  </button>
-                </>
+                    <button
+                      type="button"
+                      className="btn xs danger"
+                      disabled={busyAction || controlTargetAgent.status === "stopped"}
+                      onClick={() => void handleBotControl(controlTargetAgent, "bot.stop")}
+                      title={`Hard-stop ${controlTargetAgent.name}`}
+                    >
+                      <OctagonX size={11} strokeWidth={1.6} />
+                      <span>Stop</span>
+                    </button>
+                  </div>
+                </div>
               )}
               <button
                 type="button"
-                className="btn xs"
+                className="btn xs bot-control-spawn"
                 disabled={busyAction}
                 onClick={onOpenBotSpawnModal}
                 title="Spawn a new project bot"
               >
                 <Plus size={11} strokeWidth={1.6} />
-                <span>Bot</span>
+                <span>Spawn bot</span>
               </button>
             </div>
           </div>
@@ -560,6 +517,7 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
 
         {activeProject && (activeSubView === "chat_single" || activeSubView === "chat_group") && (
           <BotChatStream
+            key={conversationKey}
             mode={activeSubView === "chat_group" ? "group" : "single"}
             project={activeProject}
             activeAgent={activeAgent}
@@ -692,8 +650,11 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
       </div>
 
       {/* Factory Precision Composer (Steer-to-Team Lead Dock) */}
-      {activeProject && (
+      {activeProject && chatOpen && (
         <div className="bots-composer-wrap">
+          <div className="bots-compose-destination">
+            {teamLead ? `Steer Team Lead: ${teamLead.name}` : "No Team Lead to steer"}
+          </div>
           {mentionPrefix && (
             <div style={{ maxWidth: 704, margin: "0 auto 6px", display: "flex", alignItems: "center", gap: 6 }}>
               <button
@@ -708,16 +669,19 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
             </div>
           )}
           <PrecisionComposer
+            key={conversationKey}
             mode="steer"
             placeholder={
               mentionPrefix
                 ? `Send steer mentioning @${mentionPrefix}… (/ for commands)`
                 : "Steer the Team Lead… (/ for commands)"
             }
-            busy={busyAction}
+            busy={busyAction || sendingByConversation[conversationKey]}
+            disabled={!teamLead}
             activeProject={activeProject}
             projects={projects}
-            onSelectProject={onSelectProject}
+            draft={drafts[conversationKey] ?? ""}
+            onDraftChange={(text) => setDrafts((prev) => ({ ...prev, [conversationKey]: text }))}
             activeModelLabel={activeModelLabel}
             providers={providers}
             selectedTarget={selectedTarget}
@@ -735,7 +699,8 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
             onClearAttachments={onClearAttachments}
             onSubmit={async (msg) => {
               const finalMsg = mentionPrefix ? `@${mentionPrefix} ${msg}` : msg;
-              await runSafe(async () => {
+              setSendingByConversation((prev) => ({ ...prev, [conversationKey]: true }));
+              try {
                 await onSendCommand({
                   type: "steer.submit",
                   projectId: activeProject.id,
@@ -744,7 +709,9 @@ export function BotsTab(props: BotsTabProps): JSX.Element {
                   autonomyLevel: autonomy,
                 });
                 setMentionPrefix(null);
-              });
+              } finally {
+                setSendingByConversation((prev) => ({ ...prev, [conversationKey]: false }));
+              }
             }}
             onSlashAction={handleSlash}
           />

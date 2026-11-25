@@ -1,9 +1,10 @@
-import { MessageSquare, X } from "lucide-react";
-import { useEffect, useRef, useState, type JSX } from "react";
+import { X } from "lucide-react";
+import { useContext, useEffect, useRef, useState, type JSX } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { AnnotationAnchor, AnnotationRecord } from "@bot-factory/shared";
+import { AttachmentActions, AttachmentDestinations } from "./AttachmentActions";
 import type { CameraPose, ComposerAttachment, Model3DPreset } from "./types";
 
 export interface Model3DViewerProps {
@@ -16,7 +17,7 @@ export interface Model3DViewerProps {
   wireframe: boolean;
   focusCameraPose: CameraPose | null;
   onPickAnchor?: (anchor: AnnotationAnchor, snapshotDataUrl?: string) => void;
-  onImportToChat?: (attachment: ComposerAttachment) => void;
+  onImportToChat?: (attachment: ComposerAttachment, destinationKey?: string) => boolean;
   onUserOrbit?: () => void;
 }
 
@@ -500,13 +501,14 @@ export function Model3DViewer({
     requestRenderRef.current?.(false);
   }, [focusCameraPose]);
 
-  const submitMeshComment = () => {
+  const destinations = useContext(AttachmentDestinations);
+  const submitMeshComment = (destinationKey?: string) => {
     if (!pendingHit) return;
     const trimmed = commentText.trim();
     if (!trimmed) return;
     const fileName = filePath.split("/").pop() ?? filePath;
     if (onImportToChat) {
-      onImportToChat({
+      if (!onImportToChat({
         id: `att_3d_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         kind: "model3d_comment",
         filePath,
@@ -514,7 +516,7 @@ export function Model3DViewer({
         quote: `Mesh: ${pendingHit.meshName} @ [${pendingHit.point.map((n) => n.toFixed(2)).join(", ")}] | Cam: [${pendingHit.camera.pos.map((n) => n.toFixed(2)).join(", ")}]`,
         comment: trimmed,
         thumbnailDataUrl: pendingHit.snapshotDataUrl,
-      });
+      }, destinationKey)) return;
     } else if (onPickAnchor) {
       onPickAnchor(
         {
@@ -644,7 +646,7 @@ export function Model3DViewer({
             value={commentText}
             onChange={(e) => setCommentText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+              if (!destinations && e.key === "Enter" && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 submitMeshComment();
               } else if (e.key === "Escape") {
@@ -665,15 +667,7 @@ export function Model3DViewer({
           />
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
-            <button
-              type="button"
-              className="btn xs primary"
-              disabled={!commentText.trim()}
-              onClick={submitMeshComment}
-            >
-              <MessageSquare size={11} strokeWidth={1.6} />
-              <span>Add to Chat</span>
-            </button>
+            <AttachmentActions destinations={destinations} disabled={!commentText.trim()} onAdd={submitMeshComment} />
           </div>
         </div>
       )}

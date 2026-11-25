@@ -19,6 +19,16 @@
   --bg-active: #1f1f29;
   --bg-overlay: rgba(0, 0, 0, 0.74);
 
+  --studio-panel: #10100f;
+  --studio-message: #1c1c1a;
+  --studio-selected: #25221f;
+  --studio-outgoing: #874422;
+  --studio-outgoing-ink: #fff8f2;
+  --studio-row-radius: 11px;
+  --studio-panel-radius: 14px;
+  --studio-message-radius: 18px;
+  --studio-composer-radius: 20px;
+
   /* Hairline Borders */
   --border-subtle: #14141b;
   --border-hairline: #1e1e27;
@@ -42,6 +52,13 @@
   --accent-orange-soft: rgba(232, 107, 44, 0.14);
   --accent-orange-border: rgba(232, 107, 44, 0.42);
   --accent-orange-ink: #ff9c66;
+
+  --accent-cyan: #7dd3fc;
+  --accent-cyan-strong: #38bdf8;
+  --accent-cyan-soft: rgba(125, 211, 252, 0.13);
+  --accent-cyan-border: rgba(125, 211, 252, 0.42);
+  --accent-cyan-ink: #b9ecff;
+  --accent-cyan-glow: rgba(56, 189, 248, 0.34);
 
   /* Per-Role Messenger Bubble Tokens (High-Contrast Vanta Black) */
   --bubble-user-bg: #b94815;
@@ -251,6 +268,11 @@
 [data-theme="light"] {
   color-scheme: light;
 
+  --studio-panel: #faf8f6;
+  --studio-message: #f2f0ee;
+  --studio-selected: #f0e5dd;
+  --studio-outgoing: #8a4624;
+
   --bg-canvas: #ffffff;
   --bg-surface: #fafafa;
   --bg-surface-subtle: #f5f5f5;
@@ -279,6 +301,13 @@
   --accent-orange-soft: #fff7f2;
   --accent-orange-border: #f5d3bf;
   --accent-orange-ink: #b84312;
+
+  --accent-cyan: #0284c7;
+  --accent-cyan-strong: #0369a1;
+  --accent-cyan-soft: rgba(2, 132, 199, 0.09);
+  --accent-cyan-border: rgba(2, 132, 199, 0.28);
+  --accent-cyan-ink: #075985;
+  --accent-cyan-glow: rgba(2, 132, 199, 0.18);
 
   /* Per-Role Messenger Bubble Tokens (Crisp Pastel Light Mode) */
   --bubble-user-bg: #d95d22;

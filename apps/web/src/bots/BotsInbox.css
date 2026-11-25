@@ -1,0 +1,323 @@
+.bots-center-shell,
+.bots-inbox-drawer,
+.bots-topbar {
+  --bots-panel: var(--studio-panel);
+  --bots-chat: var(--studio-message);
+  --bots-selected: var(--studio-selected);
+  --bots-user: var(--studio-outgoing);
+  --bots-user-ink: var(--studio-outgoing-ink);
+}
+
+.side-drawer.bots-inbox-drawer,
+.bots-center-shell .pc-card {
+  background: var(--bots-panel);
+}
+
+.bots-inbox-drawer .bot-roster-row {
+  border-radius: var(--studio-row-radius);
+  min-height: 52px;
+}
+
+.bots-inbox-drawer :is(.bot-roster-row, .subagent-node)[aria-current="true"] {
+  background: var(--bots-selected);
+  border-color: transparent;
+}
+
+.bots-inbox-drawer .drawer-proj-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+
+.center-header.bots-topbar {
+  position: relative;
+  z-index: 6;
+  padding-block: 8px;
+}
+
+.bots-topbar .center-header-left { flex-basis: 220px; }
+
+.bots-team-switcher {
+  max-width: min(275px, 61%);
+  min-width: 0;
+}
+
+.bots-team-trigger {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 100%;
+  min-height: 43px;
+  padding: 5px 10px;
+  border: var(--hairline);
+  border-radius: 12px;
+  background: var(--bots-panel);
+  color: var(--ink-primary);
+  text-align: left;
+}
+
+.bots-team-trigger:not(:disabled),
+.bots-team-pop [role="option"] {
+  cursor: pointer;
+}
+
+.bots-team-trigger:is(:hover, [aria-expanded="true"]) {
+  background: var(--bots-selected);
+}
+
+.bots-team-trigger > :is(svg, .bear-avatar-wrap, .bf-group-cluster) { flex-shrink: 0; }
+
+.bots-team-trigger-copy > span {
+  color: var(--ink-secondary);
+  font-size: 10px;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.bots-team-trigger-copy,
+.bots-room-label,
+.bots-team-pop [role="option"] > .bots-team-option-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.bots-team-trigger-copy strong,
+.bots-team-pop strong,
+.bots-room-label strong,
+.bots-room-label small,
+.bots-inspected-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bots-room-label strong { font-size: var(--text-sm); }
+.bots-inspected-model,
+.bots-room-label small,
+.bots-team-pop small { color: var(--ink-secondary); font-size: var(--text-xs); }
+
+.bots-team-pop {
+  position: absolute;
+  top: calc(100% - 3px);
+  left: 14px;
+  width: min(310px, calc(100% - 28px));
+  padding: 7px;
+  background: var(--bots-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 13px;
+  box-shadow: var(--shadow-modal);
+  animation: bots-team-reveal 120ms ease-out;
+}
+
+.bots-team-pop input {
+  width: 100%;
+  padding: 9px 10px;
+  color: var(--ink-primary);
+  background: var(--bg-canvas);
+  border: var(--hairline);
+  border-radius: 8px;
+}
+
+.bots-team-pop [role="listbox"] {
+  display: grid;
+  gap: 2px;
+  margin: 5px 0 0;
+  padding: 0;
+  max-height: min(260px, 40vh);
+  overflow-y: auto;
+  list-style: none;
+}
+
+.bots-team-pop [role="option"] {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border-radius: 9px;
+}
+
+.bots-team-pop [role="option"]:is(:hover, [aria-selected="true"]) { background: var(--bots-selected); }
+.bots-team-pop p { margin: 7px; color: var(--ink-secondary); }
+
+.bots-topbar :is(button, input):focus-visible,
+.bots-center-shell :is(button, input, select, summary):focus-visible,
+.bots-inbox-drawer button:focus-visible {
+  outline: 2px solid var(--accent-orange-ink);
+  outline-offset: 2px;
+}
+
+
+.bots-control-label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+
+.bots-control-label select { max-width: min(190px, 100%); }
+
+.bots-center-shell .bcs-root .bcs-bubble.bot {
+  background: var(--bots-chat);
+  color: var(--ink-primary);
+  border: 0;
+  border-radius: 6px 18px 18px 18px;
+  box-shadow: none;
+}
+
+.bots-center-shell .bcs-root .bcs-bubble.human {
+  background: var(--bots-user);
+  color: var(--bots-user-ink);
+  border: 0;
+  border-radius: 18px 6px 18px 18px;
+}
+
+.bots-center-shell .bcs-root .bcs-msg-eyebrow {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bots-center-shell .bcs-msg-head { flex-wrap: wrap; row-gap: 2px; }
+.bots-center-shell .bcs-msg-time { color: var(--ink-secondary); }
+.bots-center-shell .bots-continuation { margin-top: -9px; }
+.bots-center-shell .bots-continuation.side-left { padding-inline-start: 40px; }
+.bots-center-shell .bots-continuation .bcs-bubble { border-radius: 16px; }
+.bots-center-shell .pc-card { border-radius: var(--studio-composer-radius); }
+
+.bots-compose-destination {
+  padding: 0 5px 6px;
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.bots-jump-slot {
+  position: sticky;
+  top: 8px;
+  height: 0;
+  display: flex;
+  justify-content: flex-end;
+  z-index: 2;
+}
+
+.bots-jump-slot button {
+  align-self: start;
+  border-radius: var(--radius-pill);
+  background: var(--bots-panel);
+  box-shadow: var(--shadow-modal);
+}
+
+.bots-live-activity summary { cursor: pointer; color: var(--ink-secondary); font-size: var(--text-xs); }
+.bots-visually-hidden { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }
+
+@keyframes bots-team-reveal {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bots-team-pop { animation: none; }
+}
+
+@media (max-width: 699px) {
+  .side-drawer.bots-inbox-drawer { max-width: calc(100vw - 58px); }
+  .bots-center-shell .bots-center-scroll > .bcs-root,
+  .bots-center-shell .bots-composer-wrap { padding-inline: 10px; }
+  .bots-center-shell .bots-control-label select { max-width: 140px; }
+  .bots-center-shell .group-msg-stack { max-width: calc(100% - 40px); }
+  .bots-topbar .center-header-left { flex-basis: 210px; }
+  .bots-topbar .bots-team-switcher { max-width: 70%; }
+  .bots-topbar .bots-inspected-model { display: none; }
+  .bots-topbar button[aria-label="Browser"] > span { display: none; }
+  .bots-topbar button[aria-label="Browser"] { min-width: 32px; min-height: 32px; }
+  .bots-inbox-active .toast-stack { bottom: 215px; max-width: calc(100% - 56px); }
+}
+
+/* Retractable bear-paw control dock: quiet edge tab, explicit panel on hover/focus/tap. */
+.bots-center-shell { position: relative; }
+.bot-control-dock {
+  position: absolute;
+  right: 0;
+  top: 78px;
+  z-index: 7;
+  pointer-events: none;
+}
+.bot-control-tab {
+  pointer-events: auto;
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 27px;
+  height: 74px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent-orange-ink) 34%, transparent);
+  border-right: 0;
+  border-radius: 14px 0 0 14px;
+  background: color-mix(in srgb, var(--bots-panel) 88%, var(--accent-orange) 12%);
+  color: var(--accent-orange-ink);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+.bot-control-panel {
+  position: absolute;
+  right: 29px;
+  top: 0;
+  width: min(252px, calc(100vw - 96px));
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-orange-ink) 20%, transparent);
+  border-radius: 18px 4px 18px 18px;
+  background: var(--bots-panel);
+  box-shadow: var(--shadow-modal);
+  opacity: 0;
+  transform: translateX(7px);
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+.bot-control-dock:is(:hover, :focus-within, .open) .bot-control-panel {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+.bot-control-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--ink-primary);
+  font-size: var(--text-xs);
+  font-weight: 750;
+}
+.bot-control-target-block {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bots-chat) 70%, transparent);
+}
+.bot-control-target-block .bots-control-label {
+  display: grid;
+  align-items: start;
+  gap: 5px;
+  font-weight: 650;
+}
+.bot-control-target-block select { width: 100%; max-width: none; }
+.bot-control-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.bot-control-spawn {
+  width: 100%;
+  justify-content: center;
+  margin-top: 8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bot-control-panel { transition: none; }
+}

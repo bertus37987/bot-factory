@@ -58,7 +58,7 @@ Bot-Factory is a Bun + TypeScript monorepo (`packages/*`, `apps/*`) with strict 
     - Flush pending `session/request_permission` requests with `{ outcome: "cancelled" }` on abort/disconnect.
     - Terminate subprocess trees on Windows with `taskkill /PID <pid> /T /F`.
 12. **Design System Discipline (`DESIGN.md` & `apps/web/src/styles/tokens.css`):**
-    - Support both Vanta Black (default) and Light Mode with shared tokens. Preserve the Bear Crew assets and SVG eye layer. No runtime `<style>` tag injection in JSX, no external CDNs, no emojis as UI icons.
+    - Support both Vanta Black (default) and Light Mode with shared tokens. Preserve the vector Feltworks Bear Crew and SVG eye layer. No runtime `<style>` tag injection in JSX, no external CDNs, no emojis as UI icons.
 
 ---
 

@@ -653,6 +653,8 @@ export class AcpSubprocessRuntime implements AgentRuntime {
       sessionId: spec.sessionId,
       agentId: spec.agentId,
       runtimeKind: "acp_stdio",
+      provider: spec.provider,
+      model: spec.model,
       pid: proc.pid ?? null,
       externalSessionId: state.externalSessionId,
     };

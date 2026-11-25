@@ -1,6 +1,7 @@
 import { Check, Copy, FileWarning, MessageSquare, Pencil, Pin, Save, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import type { AnnotationAnchor, AnnotationRecord } from "@bot-factory/shared";
+import { AttachmentActions, AttachmentDestinations } from "./AttachmentActions";
 import { quickHash, type ComposerAttachment } from "./types";
 
 export interface DocViewerProps {
@@ -12,7 +13,7 @@ export interface DocViewerProps {
   focusNonce?: number;
   artifactVersion?: number;
   onPickAnchor?: (anchor: AnnotationAnchor) => void;
-  onImportToChat?: (attachment: ComposerAttachment) => void;
+  onImportToChat?: (attachment: ComposerAttachment, destinationKey?: string) => boolean;
   onArtifactSaved?: (filePath: string) => void;
 }
 
@@ -780,20 +781,21 @@ export function DocViewer({
     });
   };
 
-  const submitDocComment = () => {
+  const destinations = useContext(AttachmentDestinations);
+  const submitDocComment = (destinationKey?: string) => {
     if (!pendingComment) return;
     const trimmed = commentText.trim();
     if (!trimmed) return;
 
     if (onImportToChat) {
-      onImportToChat({
+      if (!onImportToChat({
         id: `att_doc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         kind: "doc_comment",
         filePath,
         label: filePath.split("/").pop() ?? filePath,
         quote: pendingComment.quote,
         comment: trimmed,
-      });
+      }, destinationKey)) return;
     } else if (onPickAnchor) {
       onPickAnchor({
         kind: "doc",
@@ -1165,7 +1167,7 @@ export function DocViewer({
                   value={commentText}
                   onChange={(e) => setCommentText(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    if (!destinations && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       submitDocComment();
                     } else if (e.key === "Escape") {
@@ -1197,15 +1199,7 @@ export function DocViewer({
                   >
                     Cancel
                   </button>
-                  <button
-                    type="button"
-                    className="btn xs primary"
-                    disabled={!commentText.trim()}
-                    onClick={submitDocComment}
-                  >
-                    <MessageSquare size={11} strokeWidth={1.6} />
-                    <span>Add to Chat</span>
-                  </button>
+                  <AttachmentActions destinations={destinations} disabled={!commentText.trim()} onAdd={submitDocComment} />
                 </div>
               </div>
             )}

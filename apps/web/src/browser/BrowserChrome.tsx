@@ -133,7 +133,7 @@ function QuickItem({
         width: "100%",
         textAlign: "left",
         padding: "5px 8px",
-        borderRadius: "var(--radius-sm)",
+        borderRadius: "var(--studio-row-radius)",
       }}
     >
       <span style={{ flexShrink: 0, display: "inline-flex" }}>{icon}</span>
@@ -508,11 +508,9 @@ export function BrowserChrome({
                   height: 30,
                   maxWidth: 196,
                   minWidth: 0,
-                  background: active ? "var(--bg-canvas)" : "transparent",
+                  background: active ? "var(--studio-selected)" : "transparent",
                   border: active ? "1px solid var(--border-hairline)" : "1px solid transparent",
-                  borderBottom: active ? "1px solid var(--bg-canvas)" : "1px solid transparent",
-                  marginBottom: active ? -1 : 0,
-                  borderRadius: "7px 7px 0 0",
+                  borderRadius: "var(--studio-row-radius)",
                   flexShrink: 0,
                   paddingRight: 4,
                 }}
@@ -754,7 +752,7 @@ export function BrowserChrome({
               : omniboxFeedback
                 ? "1px solid var(--status-warning-border)"
                 : "1px solid var(--border-subtle)",
-            background: omniboxEditing ? "var(--bg-canvas)" : "var(--bg-surface-subtle)",
+            background: omniboxEditing ? "var(--bg-canvas)" : "var(--studio-panel)",
             cursor: omniboxEditing ? "text" : "pointer",
             overflow: "hidden",
           }}
@@ -1040,11 +1038,11 @@ export function BrowserChrome({
               left: 8,
               width: 316,
               maxWidth: "calc(100% - 16px)",
-              maxHeight: 440,
+              maxHeight: "min(440px, calc(100dvh - 108px))",
               overflowY: "auto",
-              background: "var(--bg-elevated, var(--bg-canvas))",
+              background: "var(--studio-panel)",
               border: "1px solid var(--border-strong)",
-              borderRadius: "var(--radius-lg)",
+              borderRadius: "var(--studio-panel-radius)",
               boxShadow: "var(--shadow-popover)",
               zIndex: 31,
               padding: 8,

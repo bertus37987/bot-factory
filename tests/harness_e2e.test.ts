@@ -141,6 +141,8 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
     // Cross-origin request guard & minimal ACP child env isolation
     const evilRes = await fetch(`${app.url}/api/health`, { headers: { Origin: "https://evil.example" } });
     expect(evilRes.status).toBe(403);
+    const loopbackProxyRes = await fetch(`${app.url}/api/health`, { headers: { Origin: "http://127.0.0.1:59263" } });
+    expect(loopbackProxyRes.status).toBe(200);
     const prevKey = process.env.MISTRAL_API_KEY;
     process.env.MISTRAL_API_KEY = "sk-should-never-leak-to-acp";
     try {

@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import type { AnnotationAnchor } from "@bot-factory/shared";
+import { AttachmentDestinations } from "./AttachmentActions";
 import { BrowserChrome } from "./BrowserChrome";
 import { useBrowserShellContext } from "./BrowserWorkspaceShell";
 import { CodeViewer } from "./CodeViewer";
@@ -87,6 +88,7 @@ export function InAppBrowser({
   dockMode,
   onChangeDockMode,
   onImportToChat,
+  attachmentDestinations,
   onArtifactSaved,
   onStartFloatDrag,
   onSelectTab,
@@ -186,10 +188,9 @@ export function InAppBrowser({
   }, [annotations, activeTab]);
 
   const handleImportToChat = useCallback(
-    (attachment: ComposerAttachment) => {
+    (attachment: ComposerAttachment, destinationKey?: string): boolean => {
       if (onImportToChat) {
-        onImportToChat(attachment);
-        return;
+        return onImportToChat(attachment, destinationKey);
       }
       if (onCreateAnnotation) {
         const anchor: AnnotationAnchor =
@@ -221,7 +222,9 @@ export function InAppBrowser({
           snapshotDataUrl: attachment.thumbnailDataUrl,
           requestFixNow: true,
         });
+        return true;
       }
+      return false;
     },
     [onImportToChat, onCreateAnnotation],
   );
@@ -302,6 +305,7 @@ export function InAppBrowser({
         onSetOmniboxFeedback={setOmniboxFeedback}
       />
 
+      <AttachmentDestinations.Provider value={attachmentDestinations ?? null}>
       {/* ============================ CONTENT CANVAS ============================ */}
       <div
         className="iab-canvas iab-body"
@@ -427,6 +431,7 @@ export function InAppBrowser({
           </div>
         )}
       </div>
+      </AttachmentDestinations.Provider>
     </div>
   );
 }

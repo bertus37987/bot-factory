@@ -141,7 +141,7 @@ export function EscalationInbox({
         {pendingPermissions.length > 0 && (
           <div className="escalation-section">
             <div className="section-eyebrow">
-              <span>ACP Permission Requests</span>
+              <span>Needs a decision: Permission requests</span>
               <span className="mono-tag">{pendingPermissions.length}</span>
             </div>
             {pendingPermissions.map((perm) => {
@@ -211,7 +211,7 @@ export function EscalationInbox({
         {unknownAdmissions.length > 0 && (
           <div className="escalation-section">
             <div className="section-eyebrow">
-              <span>Crash Recovery (Unknown Admissions)</span>
+              <span>Needs a decision: Interrupted sessions</span>
               <span className="mono-tag">{unknownAdmissions.length}</span>
             </div>
             {unknownAdmissions.map((adm) => {

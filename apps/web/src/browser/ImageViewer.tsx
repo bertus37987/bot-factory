@@ -1,17 +1,11 @@
 import {
-  ArrowUpRight,
-  Check,
-  Crop,
   FileWarning,
   MessageSquare,
-  PenTool,
-  Save,
-  Square,
-  Undo2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, type JSX } from "react";
 import type { AnnotationAnchor, AnnotationRecord } from "@bot-factory/shared";
+import { AttachmentActions, AttachmentDestinations } from "./AttachmentActions";
 import type { ComposerAttachment, ImageZoomMode } from "./types";
 
 export interface ImageViewerProps {
@@ -24,7 +18,7 @@ export interface ImageViewerProps {
   focusNonce?: number;
   artifactVersion?: number;
   onPickAnchor?: (anchor: AnnotationAnchor) => void;
-  onImportToChat?: (attachment: ComposerAttachment) => void;
+  onImportToChat?: (attachment: ComposerAttachment, destinationKey?: string) => boolean;
   onArtifactSaved?: (filePath: string) => void;
 }
 
@@ -458,54 +452,70 @@ export function ImageViewer({
     }
   };
 
-  const handleAddSnapshotToChat = async () => {
-    const thumbnailDataUrl = await exportOffscreenDataUrl({ maxEdge: 720, mime: "image/png" });
-    const label = filePath.split("/").pop() ?? filePath;
-    if (onImportToChat) {
-      onImportToChat({
-        id: `att_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        kind: "image_comment",
-        filePath,
-        label,
-        comment: shapes.length > 0 || customImageDataUrl ? "Edited image preview" : "Image preview",
-        thumbnailDataUrl,
-      });
-      showTempStatus("success", "Added to chat composer");
-    } else if (onPickAnchor) {
-      onPickAnchor({ kind: "image", filePath, pin: { x: 0.5, y: 0.5 } });
+  const destinations = useContext(AttachmentDestinations);
+  const [addingAttachment, setAddingAttachment] = useState(false);
+  const handleAddSnapshotToChat = async (destinationKey?: string) => {
+    setAddingAttachment(true);
+    try {
+      const thumbnailDataUrl = await exportOffscreenDataUrl({ maxEdge: 720, mime: "image/png" });
+      const label = filePath.split("/").pop() ?? filePath;
+      if (onImportToChat) {
+        const added = onImportToChat({
+          id: `att_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          kind: "image_comment",
+          filePath,
+          label,
+          comment: shapes.length > 0 || customImageDataUrl ? "Edited image preview" : "Image preview",
+          thumbnailDataUrl,
+        }, destinationKey);
+        if (added && !destinations) showTempStatus("success", "Added to chat composer");
+      } else if (onPickAnchor) {
+        onPickAnchor({ kind: "image", filePath, pin: { x: 0.5, y: 0.5 } });
+      }
+    } catch (err) {
+      showTempStatus("error", err instanceof Error ? err.message : String(err));
+    } finally {
+      setAddingAttachment(false);
     }
   };
 
-  const submitCommentPopover = async () => {
+  const submitCommentPopover = async (destinationKey?: string) => {
     if (!pendingComment) return;
     const trimmed = commentText.trim();
     if (!trimmed) return;
-    const thumbnailDataUrl = await exportOffscreenDataUrl({
-      highlightRect: pendingComment.rect,
-      highlightPin: pendingComment.pin,
-      maxEdge: 480,
-      mime: "image/png",
-    });
-    const label = filePath.split("/").pop() ?? filePath;
-    if (onImportToChat) {
-      onImportToChat({
-        id: `att_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        kind: "image_comment",
-        filePath,
-        label,
-        comment: trimmed,
-        thumbnailDataUrl,
-        ...(pendingComment.rect ? { region: pendingComment.rect } : {}),
+    setAddingAttachment(true);
+    try {
+      const thumbnailDataUrl = await exportOffscreenDataUrl({
+        highlightRect: pendingComment.rect,
+        highlightPin: pendingComment.pin,
+        maxEdge: 480,
+        mime: "image/png",
       });
-    } else if (onPickAnchor) {
-      onPickAnchor(
-        pendingComment.rect
-          ? { kind: "image", filePath, rect: pendingComment.rect }
-          : { kind: "image", filePath, pin: pendingComment.pin ?? { x: 0.5, y: 0.5 } },
-      );
+      const label = filePath.split("/").pop() ?? filePath;
+      if (onImportToChat) {
+        if (!onImportToChat({
+          id: `att_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          kind: "image_comment",
+          filePath,
+          label,
+          comment: trimmed,
+          thumbnailDataUrl,
+          ...(pendingComment.rect ? { region: pendingComment.rect } : {}),
+        }, destinationKey)) return;
+      } else if (onPickAnchor) {
+        onPickAnchor(
+          pendingComment.rect
+            ? { kind: "image", filePath, rect: pendingComment.rect }
+            : { kind: "image", filePath, pin: pendingComment.pin ?? { x: 0.5, y: 0.5 } },
+        );
+      }
+      setPendingComment(null);
+      setCommentText("");
+    } catch (err) {
+      showTempStatus("error", err instanceof Error ? err.message : String(err));
+    } finally {
+      setAddingAttachment(false);
     }
-    setPendingComment(null);
-    setCommentText("");
   };
 
   const maxFitWidth = Math.max(120, viewportSize.w - 48);
@@ -634,22 +644,6 @@ export function ImageViewer({
       </g>
     );
   };
-
-  const microBtnStyle = (active: boolean): React.CSSProperties => ({
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 4,
-    height: 26,
-    padding: "0 8px",
-    borderRadius: "var(--radius-sm)",
-    border: active ? "1px solid var(--border-strong)" : "1px solid transparent",
-    background: active ? "var(--bg-active)" : "transparent",
-    color: active ? "var(--ink-primary)" : "var(--ink-secondary)",
-    fontSize: "var(--text-2xs)",
-    fontWeight: active ? "var(--weight-semibold)" : "var(--weight-medium)",
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  });
 
   return (
     <div
@@ -1115,7 +1109,7 @@ export function ImageViewer({
                   value={commentText}
                   onChange={(e) => setCommentText(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                    if (!destinations && e.key === "Enter" && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       void submitCommentPopover();
                     } else if (e.key === "Escape") {
@@ -1135,15 +1129,7 @@ export function ImageViewer({
                   }}
                 />
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
-                  <button
-                    type="button"
-                    className="btn xs primary"
-                    disabled={!commentText.trim()}
-                    onClick={() => void submitCommentPopover()}
-                  >
-                    <MessageSquare size={11} strokeWidth={1.6} />
-                    <span>Add to Chat</span>
-                  </button>
+                  <AttachmentActions destinations={destinations} disabled={addingAttachment || !commentText.trim()} onAdd={(key) => void submitCommentPopover(key)} />
                 </div>
               </div>
             )}
@@ -1157,148 +1143,19 @@ export function ImageViewer({
           className="iab-image-toolbar"
           role="toolbar"
           aria-label="Image annotation and edit tools"
-          style={{
-            position: "absolute",
-            bottom: 12,
-            left: "50%",
-            transform: "translateX(-50%)",
-            width: "max-content",
-            maxWidth: "calc(100% - 20px)",
-            display: "flex",
-            flexWrap: "wrap",
-            justifyContent: "center",
-            alignItems: "center",
-            gap: 4,
-            padding: "4px 6px",
-            borderRadius: "var(--radius-lg)",
-            background: "var(--bg-elevated, var(--bg-canvas))",
-            border: "1px solid var(--border-strong)",
-            boxShadow: "var(--shadow-popover)",
-            zIndex: 12,
-          }}
         >
           <button
             type="button"
             aria-pressed={tool === "comment"}
             onClick={() => setTool("comment")}
-            style={microBtnStyle(tool === "comment")}
-            title="Click or drag to comment in chat"
+            className={`iab-image-tool ${tool === "comment" ? "active" : ""}`.trim()}
+            title="Drag a div selection on the image to comment in chat"
           >
             <MessageSquare size={12} strokeWidth={1.7} />
-            <span>Comment</span>
+            <span>Select area</span>
           </button>
-          <button
-            type="button"
-            aria-pressed={tool === "pen"}
-            onClick={() => setTool("pen")}
-            style={microBtnStyle(tool === "pen")}
-            title="Freehand pen"
-          >
-            <PenTool size={12} strokeWidth={1.7} />
-            <span>Pen</span>
-          </button>
-          <button
-            type="button"
-            aria-pressed={tool === "arrow"}
-            onClick={() => setTool("arrow")}
-            style={microBtnStyle(tool === "arrow")}
-            title="Arrow"
-          >
-            <ArrowUpRight size={12} strokeWidth={1.7} />
-            <span>Arrow</span>
-          </button>
-          <button
-            type="button"
-            aria-pressed={tool === "rect"}
-            onClick={() => setTool("rect")}
-            style={microBtnStyle(tool === "rect")}
-            title="Rectangle"
-          >
-            <Square size={12} strokeWidth={1.7} />
-            <span>Rect</span>
-          </button>
-          <button
-            type="button"
-            aria-pressed={tool === "crop"}
-            onClick={() => setTool("crop")}
-            style={microBtnStyle(tool === "crop")}
-            title="Drag to crop image"
-          >
-            <Crop size={12} strokeWidth={1.7} />
-            <span>Crop</span>
-          </button>
-
-          <span style={{ width: 1, height: 16, background: "var(--border-hairline)", margin: "0 2px", flexShrink: 0 }} />
-
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "0 2px", flexShrink: 0 }}>
-            {COLOR_DOTS.map((c) => {
-              const selected = activeColor === c.hex;
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  aria-label={`Color ${c.label}`}
-                  aria-pressed={selected}
-                  title={c.label}
-                  onClick={() => setActiveColor(c.hex)}
-                  style={{
-                    width: 14,
-                    height: 14,
-                    borderRadius: "50%",
-                    background: c.hex,
-                    border: selected ? "2px solid var(--accent-orange)" : "1.5px solid var(--border-strong)",
-                    boxShadow: selected ? "0 0 0 1px var(--bg-canvas)" : "none",
-                    cursor: "pointer",
-                    padding: 0,
-                  }}
-                />
-              );
-            })}
-          </div>
-
-          <span style={{ width: 1, height: 16, background: "var(--border-hairline)", margin: "0 2px", flexShrink: 0 }} />
-
-          <button
-            type="button"
-            disabled={history.length === 0}
-            onClick={handleUndo}
-            style={{
-              ...microBtnStyle(false),
-              opacity: history.length === 0 ? 0.4 : 1,
-              cursor: history.length === 0 ? "not-allowed" : "pointer",
-            }}
-            title="Undo last edit"
-          >
-            <Undo2 size={12} strokeWidth={1.7} />
-            <span>Undo</span>
-          </button>
-
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => void handleSave()}
-            style={microBtnStyle(false)}
-            title={isSvg ? "Save rasterized PNG copy" : "Save edits to artifact"}
-          >
-            {saving ? <Check size={12} strokeWidth={1.7} /> : <Save size={12} strokeWidth={1.7} />}
-            <span>{saving ? "Saving..." : "Save"}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => void handleAddSnapshotToChat()}
-            style={{
-              ...microBtnStyle(false),
-              background: "var(--accent-orange)",
-              borderColor: "var(--accent-orange)",
-              color: "#FFFFFF",
-              fontWeight: "var(--weight-semibold)",
-            }}
-            title="Attach current image preview to chat composer"
-          >
-            <MessageSquare size={12} strokeWidth={1.7} />
-            <span>Add to Chat</span>
-          </button>
+          <span className="iab-image-toolbar-hint">Drag to Comment</span>
+          <AttachmentActions destinations={destinations} disabled={addingAttachment} onAdd={(key) => void handleAddSnapshotToChat(key)} />
         </div>
       )}
     </div>

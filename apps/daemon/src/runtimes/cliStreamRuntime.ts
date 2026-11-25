@@ -352,6 +352,8 @@ export class CliStreamRuntime implements AgentRuntime {
       sessionId: spec.sessionId,
       agentId: spec.agentId,
       runtimeKind: "cli_stream",
+      provider: spec.provider,
+      model: spec.model,
       pid: state.proc?.pid ?? null,
       externalSessionId: state.externalSessionId,
     };

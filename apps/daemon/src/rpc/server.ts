@@ -147,22 +147,17 @@ export function resolveSafeProjectFile(projectRoot: string, relPath: string): st
   return check.absTarget;
 }
 
-function isAllowedLocalOrigin(req: Request, boundPort: number): boolean {
+function isAllowedLocalOrigin(req: Request): boolean {
   const hostHeader = (req.headers.get("host") ?? "").toLowerCase();
   if (hostHeader && !/^((127\.0\.0\.1|localhost|\[::1\])(:\d+)?)$/.test(hostHeader)) {
     return false;
   }
   const origin = req.headers.get("origin");
   if (!origin) return true; // Non-browser local clients (CLI/tests)
-  const allowed = new Set([
-    `http://127.0.0.1:${boundPort}`,
-    `http://localhost:${boundPort}`,
-    `http://[::1]:${boundPort}`,
-    "http://127.0.0.1:5173",
-    "http://localhost:5173",
-    "http://[::1]:5173",
-  ]);
-  return allowed.has(origin.toLowerCase());
+  // Browser preview/dev proxies use ephemeral loopback ports. They remain
+  // same-machine loopback clients, while DNS names and remote origins stay
+  // rejected by both this check and the Host allowlist above.
+  return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(origin);
 }
 
 export class DaemonServer {
@@ -213,7 +208,7 @@ export class DaemonServer {
         const url = new URL(req.url);
         const boundPort = server.port ?? port;
 
-        if (!isAllowedLocalOrigin(req, boundPort)) {
+        if (!isAllowedLocalOrigin(req)) {
           return new Response("Forbidden origin/host", { status: 403 });
         }
 

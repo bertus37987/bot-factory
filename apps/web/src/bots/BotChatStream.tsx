@@ -10,11 +10,10 @@ import type {
   VerificationReportRecord,
 } from "@bot-factory/shared";
 import { ArrowUpRight, AtSign, ChevronRight, CornerDownRight, GitMerge, Play, ShieldCheck } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import {
   BotAvatar,
   GroupAvatarCluster,
-  JobTitlePill,
   ROLE_META,
   resolveBotRole,
   type ResolvedBotMeta,
@@ -75,22 +74,6 @@ function sepLabel(ts: number): string {
   const yesterday = new Date(now.getTime() - 86_400_000);
   if (dayStamp(d) === dayStamp(yesterday)) return `Yesterday ${t}`;
   return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${t}`;
-}
-
-function roleLabel(meta: ResolvedBotMeta | null, agent: AgentRecord | null): string {
-  if (meta) return meta.jobTitle;
-  switch (agent?.scope) {
-    case "project":
-      return "Team Lead";
-    case "verifier":
-      return "Verifier";
-    case "peer":
-      return "Peer";
-    case "sidekick":
-      return "Subagent";
-    default:
-      return "Bot";
-  }
 }
 
 function artifactIcon(a: ArtifactEntry): JSX.Element {
@@ -199,7 +182,9 @@ export function BotChatStream({
 }: BotChatStreamProps): JSX.Element {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [pendingTaskAction, setPendingTaskAction] = useState<string | null>(null);
-  const endRef = useRef<HTMLDivElement | null>(null);
+  const streamRef = useRef<HTMLDivElement>(null);
+  const [following, setFollowing] = useState(true);
+  const followingRef = useRef(true);
 
   const toggle = (key: string) => setExpanded((m) => ({ ...m, [key]: !m[key] }));
 
@@ -494,9 +479,35 @@ export function BotChatStream({
     return out;
   }, [mode, activeAgent, agents, streamingBotTextByAgent, streamingBotThoughtByAgent]);
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [feed.length, streamingEntries.length]);
+  const jumpToLatest = () => {
+    const viewport = streamRef.current?.parentElement;
+    if (viewport) viewport.scrollTop = viewport.scrollHeight;
+    followingRef.current = true;
+    setFollowing(true);
+  };
+
+  useLayoutEffect(() => {
+    const stream = streamRef.current;
+    const viewport = stream?.parentElement;
+    if (!stream || !viewport) return;
+    const follow = () => {
+      if (followingRef.current) viewport.scrollTop = viewport.scrollHeight;
+    };
+    const onScroll = () => {
+      if (!viewport.clientHeight) return;
+      followingRef.current = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 56;
+      setFollowing(followingRef.current);
+    };
+    follow();
+    const observer = new ResizeObserver(follow);
+    observer.observe(stream);
+    observer.observe(viewport);
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      observer.disconnect();
+      viewport.removeEventListener("scroll", onScroll);
+    };
+  }, []);
 
   const doneTasks = tasks.filter((t) => t.status === "verified" || t.status === "merged").length;
   const streamingIds = new Set(streamingEntries.map((e) => e.agent.id));
@@ -532,14 +543,31 @@ export function BotChatStream({
   };
 
   return (
-    <div className="bcs-root">
+    <div className="bcs-root" ref={streamRef}>
+      {!following && (
+        <div className="bots-jump-slot">
+          <button type="button" className="btn xs" onClick={jumpToLatest}>Jump to Latest</button>
+        </div>
+      )}
       {feed.length === 0 && streamingEntries.length === 0 && (
         <div className="bcs-empty">
-          <BotThinkingOrb
-            activity="breathing"
-            size={64}
-            label={mode === "group" ? "Team channel ready" : "Bot ready"}
-          />
+          {mode === "group" ? (
+            <GroupAvatarCluster
+              roles={agents.map((agent) => resolveBotRole(agent).role)}
+              totalCount={agents.length}
+              size={144}
+            />
+          ) : activeAgent ? (
+            <BotAvatar
+              role={resolveBotRole(activeAgent).role}
+              size={168}
+              live
+              agentStatus={activeAgent.status}
+              seed={activeAgent.id}
+            />
+          ) : (
+            <BotAvatar role="cub" size={168} seed="empty-bot" />
+          )}
           <div className="bcs-empty-title">
             {mode === "group" ? `${project.name} · Group Chat` : (activeAgent?.name ?? "Bot")}
           </div>
@@ -551,7 +579,7 @@ export function BotChatStream({
         </div>
       )}
 
-      {feed.map((node) => {
+      {feed.map((node, index) => {
         if (node.kind === "sep") {
           return (
             <div key={node.key} className="bcs-time-sep">
@@ -570,6 +598,18 @@ export function BotChatStream({
 
         if (node.kind === "msg") {
           const { speaker } = node;
+          const previous = feed[index - 1];
+          const grouped =
+            previous?.kind === "msg" &&
+            previous.speaker.name === speaker.name &&
+            previous.speaker.agent?.id === speaker.agent?.id &&
+            previous.speaker.human === speaker.human &&
+            previous.diffAgentId === node.diffAgentId &&
+            node.ts - previous.ts < 120_000 &&
+            !node.eyebrow && !previous.eyebrow &&
+            !node.replyQuote && !previous.replyQuote &&
+            !node.filePath && !previous.filePath &&
+            !node.hasDiff && !previous.hasDiff;
           const mentionedBots = extractMentionedAgents(node.text, agents);
           const referencedArtifact = node.filePath
             ? artifacts.find((a) => a.relativePath === node.filePath) ?? null
@@ -579,9 +619,9 @@ export function BotChatStream({
           return (
             <div
               key={node.key}
-              className={`group-msg-row ${node.side === "right" ? "side-right msg-side-right" : "side-left msg-side-left"}`}
+              className={`group-msg-row ${node.side === "right" ? "side-right msg-side-right" : "side-left msg-side-left"}${grouped ? " bots-continuation" : ""}`}
             >
-              {!speaker.human &&
+              {!speaker.human && !grouped &&
                 (speaker.meta ? (
                   <button
                     type="button"
@@ -602,9 +642,7 @@ export function BotChatStream({
                   >
                     <BotAvatar
                       role={speaker.meta.role}
-                      size={30}
-                      active={speaker.agent?.status === "working"}
-                      agentStatus={speaker.agent?.status}
+                      size={84}
                       seed={speaker.agent?.id ?? speaker.meta.role}
                     />
                   </button>
@@ -615,21 +653,10 @@ export function BotChatStream({
                 ))}
 
               <div className="group-msg-stack">
-                <div className="bcs-msg-head">
+                {!grouped && <div className="bcs-msg-head">
                   <span className="bcs-msg-name">{speaker.name}</span>
-                  {!speaker.human && (speaker.meta || speaker.agent) && (
-                    <JobTitlePill
-                      label={roleLabel(speaker.meta, speaker.agent)}
-                      role={speaker.meta?.role}
-                      tone={
-                        speaker.meta?.role === "orchestrator" || speaker.agent?.scope === "project"
-                          ? "accent"
-                          : "neutral"
-                      }
-                    />
-                  )}
                   {node.eyebrow && <span className="bcs-msg-eyebrow">{node.eyebrow}</span>}
-                  <span className="bcs-msg-time">{timeLabel(node.ts)}</span>
+                  <time className="bcs-msg-time" dateTime={new Date(node.ts).toISOString()}>{timeLabel(node.ts)}</time>
                   {!speaker.human && speaker.agent && onInsertMention && (
                     <button
                       type="button"
@@ -641,7 +668,7 @@ export function BotChatStream({
                       <span>{speaker.agent.name}</span>
                     </button>
                   )}
-                </div>
+                </div>}
 
                 {node.replyQuote && (
                   <div
@@ -658,7 +685,11 @@ export function BotChatStream({
                   </div>
                 )}
 
-                <div className={`bcs-bubble ${speaker.human ? "human" : `bot ${bubbleRoleClass}`.trim()}`}>
+                <div
+                  className={`bcs-bubble ${speaker.human ? "human" : `bot ${bubbleRoleClass}`.trim()}`}
+                  title={grouped ? `${speaker.name} · ${timeLabel(node.ts)}` : undefined}
+                >
+                  {grouped && <span className="bots-visually-hidden">{speaker.name}, {timeLabel(node.ts)}: </span>}
                   {speaker.human ? (
                     <div style={{ whiteSpace: "pre-wrap" }}>{node.text}</div>
                   ) : (
@@ -816,9 +847,9 @@ export function BotChatStream({
               <span style={{ display: "inline-flex", flexShrink: 0 }}>
                 <BotAvatar
                   role={meta.role}
-                  size={30}
-                  active
-                  agentStatus={agent.status}
+                  size={84}
+                  live
+                  status="working"
                   seed={agent.id}
                 />
               </span>
@@ -830,16 +861,14 @@ export function BotChatStream({
             <div className="group-msg-stack">
               <div className="bcs-msg-head">
                 <span className="bcs-msg-name">{agent.name}</span>
-                <JobTitlePill
-                  label={roleLabel(meta, agent)}
-                  role={meta?.role}
-                  tone={agent.scope === "project" ? "accent" : "neutral"}
-                />
                 <BotThinkingOrb activity={text ? "composing" : "solving"} size={20} shell={false} />
                 <span className="bcs-msg-time">streaming</span>
               </div>
               {thought.trim().length > 0 && (
-                <div className="chat-thought-pill">{thought}</div>
+                <details className="bots-live-activity">
+                  <summary>Live activity</summary>
+                  <div className="chat-thought-pill">{thought}</div>
+                </details>
               )}
               {text.trim().length > 0 && (
                 <div className={`bcs-bubble bot ${streamRoleClass}`.trim()}>
@@ -941,7 +970,7 @@ export function BotChatStream({
           <button type="button" className="bcs-team-pill" onClick={onOpenGroupRoom}>
             <span>{agents.length} bots on team</span>
             <GroupAvatarCluster
-              roles={agents.slice(0, 4).map((a) => resolveBotRole(a).role)}
+              roles={agents.map((a) => resolveBotRole(a).role)}
               size={18}
             />
             <span>Open Group Chat</span>
@@ -963,8 +992,8 @@ export function BotChatStream({
               <span style={{ display: "inline-flex", flexShrink: 0 }}>
                 <BotAvatar
                   role={liveMeta.role}
-                  size={28}
-                  active
+                  size={80}
+                  live
                   agentStatus={a.status}
                   seed={a.id}
                 />
@@ -985,7 +1014,6 @@ export function BotChatStream({
         <div className="bcs-live-more">+{workingAgents.length - 3} more active</div>
       )}
 
-      <div ref={endRef} />
     </div>
   );
 }

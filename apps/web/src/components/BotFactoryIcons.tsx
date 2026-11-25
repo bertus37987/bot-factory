@@ -80,6 +80,77 @@ export function BrowserPaneIcon({ size, className }: BotFactoryIconProps) {
   );
 }
 
+
+/** Search — aperture loupe with the factory focal dot. */
+export function SearchApertureIcon({ size, className }: BotFactoryIconProps) {
+  return (
+    <IconFrame size={size} className={className}>
+      <circle cx="10.8" cy="10.8" r="5.8" />
+      <path d="M15.3 15.3 L20 20" />
+      <path d="M8.2 10.8 H13.4" />
+      <circle cx="10.8" cy="10.8" r="1" fill="currentColor" stroke="none" />
+    </IconFrame>
+  );
+}
+
+/** Escalation inbox — quiet tray with one rising signal. */
+export function InboxSignalIcon({ size, className }: BotFactoryIconProps) {
+  return (
+    <IconFrame size={size} className={className}>
+      <path d="M4.5 13.2 L7 7.2 H17 L19.5 13.2 V17.5 C19.5 18.3 18.8 19 18 19 H6 C5.2 19 4.5 18.3 4.5 17.5 Z" />
+      <path d="M4.5 13.2 H9.2 C9.7 14.8 10.7 15.5 12 15.5 C13.3 15.5 14.3 14.8 14.8 13.2 H19.5" />
+      <path d="M12 3.8 V6" />
+      <circle cx="12" cy="3.8" r="0.9" fill="currentColor" stroke="none" />
+    </IconFrame>
+  );
+}
+
+/** Memory studio — layered core crystal. */
+export function MemoryCoreIcon({ size, className }: BotFactoryIconProps) {
+  return (
+    <IconFrame size={size} className={className}>
+      <path d="M12 3.8 L17.8 7.1 V13.8 L12 17.1 L6.2 13.8 V7.1 Z" />
+      <path d="M12 7.1 L15 8.8 V12.2 L12 13.9 L9 12.2 V8.8 Z" />
+      <path d="M8 18.2 H16" />
+      <circle cx="12" cy="10.5" r="0.9" fill="currentColor" stroke="none" />
+    </IconFrame>
+  );
+}
+
+/** Settings — compact factory cog around a control bolt. */
+export function SettingsFactoryIcon({ size, className }: BotFactoryIconProps) {
+  return (
+    <IconFrame size={size} className={className}>
+      <path d="M12 3.8 L14.2 5.1 L16.9 4.9 L18.1 7.4 L20.2 8.9 L19.4 11.5 L20.2 14.1 L18.1 15.6 L16.9 18.1 L14.2 17.9 L12 19.2 L9.8 17.9 L7.1 18.1 L5.9 15.6 L3.8 14.1 L4.6 11.5 L3.8 8.9 L5.9 7.4 L7.1 4.9 L9.8 5.1 Z" />
+      <circle cx="12" cy="11.5" r="3" />
+      <path d="M12 9.5 V13.5" />
+    </IconFrame>
+  );
+}
+
+/** Theme — quiet eclipse, used for both directions of the theme toggle. */
+export function ThemeEclipseIcon({ size, className }: BotFactoryIconProps) {
+  return (
+    <IconFrame size={size} className={className}>
+      <circle cx="12" cy="12" r="7" />
+      <path d="M12 5 A7 7 0 0 1 12 19 Z" fill="currentColor" stroke="none" opacity="0.82" />
+      <path d="M12 5 A7 7 0 0 0 12 19" />
+    </IconFrame>
+  );
+}
+
+/** Bear-paw control mark for the retractable bot-control tab. */
+export function BearPawControlIcon({ size, className }: BotFactoryIconProps) {
+  return (
+    <IconFrame size={size} className={className}>
+      <path d="M8.1 13.4 C8.1 10.9 9.7 9.1 12 9.1 C14.3 9.1 15.9 10.9 15.9 13.4 C15.9 16 14.2 18.1 12 18.1 C9.8 18.1 8.1 16 8.1 13.4 Z" />
+      <circle cx="7.4" cy="8" r="1.4" />
+      <circle cx="12" cy="6.3" r="1.4" />
+      <circle cx="16.6" cy="8" r="1.4" />
+    </IconFrame>
+  );
+}
+
 export type AutonomyLevel = "spec" | "low" | "medium" | "high";
 
 export interface AutonomyBarsIconProps extends BotFactoryIconProps {
@@ -88,7 +159,7 @@ export interface AutonomyBarsIconProps extends BotFactoryIconProps {
 
 /**
  * Bot-Factory signature autonomy readout — 3 vertical bars.
- * spec = dashed outlines · low = 1 ink bar · medium = 2 burnt-orange · high = 3.
+ * spec = dashed outlines · low = 1 ink bar · medium = 2 lit bars · high = 3.
  */
 export function AutonomyBarsIcon({ level, size, className }: AutonomyBarsIconProps) {
   const bars = [
@@ -118,7 +189,7 @@ export function AutonomyBarsIcon({ level, size, className }: AutonomyBarsIconPro
             width={2.2}
             height={b.h}
             rx={1.1}
-            fill={level === "low" ? "currentColor" : "#D95D22"}
+            fill="currentColor"
             stroke="none"
           />
         ) : (
@@ -147,12 +218,11 @@ export function SlashKeyIcon({ size, className }: BotFactoryIconProps) {
   );
 }
 
-/** Send / steer arrow (up-right). */
+/** Send / steer arrow. */
 export function SendArrowIcon({ size, className }: BotFactoryIconProps) {
   return (
     <IconFrame size={size} className={className}>
-      <path d="M5.5 18.5 L18.5 5.5" />
-      <path d="M10.5 5.5 H18.5 V13.5" />
+      <path d="M12 19V5 M6 11l6-6 6 6" />
     </IconFrame>
   );
 }

@@ -7,7 +7,7 @@ import {
   ShieldAlert,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type {
   GitDiffResponse,
   ProjectRecord,
@@ -16,10 +16,11 @@ import type {
   TimelineItem,
 } from "@bot-factory/shared";
 import type { ArtifactCardEvent, ProviderSummary } from "../client/useBotFactory";
-import { BotAvatar, JobTitlePill } from "../components/BotAvatars";
+import { BotAvatar } from "../components/BotAvatars";
 import { BrowserPaneIcon, DiffBranchIcon, DocTabIcon } from "../components/BotFactoryIcons";
 import { BotThinkingOrb } from "../components/BotThinkingOrb";
 import { MarkdownRenderer } from "../components/MarkdownRenderer";
+import { useFollowLatest } from "../components/useFollowLatest";
 import {
   PrecisionComposer,
   type AutonomyLevel,
@@ -118,19 +119,16 @@ export function ChatTab({
   const [busy, setBusy] = useState(false);
   const [mergingTaskId, setMergingTaskId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const streamRef = useRef<HTMLDivElement | null>(null);
+  const { viewportRef, contentRef, following, jumpToLatest } = useFollowLatest();
 
   const isStreaming = streamingText.length > 0 || streamingThought.length > 0;
-
-  useEffect(() => {
-    const el = streamRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length, cards.length, streamingText, streamingThought, busy]);
 
   const timeline = useMemo<StreamEntry[]>(() => {
     const combined: StreamEntry[] = [
       ...messages.map((msg) => ({ kind: "message" as const, ts: msg.createdAt, msg })),
-      ...cards.map((card) => ({ kind: "card" as const, ts: card.createdAt, card })),
+      ...cards
+        .filter((card) => card.kind === "delegation" || card.kind === "review_merge" || card.kind === "blocked" || card.kind === "milestone")
+        .map((card) => ({ kind: "card" as const, ts: card.createdAt, card })),
     ];
     combined.sort((a, b) => a.ts - b.ts);
     return combined;
@@ -190,13 +188,16 @@ export function ChatTab({
           </div>
         )}
 
-        <div className="chat-stream" ref={streamRef}>
+        <div className="chat-stream-frame">
+        {/* biome-ignore lint/a11y/noNoninteractiveTabindex: The scrollable transcript needs a keyboard entry point. */}
+        <div className="chat-stream" ref={viewportRef} tabIndex={0} role="region" aria-label="Main Agent conversation">
+          <div className="chat-stream-content" ref={contentRef}>
           {isEmpty && (
             <div className="chat-empty">
               <div className="chat-empty-emblem">
                 <BotAvatar
                   role="orchestrator"
-                  size={64}
+                  size={72}
                   active={busy}
                   status={busy ? "working" : "idle"}
                   seed="main-agent"
@@ -250,11 +251,10 @@ export function ChatTab({
                     </div>
                   ) : (
                     <div className="chat-assistant-row">
-                      <BotAvatar role="orchestrator" size={30} seed="main-agent" />
+                      <BotAvatar role="orchestrator" size={40} seed="main-agent" />
                       <div className="chat-assistant-body">
                         <div className="chat-turn-meta">
                           <span className="chat-speaker-name">Main Agent</span>
-                          <JobTitlePill label="Orchestrator" role="orchestrator" />
                           {memoryRecalledActive && (
                             <button
                               type="button"
@@ -400,11 +400,10 @@ export function ChatTab({
           {isStreaming && (
             <div className="chat-turn assistant msg-side-left">
               <div className="chat-assistant-row">
-                <BotAvatar role="orchestrator" size={30} active status="working" seed="main-agent" />
+                <BotAvatar role="orchestrator" size={40} live status="working" seed="main-agent" />
                 <div className="chat-assistant-body">
                   <div className="chat-turn-meta">
                     <span className="chat-speaker-name">Main Agent</span>
-                    <JobTitlePill label="Orchestrator" role="orchestrator" />
                     <BotThinkingOrb activity="composing" size={20} shell={false} />
                     <span className="chat-turn-time">Streaming…</span>
                   </div>
@@ -423,11 +422,18 @@ export function ChatTab({
 
           {busy && !isStreaming && (
             <div className="chat-thinking-row">
-              <BotAvatar role="orchestrator" size={24} active status="working" seed="main-agent" />
+              <BotAvatar role="orchestrator" size={28} seed="main-agent" />
               <BotThinkingOrb activity="composing" size={20} shell={false} />
               <span>Main Agent is thinking…</span>
             </div>
           )}
+          </div>
+        </div>
+        {!following && (
+          <button className="btn xs chat-jump-latest" type="button" onClick={jumpToLatest}>
+            Jump to Latest
+          </button>
+        )}
         </div>
 
         <PrecisionComposer

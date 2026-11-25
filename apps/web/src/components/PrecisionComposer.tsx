@@ -1,6 +1,6 @@
 import type { GitDiffResponse, ProjectRecord } from "@bot-factory/shared";
-import { Box, Check, ChevronDown, FileText, FolderGit2, Image as ImageIcon, Plus, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { Box, ChevronDown, FileText, FolderGit2, Image as ImageIcon, Plus, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useId, type JSX } from "react";
 import type { ComposerAttachment } from "../browser/types";
 import type { ProviderSummary } from "../client/useBotFactory";
 import {
@@ -10,7 +10,6 @@ import {
   SendArrowIcon,
   SlashKeyIcon,
 } from "./BotFactoryIcons";
-import { BotThinkingOrb } from "./BotThinkingOrb";
 import { ReasoningEffortControl, type ReasoningEffort } from "./ReasoningEffortSlider";
 import "./PrecisionComposer.css";
 
@@ -48,12 +47,15 @@ export interface PrecisionComposerProps {
   onChangeAutonomy: (v: AutonomyLevel) => void;
   attachments?: ComposerAttachment[];
   onRemoveAttachment?: (id: string) => void;
-  onClearAttachments?: () => void;
+  onClearAttachments?: (sent: ComposerAttachment[]) => void;
+  draft?: string;
+  onDraftChange?: (text: string) => void;
   onSubmit: (text: string) => Promise<void>;
   onSlashAction?: (command: string) => void;
 }
 
 const SLASH_COMMANDS: { cmd: string; desc: string }[] = [
+  { cmd: "/goal", desc: "Set the goal, then describe the outcome" },
   { cmd: "/plan", desc: "Draft an implementation plan first" },
   { cmd: "/verify", desc: "Run fresh cross-family verification" },
   { cmd: "/preview", desc: "Open project preview in In-App Browser" },
@@ -77,6 +79,72 @@ const AUTONOMY_LABEL: Record<AutonomyLevel, string> = {
 
 const COMPOSER_MIN_H = 56;
 const COMPOSER_MAX_H = 300;
+
+function formatRuntimeLabel(runtime: string): string {
+  if (runtime === "native_http") return "API";
+  if (runtime === "acp_stdio") return "ACP";
+  if (runtime === "cli_stream") return "CLI";
+  return runtime.replaceAll("_", " ").toUpperCase();
+}
+
+function formatProviderLabel(provider: string): string {
+  return provider
+    .split(/[-_]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function ProviderLogo({ provider, size = 18 }: { provider: string; size?: number }): JSX.Element {
+  const gradientId = useId().replace(/:/g, "");
+  const key = provider.toLowerCase();
+  const label = formatProviderLabel(provider);
+  let mark: JSX.Element;
+  if (key.includes("mistral")) {
+    mark = (
+      <>
+        <rect x="4" y="4" width="16" height="3" rx="1.5" fill="#ff9d42" />
+        <rect x="6" y="9" width="12" height="3" rx="1.5" fill="#ff5f45" />
+        <rect x="8" y="14" width="8" height="3" rx="1.5" fill="#d93662" />
+      </>
+    );
+  } else if (key.includes("google") || key.includes("gemini")) {
+    mark = (
+      <path d="M12 3 L14 10 L21 12 L14 14 L12 21 L10 14 L3 12 L10 10 Z" fill={`url(#${gradientId})`} />
+    );
+  } else if (key.includes("anthropic") || key.includes("claude")) {
+    mark = <path d="M5 18 L12 5 L19 18 H15.7 L12 10.8 L8.3 18 Z" fill="#f4b183" />;
+  } else if (key.includes("openai")) {
+    mark = (
+      <g fill="none" stroke="#d8f3ff" strokeWidth="2" strokeLinecap="round">
+        <circle cx="12" cy="12" r="7" />
+        <path d="M12 5 V19 M5 12 H19 M7 7 L17 17 M17 7 L7 17" opacity="0.58" />
+      </g>
+    );
+  } else if (key.includes("devin") || key.includes("acp")) {
+    mark = (
+      <>
+        <path d="M12 3 L19 7 V17 L12 21 L5 17 V7 Z" fill="#8fd8ff" opacity="0.92" />
+        <path d="M9 8 H12.3 A4.2 4.2 0 0 1 12.3 16 H9 Z" fill="#06101a" />
+      </>
+    );
+  } else {
+    const initials = label.split(" ").map((part) => part.charAt(0)).join("").slice(0, 2).toUpperCase();
+    mark = <text x="12" y="15" textAnchor="middle" fontSize="8.5" fontWeight="700" fill="#dff6ff">{initials}</text>;
+  }
+  return (
+    <svg className="pc-provider-logo" width={size} height={size} viewBox="0 0 24 24" role="img" aria-label={`${label} provider`}>
+      <defs>
+        <linearGradient id={gradientId} x1="4" y1="4" x2="20" y2="20">
+          <stop offset="0" stopColor="#8fd8ff" />
+          <stop offset="1" stopColor="#b99cff" />
+        </linearGradient>
+      </defs>
+      <rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="rgba(125, 211, 252, 0.1)" stroke="rgba(191, 232, 255, 0.24)" />
+      {mark}
+    </svg>
+  );
+}
 
 type PopKind = "slash" | "autonomy" | "project" | "attach" | "model" | null;
 
@@ -177,10 +245,14 @@ export function PrecisionComposer({
   attachments,
   onRemoveAttachment,
   onClearAttachments,
+  draft,
+  onDraftChange,
   onSubmit,
   onSlashAction,
 }: PrecisionComposerProps): JSX.Element {
-  const [text, setText] = useState("");
+  const [localText, setLocalText] = useState("");
+  const text = draft ?? localText;
+  const setText = onDraftChange ?? setLocalText;
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [openPop, setOpenPop] = useState<PopKind>(null);
@@ -188,9 +260,15 @@ export function PrecisionComposer({
   const [trayDismissed, setTrayDismissed] = useState(false);
   const [manualHeight, setManualHeight] = useState<number | null>(null);
   const [resizingHeight, setResizingHeight] = useState(false);
+  const [modelQuery, setModelQuery] = useState("");
+  const [focusedModelIdx, setFocusedModelIdx] = useState(0);
+  const modelPickerId = useId().replace(/:/g, "");
+  const modelListId = `${modelPickerId}-list`;
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const highlightRef = useRef<HTMLPreElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
 
   const isBusy = Boolean(busy) || sending;
@@ -250,6 +328,83 @@ export function PrecisionComposer({
   const displayModelLabel = selectedTarget
     ? `${selectedTarget.provider}/${selectedTarget.model}`
     : activeModelLabel;
+  const activeProviderName = selectedTarget?.provider ?? displayModelLabel.split("/")[0] ?? "";
+  const activeModelName = selectedTarget?.model ?? (displayModelLabel.includes("/") ? displayModelLabel.split("/").slice(1).join("/") : displayModelLabel);
+  const activeRuntime = providers?.find((provider) => provider.name === activeProviderName)?.runtime ?? "";
+
+  const filteredModelChoices = useMemo(() => {
+    const q = modelQuery.trim().toLowerCase();
+    if (!q) return modelChoices;
+    return modelChoices.filter((choice) =>
+      `${choice.provider}/${choice.model} ${choice.runtime}`.toLowerCase().includes(q),
+    );
+  }, [modelChoices, modelQuery]);
+
+  const modelSections = useMemo(() => {
+    const sections: {
+      provider: string;
+      items: ({ provider: string; model: string; runtime: string } & { flatIndex: number })[];
+    }[] = [];
+    filteredModelChoices.forEach((choice, flatIndex) => {
+      let section = sections[sections.length - 1];
+      if (!section || section.provider !== choice.provider) {
+        section = { provider: choice.provider, items: [] };
+        sections.push(section);
+      }
+      section.items.push({ ...choice, flatIndex });
+    });
+    return sections;
+  }, [filteredModelChoices]);
+
+  useEffect(() => {
+    if (openPop !== "model") {
+      setModelQuery("");
+      setFocusedModelIdx(0);
+    }
+  }, [openPop]);
+
+  useEffect(() => {
+    setFocusedModelIdx((idx) => Math.max(0, Math.min(idx, filteredModelChoices.length - 1)));
+  }, [filteredModelChoices.length]);
+
+  useEffect(() => {
+    if (openPop !== "model" || filteredModelChoices.length === 0) return;
+    document
+      .getElementById(`${modelListId}-option-${focusedModelIdx}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [focusedModelIdx, filteredModelChoices.length, modelListId, openPop]);
+
+  const closeModelPicker = (restoreFocus = false) => {
+    setOpenPop(null);
+    if (restoreFocus) requestAnimationFrame(() => modelButtonRef.current?.focus());
+  };
+
+  const selectModelChoice = (choice: { provider: string; model: string }) => {
+    onSelectTarget?.({ provider: choice.provider, model: choice.model });
+    closeModelPicker(true);
+  };
+
+  const highlightedText = useMemo(() => {
+    const re = /(^|\s)(\/(?:goal|plan|verify|preview|spawn-bot|diff))(?=\s|$)/g;
+    const parts: (string | JSX.Element)[] = [];
+    let last = 0;
+    let match: RegExpExecArray | null;
+    let key = 0;
+    while ((match = re.exec(text)) !== null) {
+      const leading = match[1];
+      const token = match[2];
+      const tokenStart = match.index + leading.length;
+      parts.push(text.slice(last, tokenStart));
+      parts.push(
+        <span key={`cmd-${key++}`} className="pc-command-token">
+          {token}
+        </span>,
+      );
+      last = tokenStart + token.length;
+    }
+    parts.push(text.slice(last));
+    return parts;
+  }, [text]);
 
   const slashFilter = text.startsWith("/") && !text.includes(" ") ? text.slice(1).toLowerCase() : null;
   const slashItems = useMemo(
@@ -267,11 +422,11 @@ export function PrecisionComposer({
 
   const pickSlash = (cmd: string) => {
     setOpenPop(null);
-    if (onSlashAction) {
+    if (cmd === "/goal" || !onSlashAction) {
+      setText(`${cmd} `);
+    } else {
       onSlashAction(cmd);
       setText("");
-    } else {
-      setText(`${cmd} `);
     }
     textareaRef.current?.focus();
   };
@@ -286,7 +441,7 @@ export function PrecisionComposer({
     try {
       await onSubmit(payload);
       setText("");
-      onClearAttachments?.();
+      onClearAttachments?.(attachments ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -430,16 +585,25 @@ export function PrecisionComposer({
           </div>
         )}
 
+        <div className="pc-input-layer">
+          <pre ref={highlightRef} className="pc-input-highlight" aria-hidden="true">
+            {highlightedText}
+            {"\n"}
+          </pre>
         <textarea
           ref={textareaRef}
           className="pc-input pc-input-resizable"
           rows={1}
           placeholder={placeholder}
           value={text}
+          readOnly={draft !== undefined && isBusy}
           disabled={isDisabled}
           onChange={(e) => {
             setText(e.target.value);
             if (openPop === "slash" && !e.target.value.startsWith("/")) setOpenPop(null);
+          }}
+          onScroll={(e) => {
+            if (highlightRef.current) highlightRef.current.scrollTop = e.currentTarget.scrollTop;
           }}
           onKeyDown={(e) => {
             if (slashOpen && slashItems.length > 0) {
@@ -472,6 +636,7 @@ export function PrecisionComposer({
             }
           }}
         />
+        </div>
 
         <div className="pc-bar">
           <span className="pc-anchor">
@@ -547,7 +712,7 @@ export function PrecisionComposer({
               <SlashKeyIcon size={15} />
             </button>
             {slashOpen && (
-              <div className="pc-pop" role="menu">
+              <div className="pc-pop pc-pop-slash" role="menu">
                 <div className="pc-pop-sec">Commands</div>
                 {slashItems.length === 0 && (
                   <div className="pc-pop-desc" style={{ padding: "4px 9px 8px" }}>
@@ -615,48 +780,115 @@ export function PrecisionComposer({
           {modelChoices.length > 0 && onSelectTarget ? (
             <span className="pc-anchor">
               <button
+                ref={modelButtonRef}
                 type="button"
                 className="pc-model-btn"
                 title={`Active model: ${displayModelLabel}`}
+                aria-haspopup="dialog"
+                aria-expanded={openPop === "model"}
+                aria-controls={openPop === "model" ? modelPickerId : undefined}
                 disabled={isDisabled}
                 onClick={() => togglePop("model")}
               >
-                <span className="pc-model-label">{displayModelLabel}</span>
+                <ProviderLogo provider={activeProviderName} size={17} />
+                <span className="pc-model-label">{activeModelName}</span>
+                {activeRuntime && <span className="pc-model-type">{formatRuntimeLabel(activeRuntime)}</span>}
                 <ChevronDown size={11} strokeWidth={1.6} />
               </button>
               {openPop === "model" && (
-                <div className="pc-pop right" role="menu">
-                  <div className="pc-pop-sec">Model Target</div>
-                  {modelChoices.map((choice) => {
-                    const isCurrent =
-                      selectedTarget?.provider === choice.provider &&
-                      selectedTarget?.model === choice.model;
-                    return (
-                      <button
-                        type="button"
-                        key={`${choice.provider}/${choice.model}`}
-                        className={`pc-pop-item ${isCurrent ? "on" : ""}`}
-                        onClick={() => {
-                          onSelectTarget({ provider: choice.provider, model: choice.model });
-                          setOpenPop(null);
-                        }}
-                      >
-                        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
-                          <span style={{ fontFamily: "var(--font-mono)", fontSize: "11.5px", color: "var(--ink-primary)" }}>
-                            {choice.provider}/{choice.model}
-                          </span>
-                        </span>
-                        <span className="pc-pi-sub">
-                          {isCurrent ? <Check size={12} strokeWidth={1.8} /> : choice.runtime}
-                        </span>
-                      </button>
-                    );
-                  })}
+                <div className="pc-pop right pc-model-pop" role="dialog" id={modelPickerId} aria-label="Model target">
+                  <div className="pc-model-head">
+                    <span className="pc-pop-sec">Model target</span>
+                    <span className="pc-model-count">{filteredModelChoices.length} routes</span>
+                  </div>
+                  <input
+                    className="pc-model-search"
+                    type="search"
+                    role="combobox"
+                    aria-expanded="true"
+                    aria-controls={modelListId}
+                    aria-activedescendant={
+                      filteredModelChoices.length > 0 ? `${modelListId}-option-${focusedModelIdx}` : undefined
+                    }
+                    aria-label="Search models"
+                    placeholder="Search models, providers, runtimes"
+                    value={modelQuery}
+                    onChange={(e) => {
+                      setModelQuery(e.target.value);
+                      setFocusedModelIdx(0);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "ArrowDown" && filteredModelChoices.length > 0) {
+                        e.preventDefault();
+                        setFocusedModelIdx((idx) => (idx + 1) % filteredModelChoices.length);
+                      } else if (e.key === "ArrowUp" && filteredModelChoices.length > 0) {
+                        e.preventDefault();
+                        setFocusedModelIdx((idx) => (idx - 1 + filteredModelChoices.length) % filteredModelChoices.length);
+                      } else if (e.key === "Home" && filteredModelChoices.length > 0) {
+                        e.preventDefault();
+                        setFocusedModelIdx(0);
+                      } else if (e.key === "End" && filteredModelChoices.length > 0) {
+                        e.preventDefault();
+                        setFocusedModelIdx(filteredModelChoices.length - 1);
+                      } else if (e.key === "Enter" && filteredModelChoices.length > 0) {
+                        e.preventDefault();
+                        selectModelChoice(filteredModelChoices[focusedModelIdx] ?? filteredModelChoices[0]);
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        closeModelPicker(true);
+                      }
+                    }}
+                    autoFocus
+                  />
+                  <div className="pc-model-options" id={modelListId} role="listbox" aria-label="Available model routes">
+                    {filteredModelChoices.length === 0 && (
+                      <div className="pc-model-empty">No models match “{modelQuery}”.</div>
+                    )}
+                    {modelSections.map((section) => (
+                      <div className="pc-model-section" key={section.provider}>
+                        <div className="pc-model-provider-head">
+                          <ProviderLogo provider={section.provider} size={16} />
+                          <span>{formatProviderLabel(section.provider)}</span>
+                        </div>
+                        {section.items.map((choice) => {
+                          const isCurrent =
+                            selectedTarget?.provider === choice.provider &&
+                            selectedTarget?.model === choice.model;
+                          const isFocused = choice.flatIndex === focusedModelIdx;
+                          return (
+                            <button
+                              type="button"
+                              key={`${choice.provider}/${choice.model}`}
+                              id={`${modelListId}-option-${choice.flatIndex}`}
+                              className={`pc-model-option ${isCurrent ? "on" : ""} ${isFocused ? "focused" : ""}`.trim()}
+                              role="option"
+                              aria-selected={isCurrent}
+                              onMouseEnter={() => setFocusedModelIdx(choice.flatIndex)}
+                              onClick={() => selectModelChoice(choice)}
+                            >
+                              <ProviderLogo provider={choice.provider} size={20} />
+                              <span className="pc-model-copy">
+                                <span className="pc-model-name">{choice.model}</span>
+                                <span className="pc-model-provider">{formatProviderLabel(choice.provider)}</span>
+                              </span>
+                              <span className="pc-model-runtime">{formatRuntimeLabel(choice.runtime)}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="pc-model-foot">
+                    <span>Enter selects</span>
+                    <span className="pc-model-footnote">Next idle turn</span>
+                    <span>Esc closes</span>
+                  </div>
                 </div>
               )}
             </span>
           ) : (
-            <span className="pc-model-static" title="Active model">
+            <span className="pc-model-static" title="Model target">
               {displayModelLabel}
             </span>
           )}
@@ -669,19 +901,19 @@ export function PrecisionComposer({
 
           <ContextRingGauge percent={contextPercent} tooltip={contextTooltip} />
 
+        </div>
+        <div className="pc-send-slot">
+          {sending && <span className="pc-sending" role="status">Sending...</span>}
           <button
             type="button"
             className="pc-send"
-            title={mode === "steer" ? "Send steer" : "Send message"}
-            aria-label={mode === "steer" ? "Send steer" : "Send message"}
+            title={mode === "steer" ? "Send to Team Lead" : "Send message"}
+            aria-label={mode === "steer" ? "Send to Team Lead" : "Send message"}
+            aria-busy={sending}
             disabled={!canSend}
             onClick={() => void submit()}
           >
-            {isBusy ? (
-              <BotThinkingOrb activity="composing" size={20} shell={false} />
-            ) : (
-              <SendArrowIcon size={14} />
-            )}
+            <SendArrowIcon size={18} />
           </button>
         </div>
       </div>
@@ -708,7 +940,7 @@ export function PrecisionComposer({
           {mode === "steer" ? "Steer → Team Lead" : "Local · 127.0.0.1"}
         </span>
         <span className="pc-strip-sep" />
-        {projects.length > 0 && (
+        {projects.length > 0 && (mode === "chat" || onSelectProject) && (
           <span className="pc-anchor">
             <button
               type="button"
