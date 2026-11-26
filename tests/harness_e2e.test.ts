@@ -490,7 +490,30 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
       }),
     ).toThrow("agent_unavailable:stopped");
 
-    // Valid dispatch succeeds, and re-dispatching the already-claimed task is rejected
+    // Valid dispatch succeeds, releases clean blocked-task ownership before worktree reuse,
+    // and re-dispatching the already-claimed task is rejected
+    const blockedCleanTask = (
+      app.engine.executeCommand({
+        commandId: "cmd_tsk_blocked_clean",
+        type: "task.create",
+        projectId: projA.project.id,
+        title: "Blocked task without work",
+        specMd: "No filesystem changes were produced",
+        priority: 3,
+      }) as { task: { id: string } }
+    ).task;
+    const peerAState = app.db.getAgent(peerA.id)!;
+    const blockedRecord = app.db.getTask(blockedCleanTask.id)!;
+    app.db.runAtomicWrite(() => {
+      app.db.upsertTask({
+        ...blockedRecord,
+        status: "blocked",
+        assignedAgentId: peerA.id,
+        worktreeBranch: peerAState.worktreeBranch,
+        updatedAt: Date.now(),
+      });
+    });
+
     app.engine.executeCommand({
       commandId: "cmd_disp_ok",
       type: "task.dispatch",
@@ -498,6 +521,8 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
       taskId: taskA.id,
       agentId: peerA.id,
     });
+    expect(app.db.getTask(blockedCleanTask.id)!.assignedAgentId).toBeNull();
+    expect(app.db.getTask(blockedCleanTask.id)!.worktreeBranch).toBeNull();
     expect(() =>
       app.engine.executeCommand({
         commandId: "cmd_disp_double",

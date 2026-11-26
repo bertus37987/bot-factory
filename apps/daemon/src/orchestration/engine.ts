@@ -40,6 +40,7 @@ import {
   provisionProjectWorkspace,
   removeBotWorktree,
   restoreCheckpoint,
+  worktreeHasUnmergedChangesSync,
   writeTaskHandoff,
 } from "../git/worktrees";
 import type { LocalSuperHermesMemory } from "../memory/memoryEngine";
@@ -1371,6 +1372,9 @@ export class OrchestrationEngine {
   }
 
   private handleTaskDispatch(cmd: Extract<RpcCommand, { type: "task.dispatch" }>) {
+    const existingReceipt = this.core.getCommandReceipt(cmd.commandId);
+    if (existingReceipt) return existingReceipt;
+
     const project = this.db.getProject(cmd.projectId);
     if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
     const task = this.db.getTask(cmd.taskId);
@@ -1428,6 +1432,20 @@ export class OrchestrationEngine {
       };
     }
 
+    const releasedBlockedTasks = this.db
+      .listTasks(project.id)
+      .filter(
+        (t) =>
+          t.assignedAgentId === bot!.id &&
+          t.status === "blocked" &&
+          !worktreeHasUnmergedChangesSync({
+            repoPath: project.repoPath,
+            worktreePath: bot!.worktreePath,
+            branch: bot!.worktreeBranch,
+          }),
+      )
+      .map((t) => ({ ...t, assignedAgentId: null, worktreeBranch: null, updatedAt: Date.now() }));
+
     const updatedTask: TaskRecord = {
       ...task,
       status: "claimed",
@@ -1443,10 +1461,21 @@ export class OrchestrationEngine {
           if (recreatedWorktree) {
             this.db.upsertAgent(bot!);
           }
+          for (const released of releasedBlockedTasks) {
+            const freshReleased = this.db.getTask(released.id);
+            if (freshReleased?.status === "blocked" && freshReleased.assignedAgentId === bot!.id) {
+              this.db.upsertTask(released);
+            }
+          }
           this.db.upsertTask(updatedTask);
           this.db.updateAgentStatus(bot!.id, "working", { lastSummary: `Claimed task: ${task.title}` });
         },
         events: [
+          ...releasedBlockedTasks.map((released) => ({
+            topic: `project:${project.id}:board` as SubscriptionTopic,
+            eventType: "task.updated",
+            payload: released,
+          })),
           { topic: `project:${project.id}:board`, eventType: "task.updated", payload: updatedTask },
           { topic: "global:status", eventType: "status.updated", payload: this.getQuietStatusProjection() },
         ],
