@@ -525,6 +525,16 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
     expect(app.db.getTask(blockedCleanTask.id)!.worktreeBranch).toBeNull();
     expect(() =>
       app.engine.executeCommand({
+        commandId: "cmd_merge_detached_blocked",
+        type: "task.merge",
+        projectId: projA.project.id,
+        taskId: blockedCleanTask.id,
+        strategy: "squash",
+        overrideReason: "regression coverage",
+      }),
+    ).toThrow("task_missing_worktree_for_merge");
+    expect(() =>
+      app.engine.executeCommand({
         commandId: "cmd_disp_double",
         type: "task.dispatch",
         projectId: projA.project.id,

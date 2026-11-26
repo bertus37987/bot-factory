@@ -3548,9 +3548,9 @@ export class OrchestrationEngine {
     }
 
     const agent = task.assignedAgentId ? this.db.getAgent(task.assignedAgentId) : null;
-    const branch = agent?.worktreeBranch || task.worktreeBranch;
-    const worktreePath = agent?.worktreePath ?? "";
-    if (!branch || branch === "main" || (!worktreePath && !branch)) {
+    const branch = task.worktreeBranch;
+    const worktreePath = branch && agent?.worktreeBranch === branch ? (agent.worktreePath ?? "") : "";
+    if (!branch || branch === "main") {
       throw new Error("task_missing_worktree_for_merge");
     }
 
@@ -3598,6 +3598,15 @@ export class OrchestrationEngine {
     const project = this.db.getProject(params.projectId);
     const task = this.db.getTask(params.taskId);
     if (!project || !task || task.status === "merged") return;
+    if (!task.worktreeBranch || task.worktreeBranch !== params.branch) {
+      this.db.runAtomicWrite(() => {
+        this.db.addInboxNotice("warn", `Merge for '${task.title}' skipped: task branch changed before execution`, {
+          projectId: project.id,
+          agentId: params.agentId ?? undefined,
+        });
+      });
+      return;
+    }
 
     const agent = params.agentId ? this.db.getAgent(params.agentId) : null;
     if (agent) {
