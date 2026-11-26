@@ -3598,7 +3598,7 @@ export class OrchestrationEngine {
         };
         this.db.upsertTask(mergedTask);
 
-        if (agent && res.cleanedWorktree) {
+        if (agent) {
           const freshAgent = this.db.getAgent(agent.id);
           if (freshAgent) {
             this.db.upsertAgent({
@@ -3607,7 +3607,7 @@ export class OrchestrationEngine {
               pid: null,
               worktreePath: null,
               worktreeBranch: null,
-              lastSummary: `Merged ${params.branch}${res.mergeCommitSha ? ` (${res.mergeCommitSha.slice(0, 7)})` : ""}`,
+              lastSummary: `Merged ${params.branch}${res.mergeCommitSha ? ` (${res.mergeCommitSha.slice(0, 7)})` : ""}${res.cleanedWorktree ? "" : " · worktree cleanup incomplete"}`,
               updatedAt: now,
             });
           }
@@ -3618,6 +3618,13 @@ export class OrchestrationEngine {
           `Merged '${freshTask.title}' into main (${params.strategy}${res.mergeCommitSha ? ` · ${res.mergeCommitSha.slice(0, 7)}` : ""})`,
           { projectId: project.id, agentId: agent?.id },
         );
+        if (res.cleanupError) {
+          this.db.addInboxNotice(
+            "warn",
+            `Merged '${freshTask.title}', but physical worktree cleanup failed: ${this.scrubber.scrub(res.cleanupError)}`,
+            { projectId: project.id, agentId: agent?.id },
+          );
+        }
       });
 
       if (mergedTask) {

@@ -1073,6 +1073,7 @@ export async function mergeBotWorktree(params: {
   preMergeRef?: string;
   conflicts?: string[];
   cleanedWorktree: boolean;
+  cleanupError?: string;
   error?: string;
 }> {
   if (!params.repoPath || !existsSync(params.repoPath)) {
@@ -1177,8 +1178,15 @@ export async function mergeBotWorktree(params: {
   }
 
   const mergeCommitSha = (await runGit(["rev-parse", "HEAD"], params.repoPath)).stdout;
+  let cleanedWorktree = true;
+  let cleanupError: string | undefined;
   if (params.worktreePath) {
-    removeBotWorktree(params.repoPath, params.worktreePath);
+    try {
+      removeBotWorktree(params.repoPath, params.worktreePath);
+    } catch (err) {
+      cleanedWorktree = false;
+      cleanupError = err instanceof Error ? err.message : String(err);
+    }
   }
   await runGit(["branch", "-D", params.branch], params.repoPath, { allowFail: true });
 
@@ -1186,7 +1194,8 @@ export async function mergeBotWorktree(params: {
     ok: true,
     mergeCommitSha,
     preMergeRef,
-    cleanedWorktree: true,
+    cleanedWorktree,
+    ...(cleanupError ? { cleanupError } : {}),
   };
 }
 
