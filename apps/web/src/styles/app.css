@@ -4239,18 +4239,14 @@ kbd {
   }
 }
 
-/* Composer keeps one architectural toolbar row; secondary controls scroll
-   horizontally while send remains pinned instead of wrapping into a loose row. */
+/* Composer keeps one architectural toolbar row; lower-priority controls compress
+   while send remains pinned instead of wrapping into a loose row. */
 .pc-bar {
   flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: none;
+  overflow: visible;
   padding-right: 48px;
 }
 
-.pc-bar::-webkit-scrollbar {
-  display: none;
-}
 
 .pc-send {
   position: absolute;
