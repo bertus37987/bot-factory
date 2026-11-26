@@ -597,7 +597,7 @@ export class AutonomyLoop {
       allTasks.some(
         (t) =>
           t.assignedAgentId === agentId &&
-          (t.status === "claimed" || t.status === "in_review" || t.status === "verified"),
+          (t.status === "claimed" || t.status === "in_review" || t.status === "verified" || t.status === "blocked"),
       );
 
     if (task.assignedAgentId) {
