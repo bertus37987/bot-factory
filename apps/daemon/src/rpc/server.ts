@@ -1,7 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Server, ServerWebSocket } from "bun";
 import {
   RpcCommandSchema,
@@ -57,7 +57,7 @@ const SECRET_KEY_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
 
 async function writeArtifactAtomically(targetPath: string, data: Buffer): Promise<void> {
   await mkdir(dirname(targetPath), { recursive: true });
-  const tmp = join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  const tmp = join(dirname(targetPath), `.artifact-${process.pid}-${randomUUID()}.tmp`);
   try {
     await writeFile(tmp, data);
     for (let attempt = 0; ; attempt++) {
