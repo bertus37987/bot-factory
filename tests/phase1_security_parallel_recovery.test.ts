@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { startBotFactoryDaemon, type BotFactoryApp } from "../apps/daemon/src/index";
 import { CURRENT_SCHEMA_VERSION, StateDatabase } from "../apps/daemon/src/db/database";
 import { provisionProjectWorkspace } from "../apps/daemon/src/git/worktrees";
@@ -22,6 +22,7 @@ const tempDirs: string[] = [];
 const runningApps: BotFactoryApp[] = [];
 const runningServers: Array<{ stop: (closeActiveConnections?: boolean) => void }> = [];
 let prevOfflineMock: string | undefined;
+const itRealDbMigration = process.env.BOT_FACTORY_TEST_REAL_STATE_DB ? it : it.skip;
 
 function makeTempRoot(prefix = "bf-p1-"): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -1117,9 +1118,9 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
     expect(gitRef1.stdout.toString().trim()).toBe(turn1Sha);
   });
 
-  it("cleanly migrates an isolated copy of C:\\Users\\willy\\bot-factory\\system\\state.db* to current schema (v3) and recovers 'verifying' self-mod proposals", () => {
-    const realSystemDir = "C:\\Users\\willy\\bot-factory\\system";
-    const realDbPath = join(realSystemDir, "state.db");
+  itRealDbMigration("cleanly migrates an isolated copy of BOT_FACTORY_TEST_REAL_STATE_DB* to current schema (v3) and recovers 'verifying' self-mod proposals", () => {
+    const realDbPath = process.env.BOT_FACTORY_TEST_REAL_STATE_DB!;
+    const realSystemDir = dirname(realDbPath);
     expect(existsSync(realDbPath)).toBe(true);
 
     const beforeStat = statSync(realDbPath);
@@ -1221,7 +1222,7 @@ describe("Phase 1 — Security, Parallelism, Immediate Control Abort & Recovery"
       if (!closed) migrated.close();
     }
 
-    // Confirm original C:\Users\willy\bot-factory\system\state.db* was NEVER mutated
+    // Confirm original source state.db* was NEVER mutated
     const afterStat = statSync(realDbPath);
     expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
     expect(afterStat.size).toBe(beforeStat.size);

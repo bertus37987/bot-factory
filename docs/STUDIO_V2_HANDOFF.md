@@ -25,27 +25,28 @@ pre-V2 internal harness audit, the condensed dossier, the Phase 1-5
 walkthrough, design concepts, and the bear art pipeline.
 
 The Factory Droid probe returned HTTP 402 (no active subscription), so no
-live Droid audit was completed. The `factory-droid-acp` example is an
-optional preset, not a verified provider integration.
+live Droid audit was completed. The unverified `factory-droid-acp` preset was
+removed from `config.example.json` rather than published as a supported
+integration.
 
 ## Verification
 
-From the repo root on a clean checkout with Bun and Python Playwright
-Chromium installed:
+From the repo root on a clean checkout with Bun installed:
 
 ```sh
 bun install --frozen-lockfile
-bun run build:web
+bun run scan:security
 bun run check
 ```
 
-Build first: Playwright consumes `apps/web/dist`, but `check` invokes
-tests before its build step. The recovery run passed TypeScript, Biome
-(422 warnings, zero errors), all **54 tests** across 10 files including
-headless Chromium, and the web build. Vite still warned about chunks over
-500 kB. `bun run doctor` also passed against a fresh temporary runtime
-root. Tests used isolated runtimes or a temporary copy of the existing
-database; the running daemon was not restarted.
+`check` builds `apps/web/dist` before running tests. Python 3 Playwright +
+Chromium are optional locally; without them the browser E2E test is skipped.
+CI runs the browser E2E in a dedicated Ubuntu job. Biome still reports a
+large warning backlog (mostly legacy non-null assertions and React hook/a11y
+warnings) while exiting zero, and Vite still warns about chunks over 500 kB.
+`bun run doctor` passes against a fresh temporary runtime root. Tests use
+isolated runtimes; the optional real-database migration test only runs when
+`BOT_FACTORY_TEST_REAL_STATE_DB` explicitly points at a source `state.db`.
 
 ## Open Work
 

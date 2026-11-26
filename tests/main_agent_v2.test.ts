@@ -873,7 +873,7 @@ describe("Main Agent V2 Backend — Migration, Bot Model/Message, Tools, Delegat
     expect(delegationItem?.title).toMatch(/^Main Manager Delegation \(goal_/);
   }, 20_000);
 
-  it("enforces PUT /api/projects/:id/artifact writes (utf8 + base64 PNG), preview WS events, 403 traversal/scope blocks, 415 extension rejection, and factory-droid-acp in config.example.json", async () => {
+  it("enforces PUT /api/projects/:id/artifact writes (utf8 + base64 PNG), preview WS events, 403 traversal/scope blocks, 415 extension rejection, and clean config.example.json", async () => {
     const rootDir = makeTempRoot("bf-v2-art-");
     const app = startBotFactoryDaemon({ rootDir, port: 0 });
     runningApps.push(app);
@@ -1000,16 +1000,13 @@ describe("Main Agent V2 Backend — Migration, Bot Model/Message, Tools, Delegat
       expect(res.status).toBe(415);
     }
 
-    // 6. Verify config.example.json parses cleanly and includes factory-droid-acp
+    // 6. Verify config.example.json parses cleanly and does not publish unverified providers
     const exampleCfg = HubConfigSchema.parse(
       JSON.parse(readFileSync(resolve(import.meta.dir, "../config.example.json"), "utf8")),
     );
-    const droid = exampleCfg.providers["factory-droid-acp"];
-    expect(droid).toBeTruthy();
-    expect(droid?.runtime).toBe("acp_stdio");
-    expect(droid?.command).toBe("droid");
-    expect(droid?.args).toEqual(["exec", "-o", "acp"]);
-    expect(droid?.models["gpt-6.1-sol"]?.id).toBe("gpt-6.1-sol");
+    expect(exampleCfg.providers["factory-droid-acp"]).toBeUndefined();
+    expect(exampleCfg.providers["opencode-acp"]?.runtime).toBe("acp_stdio");
+    expect(exampleCfg.providers["devin-acp"]?.runtime).toBe("acp_stdio");
 
     ws.close();
   });

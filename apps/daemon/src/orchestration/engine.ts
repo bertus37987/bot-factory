@@ -27,7 +27,14 @@ import {
   type TimelineItem,
   type VerificationReportRecord,
 } from "@bot-factory/shared";
-import { resolveHubConfigInspection, saveHubConfig, type LoadedRuntimeConfig, type SecretScrubber } from "../config";
+import {
+  redactHubConfigForExposure,
+  resolveHubConfigInspection,
+  restoreRedactedProviderEnvValues,
+  saveHubConfig,
+  type LoadedRuntimeConfig,
+  type SecretScrubber,
+} from "../config";
 import type { CommandCore } from "../core/commandCore";
 import type { StateDatabase } from "../db/database";
 import {
@@ -3264,25 +3271,28 @@ export class OrchestrationEngine {
       throw new Error("invalid_config_patch_json");
     }
 
+    const patchRecord = patch as Record<string, unknown>;
+    restoreRedactedProviderEnvValues(patchRecord, this.runtimeCfg.config);
     const nextCfg = mergeOpenByosConfigPatch(
       this.runtimeCfg.config,
-      patch as Record<string, unknown>,
+      patchRecord,
       this.runtimeCfg.config,
     );
     const prevCfg = this.runtimeCfg.config;
     const savedCfg = saveHubConfig(this.runtimeCfg.configPath, nextCfg);
     this.reloadConfig(savedCfg);
+    const exposedCfg = redactHubConfigForExposure(savedCfg);
 
     const statusEvt = { topic: "global:status" as SubscriptionTopic, eventType: "status.updated", payload: null as unknown };
     try {
       return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
-        result: { config: savedCfg },
+        result: { config: exposedCfg },
         applyProjections: () => {
           this.db.addInboxNotice("info", "Hub configuration updated and hot-reloaded", {});
           statusEvt.payload = this.getQuietStatusProjection();
         },
         events: [
-          { topic: "global:status", eventType: "config.updated", payload: { config: savedCfg } },
+          { topic: "global:status", eventType: "config.updated", payload: { config: exposedCfg } },
           statusEvt,
         ],
         effects: [],

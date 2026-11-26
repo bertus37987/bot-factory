@@ -56,6 +56,39 @@ export interface ResolvedHubConfigInspection {
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENV_LINE_RE = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/;
+const SENSITIVE_PROVIDER_ENV_KEY_RE = /(api[_-]?key|secret|token|password|credential|private[_-]?key)/i;
+export const REDACTED_CONFIG_VALUE = "[REDACTED]";
+
+/** Return a copy of HubConfig safe to expose through local APIs/UI events. */
+export function redactHubConfigForExposure(config: HubConfig): HubConfig {
+  const copy = structuredClone(config);
+  for (const provider of Object.values(copy.providers)) {
+    if (!provider.env) continue;
+    for (const [key, value] of Object.entries(provider.env)) {
+      if (value && SENSITIVE_PROVIDER_ENV_KEY_RE.test(key)) {
+        provider.env[key] = REDACTED_CONFIG_VALUE;
+      }
+    }
+  }
+  return copy;
+}
+
+/** Restore unchanged redacted provider env values in a config patch from the active config. */
+export function restoreRedactedProviderEnvValues(patch: Record<string, unknown>, currentConfig: HubConfig): void {
+  if (!patch.providers || typeof patch.providers !== "object" || Array.isArray(patch.providers)) return;
+  for (const [providerId, providerPatch] of Object.entries(patch.providers as Record<string, unknown>)) {
+    if (!providerPatch || typeof providerPatch !== "object" || Array.isArray(providerPatch)) continue;
+    const envPatch = (providerPatch as Record<string, unknown>).env;
+    if (!envPatch || typeof envPatch !== "object" || Array.isArray(envPatch)) continue;
+    const currentEnv = currentConfig.providers[providerId]?.env;
+    if (!currentEnv) continue;
+    for (const [key, value] of Object.entries(envPatch as Record<string, unknown>)) {
+      if (value === REDACTED_CONFIG_VALUE && typeof currentEnv[key] === "string") {
+        (envPatch as Record<string, unknown>)[key] = currentEnv[key];
+      }
+    }
+  }
+}
 
 function renameSyncWithRetry(src: string, dst: string, maxRetries = 4, backoffMs = 50): void {
   const sab = new Int32Array(new SharedArrayBuffer(4));

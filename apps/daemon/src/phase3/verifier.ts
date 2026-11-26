@@ -18,6 +18,7 @@ import type { LocalSuperHermesMemory } from "../memory/memoryEngine";
 import type { AcpSubprocessRuntime } from "../runtimes/acpSubprocessRuntime";
 import type { CliStreamRuntime } from "../runtimes/cliStreamRuntime";
 import { isPathStrictlyWithinRoot } from "../runtimes/nativeHttpRuntime";
+import { killPosixProcessGroupSync, processGroupSpawnOptions } from "../runtimes/processTree";
 import type { NativeHttpRuntime } from "../runtimes/nativeHttpRuntime";
 import type { ModelRouter } from "../runtimes/router";
 import type { AgentRuntime, ResolvedRoute, RuntimeSessionHandle, RuntimeSessionSpec } from "../runtimes/types";
@@ -134,9 +135,50 @@ function mergeWorktreeAndBranchDiff(
   };
 }
 
+const VERIFY_ENV_ALLOWLIST_POSIX = new Set([
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TERM",
+  "CI",
+]);
+const VERIFY_ENV_ALLOWLIST_WINDOWS = new Set([
+  "PATH",
+  "PATHEXT",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "PROGRAMDATA",
+  "PROGRAMFILES",
+  "PROGRAMFILES(X86)",
+  "TEMP",
+  "TMP",
+  "USERNAME",
+  "USERDOMAIN",
+  "PROCESSOR_ARCHITECTURE",
+]);
+
 function buildVerifyCheckEnv(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
-  delete env.BOT_FACTORY_TOKEN;
+  const allowlist = process.platform === "win32" ? VERIFY_ENV_ALLOWLIST_WINDOWS : VERIFY_ENV_ALLOWLIST_POSIX;
+  const env: Record<string, string | undefined> = { GIT_TERMINAL_PROMPT: "0" };
+  for (const [key, value] of Object.entries(process.env)) {
+    if (allowlist.has(key.toUpperCase())) {
+      env[key] = value;
+    }
+  }
   return env;
 }
 
@@ -153,15 +195,7 @@ function killProcessTreeSync(proc: ReturnType<typeof Bun.spawn>): void {
       // Fall back to direct kill below
     }
   }
-  try {
-    proc.kill("SIGKILL");
-  } catch {
-    try {
-      proc.kill();
-    } catch {
-      // Process already exited
-    }
-  }
+  killPosixProcessGroupSync(proc);
 }
 
 async function readStreamTail(
@@ -238,6 +272,7 @@ export async function runProjectVerifyChecks(
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
+      ...processGroupSpawnOptions(),
     };
     if (process.platform === "win32") {
       spawnOpts.windowsVerbatimArguments = true;

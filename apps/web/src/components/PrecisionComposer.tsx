@@ -65,7 +65,7 @@ const AUTONOMY_OPTIONS: { value: AutonomyLevel; label: string; desc: string }[] 
   { value: "spec", label: "Spec", desc: "Plan and specify only — no tool execution." },
   { value: "low", label: "Low", desc: "Ask before executing side-effect tools." },
   { value: "medium", label: "Medium", desc: "Scoped edits; confirm destructive actions." },
-  { value: "high", label: "High", desc: "Full autonomous speed; review diff after." },
+  { value: "high", label: "High", desc: "Unsafe: broad host/network execution; use only in isolated environments." },
 ];
 
 const AUTONOMY_LABEL: Record<AutonomyLevel, string> = {

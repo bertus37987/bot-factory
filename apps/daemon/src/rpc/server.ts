@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Server, ServerWebSocket } from "bun";
 import {
@@ -12,6 +13,7 @@ import {
 import {
   deleteSecretFromEnvFile,
   listSecretPresence,
+  redactHubConfigForExposure,
   SecretScrubber,
   writeSecretToEnvFile,
   type LoadedRuntimeConfig,
@@ -53,20 +55,19 @@ const SESSION_COOKIE_NAME = "bf_session";
 const SESSION_COOKIE_CONTEXT = "bot-factory-session-v1";
 const SECRET_KEY_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
 
-function writeArtifactAtomically(targetPath: string, data: Buffer): void {
-  mkdirSync(dirname(targetPath), { recursive: true });
+async function writeArtifactAtomically(targetPath: string, data: Buffer): Promise<void> {
+  await mkdir(dirname(targetPath), { recursive: true });
   const tmp = join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.${Date.now()}.tmp`);
-  const sab = new Int32Array(new SharedArrayBuffer(4));
   try {
-    writeFileSync(tmp, data);
+    await writeFile(tmp, data);
     for (let attempt = 0; ; attempt++) {
       try {
-        renameSync(tmp, targetPath);
+        await rename(tmp, targetPath);
         return;
       } catch (err) {
         const code = (err as NodeJS.ErrnoException)?.code;
         if ((code === "EPERM" || code === "EBUSY") && attempt < 4) {
-          Atomics.wait(sab, 0, 0, 50);
+          await new Promise((resolveRetry) => setTimeout(resolveRetry, 50));
           continue;
         }
         throw err;
@@ -74,7 +75,7 @@ function writeArtifactAtomically(targetPath: string, data: Buffer): void {
     }
   } catch (err) {
     try {
-      rmSync(tmp, { force: true });
+      await rm(tmp, { force: true });
     } catch {
       // ignore temp cleanup failure
     }
@@ -386,7 +387,7 @@ export class DaemonServer {
         }
 
         if (url.pathname === "/api/config" && req.method === "GET") {
-          return Response.json({ config: this.runtimeCfg.config });
+          return Response.json({ config: redactHubConfigForExposure(this.runtimeCfg.config) });
         }
 
         if (url.pathname === "/api/secrets" && req.method === "GET") {
@@ -599,7 +600,7 @@ export class DaemonServer {
           }
 
           try {
-            writeArtifactAtomically(abs, payloadBuf);
+            await writeArtifactAtomically(abs, payloadBuf);
             const st = statSync(abs);
             const relativePath = relative(resolve(project.rootPath), abs).replace(/\\/g, "/");
             const updatedAt = Math.floor(st.mtimeMs) || Date.now();
@@ -871,6 +872,9 @@ export class DaemonServer {
     }
 
     const candidateRel = decoded === "/" ? "index.html" : decoded.replace(/^\/+/, "") || "index.html";
+    if (/^[A-Za-z]:[\\/]/.test(candidateRel) || candidateRel.startsWith("\\\\") || decoded.startsWith("//")) {
+      return new Response("Forbidden", { status: 403 });
+    }
     const check = isPathStrictlyWithinRoot(this.webDistDir, candidateRel);
     if (!check.ok) {
       return new Response("Forbidden", { status: 403 });

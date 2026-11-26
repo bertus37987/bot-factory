@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "no
 import { dirname, join } from "node:path";
 import type { HubConfig } from "@bot-factory/shared";
 import { SecretScrubber } from "../config";
+import { killPosixProcessGroupSync, processGroupSpawnOptions } from "./processTree";
 import type {
   AgentRuntime,
   AutonomyLevel,
@@ -478,6 +479,7 @@ export class CliStreamRuntime implements AgentRuntime {
       stdout: "pipe",
       stderr: "pipe",
       env: state.env,
+      ...processGroupSpawnOptions(),
     });
 
     state.proc = proc;
@@ -624,6 +626,7 @@ export class CliStreamRuntime implements AgentRuntime {
           stdout: "pipe",
           stderr: "pipe",
           env: state.env,
+          ...processGroupSpawnOptions(),
         });
         state.proc = proc;
         handle.pid = proc.pid ?? null;
@@ -1142,11 +1145,7 @@ export class CliStreamRuntime implements AgentRuntime {
         }
       }
     } else {
-      try {
-        proc.kill();
-      } catch {
-        // ignore
-      }
+      killPosixProcessGroupSync(proc);
     }
     if (markClosed) state.proc = null;
   }
@@ -1176,11 +1175,7 @@ export class CliStreamRuntime implements AgentRuntime {
         }
       }
     } else {
-      try {
-        proc.kill();
-      } catch {
-        // ignore
-      }
+      killPosixProcessGroupSync(proc);
     }
     if (markClosed) state.proc = null;
   }
