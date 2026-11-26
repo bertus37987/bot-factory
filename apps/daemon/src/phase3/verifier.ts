@@ -795,16 +795,13 @@ export class IndependentVerifier {
     }
 
     const insideGit = await runGitAsync(["rev-parse", "--is-inside-work-tree"], basePath);
-    const mentionsCheckpoint = /refs\/bot-factory\/checkpoints\//.test(handoffContent);
     if (insideGit.code !== 0) {
       const reason = insideGit.stderr || `not_a_git_repo(${insideGit.code})`;
       return {
         result: {
           name: "worktree_evidence",
-          passed: mentionsCheckpoint,
-          detail: mentionsCheckpoint
-            ? `non-git fallback accepted via checkpoint ref citation (${reason})`
-            : `non-git worktree without checkpoint ref citation (${reason})`,
+          passed: false,
+          detail: `non-git worktree cannot be objectively verified (${reason}); checkpoint citations are not evidence`,
         },
         diffStat: "",
         diffExcerpt: "",

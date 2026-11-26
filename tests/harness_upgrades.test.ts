@@ -695,6 +695,46 @@ describe("Wave 2 Harness & Multi-Agent Upgrades", () => {
     // Failed check tail preserved past 200 chars
     expect(report.findings.some((f) => f.includes("__IMPORTANT_TAIL_ERROR_CODE_42__"))).toBe(true);
 
+    // A non-git path must fail closed even when a handoff cites a checkpoint ref;
+    // otherwise a bot-written handoff can fabricate the only worktree evidence.
+    const nonGitDir = join(rootDir, "plain-worktree");
+    mkdirSync(nonGitDir, { recursive: true });
+    const nonGitAuthorId = newId("agt");
+    db.upsertAgent({
+      id: nonGitAuthorId,
+      projectId,
+      parentAgentId: null,
+      scope: "peer",
+      name: "Author-NonGit",
+      runtimeType: "native_http",
+      provider: "openai",
+      model: "gpt-5",
+      status: "waiting_review",
+      worktreePath: nonGitDir,
+      worktreeBranch: null,
+      pid: null,
+      activeSessionId: null,
+      lastSummary: "",
+      updatedAt: now,
+    });
+    const nonGitHandoffRel = "handoffs/tsk_nongit.md";
+    writeFileSync(
+      join(rootDir, nonGitHandoffRel),
+      "# Handoff\n\nCheckpoint ref: refs/bot-factory/checkpoints/fabricated\n",
+      "utf8",
+    );
+    const nonGitTask: TaskRecord = {
+      ...task,
+      id: "tsk_verify_nongit",
+      assignedAgentId: nonGitAuthorId,
+      handoffPath: nonGitHandoffRel,
+    };
+    db.upsertTask(nonGitTask);
+    const nonGitReport = await verifier.verifyTask({ project, task: nonGitTask });
+    const nonGitWtCheck = nonGitReport.checks.find((c) => c.name === "worktree_evidence")!;
+    expect(nonGitWtCheck.passed).toBe(false);
+    expect(nonGitWtCheck.detail).toContain("checkpoint citations are not evidence");
+
     // 3. AutonomyLoop: retry preserves specMd head + full check diagnostics, and sibling DAG branches advance on exhaustion
     const dispatchedTasks: string[] = [];
     const peer2Id = newId("agt");
