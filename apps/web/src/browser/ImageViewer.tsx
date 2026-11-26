@@ -962,7 +962,8 @@ export function ImageViewer({
                       width: 20,
                       height: 20,
                       borderRadius: "50%",
-                      background: markerColor,
+                      background: "var(--badge-inverted-bg)",
+                      border: `1px solid ${markerColor}`,
                       color: "var(--badge-inverted-text)",
                       fontSize: 10,
                       fontWeight: "var(--weight-semibold)",
@@ -970,7 +971,7 @@ export function ImageViewer({
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      boxShadow: "0 0 0 2px rgba(255,255,255,0.92)",
+                      boxShadow: "0 0 0 2px rgba(0,0,0,0.72)",
                       pointerEvents: "none",
                       zIndex: isFocused ? 4 : 2,
                     }}
