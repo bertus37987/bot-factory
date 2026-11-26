@@ -4334,3 +4334,18 @@ kbd {
     display: none;
   }
 }
+
+@container pc-card (max-width: 420px) {
+  .pc-anchor {
+    position: static;
+  }
+
+  .pc-pop,
+  .pc-pop.right {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+}
