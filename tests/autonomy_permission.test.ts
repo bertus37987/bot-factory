@@ -25,6 +25,10 @@ describe("ACP autonomy shell containment", () => {
         "cat ~/.config/gh/hosts.yml",
         "cat ../outside-secret.txt",
         'cat "/etc/passwd"',
+        "find . -exec cat /etc/passwd \\;",
+        "find . -delete",
+        "rg --pre cat secret .",
+        "rg --hostname-bin=sh secret .",
       ]) {
         const result = evalShell(command, worktree);
         expect(result.decision).toBe("escalate");

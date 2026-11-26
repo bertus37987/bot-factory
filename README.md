@@ -151,3 +151,9 @@ bun run start
 ## 5. For AI Agents Working in This Repository
 
 Start by reading **[`AGENTS.md`](./AGENTS.md)**, **[`HANDOFF.md`](./HANDOFF.md)**, and **[`DESIGN.md`](./DESIGN.md)**. They document every non-negotiable security and concurrency invariant, protocol contract, and verified workflow.
+
+---
+
+## License
+
+[MIT](./LICENSE)

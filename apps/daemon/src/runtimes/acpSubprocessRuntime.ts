@@ -240,8 +240,10 @@ function shellPathTokenWithinWorktree(token: string, worktreePath: string): bool
   return isPathStrictlyWithinRoot(worktreePath, token).ok;
 }
 
-function pathSensitiveShellArgsWithinWorktree(tokens: string[], worktreePath: string): boolean {
+function pathSensitiveShellArgsWithinWorktree(command: string, tokens: string[], worktreePath: string): boolean {
+  if (command === "find") return false;
   for (const token of tokens) {
+    if (token === "--pre" || token.startsWith("--pre=") || token === "--hostname-bin" || token.startsWith("--hostname-bin=")) return false;
     if (token.startsWith("-")) continue;
     if (!shellPathTokenWithinWorktree(token, worktreePath)) return false;
   }
@@ -264,7 +266,7 @@ function isSafeMediumShellCommand(title: string, worktreePath: string): boolean 
     const command = (tokens[commandIndex] ?? "").toLowerCase();
     const args = tokens.slice(commandIndex + 1);
     if (PATH_SENSITIVE_SHELL_COMMANDS.has(command)) {
-      return pathSensitiveShellArgsWithinWorktree(args, worktreePath);
+      return pathSensitiveShellArgsWithinWorktree(command, args, worktreePath);
     }
     return SAFE_READ_BUILD_TEST_PREFIXES.some((rx) => rx.test(segment.trim()));
   });
