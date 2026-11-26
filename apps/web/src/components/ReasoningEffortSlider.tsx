@@ -136,7 +136,7 @@ export function ReasoningEffortControl({
         onClick={() => setOpen((v) => !v)}
       >
         <span className="bf-effort-dot-pill" aria-hidden="true" />
-        <span>Effort · {EFFORT_LABELS[value]}</span>
+        <span><span className="bf-effort-label">Effort · </span>{EFFORT_LABELS[value]}</span>
       </button>
 
       {open && (

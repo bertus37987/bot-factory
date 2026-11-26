@@ -3822,3 +3822,531 @@ kbd {
     animation: none;
   }
 }
+
+/* ==========================================================================
+   Vanta Grid Rebuild — Architectural Overrides
+   These rules intentionally sit late in the cascade. They convert the legacy
+   floating light-mode chrome into sharp plotted cells while preserving the
+   existing component contracts and behavior.
+   ========================================================================== */
+
+.app-shell-v3 {
+  background:
+    linear-gradient(to right, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.014) 1px, transparent 1px),
+    var(--bg-canvas);
+  background-size: 120px 120px, 76px 76px, auto;
+}
+
+.icon-rail,
+.side-drawer,
+.drawer-header,
+.center-header,
+.browser-sidebar-pane,
+.escalation-header,
+.settings-tabs,
+.memory-studio-tabs,
+.browser-chrome-tabs {
+  background: var(--bg-canvas);
+  border-color: var(--border-grid);
+  border-style: dashed;
+}
+
+.world-pane,
+.iab-body,
+.chat-layout,
+.bots-workbench-pad,
+.settings-grid,
+.phase3-split {
+  background: transparent;
+}
+
+.rail-mode-btn,
+.rail-util-btn,
+.drawer-item,
+.pinned-bot-tile,
+.subagent-node,
+.bot-roster-row,
+.btn,
+.pill,
+.mono-tag,
+.kbd-chip,
+.pc-btn,
+.pc-autonomy,
+.pc-model-btn,
+.pc-model-static,
+.pc-context-ring,
+.pc-send,
+.pc-pop,
+.pc-pop-item,
+.pc-diff-tray,
+.pc-diff-btn,
+.pc-diff-close,
+.pc-att-chip,
+.pc-att-thumb,
+.pc-att-icon,
+.browser-tab-btn,
+.subview-tab,
+.task-card,
+.escalation-card,
+.modal-card,
+.palette-card,
+.auth-gate-card,
+.field-input,
+.field-textarea,
+.field-select {
+  border-radius: var(--radius-sm);
+}
+
+.rail-mode-btn.active,
+.drawer-item.active,
+.pinned-bot-tile.active,
+.subagent-node.active,
+.bot-roster-row.active,
+.browser-tab.active .browser-tab-btn,
+.subview-tab.active,
+.palette-item.selected {
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-active);
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+.rail-mode-btn.active::before {
+  left: -7px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0;
+  background-image: var(--grain-noise-image), var(--glow-indigo-gradient);
+  background-size: 120px 120px, cover;
+  background-blend-mode: overlay, normal;
+}
+
+.rail-badge {
+  border-radius: var(--radius-xs);
+  background: var(--badge-inverted-bg);
+  color: var(--badge-inverted-text);
+  border: 1px solid var(--badge-inverted-bg);
+  font-family: var(--font-mono);
+}
+
+.rail-badge.danger {
+  background: var(--status-danger-ink);
+  border-color: var(--status-danger-ink);
+  color: var(--bg-canvas);
+}
+
+.drawer-new-btn,
+.btn {
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.btn.accent {
+  background: transparent;
+  border-color: var(--accent-orange-border);
+  color: var(--accent-orange-ink);
+}
+
+.btn.accent:hover:not(:disabled) {
+  background: var(--accent-orange-soft);
+  border-color: var(--accent-orange);
+  color: var(--text-primary);
+}
+
+.pill,
+.kbd-chip {
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+}
+
+.mono-tag,
+.pc-model-btn,
+.pc-model-static,
+.pc-context-ring,
+.bf-job-pill {
+  border-radius: var(--radius-xs);
+  background: var(--badge-inverted-bg);
+  border-color: var(--badge-inverted-bg);
+  color: var(--badge-inverted-text);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.pc-model-btn:hover:not(:disabled) {
+  background: var(--action-primary-hover);
+  border-color: var(--action-primary-hover);
+  color: var(--badge-inverted-text);
+}
+
+.pc-card {
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface-1);
+  border: 1px solid var(--border-active);
+  box-shadow: none;
+}
+
+.pc-card::before,
+.pc-card::after,
+.auth-gate-card::before,
+.auth-gate-card::after {
+  content: "";
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-active);
+  pointer-events: none;
+}
+
+.pc-card::before,
+.auth-gate-card::before {
+  top: -4px;
+  left: -4px;
+}
+
+.pc-card::after,
+.auth-gate-card::after {
+  right: -4px;
+  bottom: -4px;
+}
+
+.pc-card:focus-within {
+  border-color: var(--text-primary);
+  box-shadow: var(--focus-ring);
+}
+
+.pc-input {
+  color: var(--text-primary);
+}
+
+.pc-input::placeholder,
+.field-input::placeholder,
+.field-textarea::placeholder,
+.composer-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.72;
+}
+
+.pc-diff-tray {
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  border-style: dashed;
+}
+
+.pc-pop,
+.palette-card,
+.modal-card,
+.auth-gate-card {
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-1);
+  border: 1px solid var(--border-active);
+}
+
+.pc-pop-item,
+.palette-item {
+  border-radius: var(--radius-xs);
+}
+
+.pc-send {
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--action-primary-bg);
+}
+
+.pc-send:disabled {
+  background: var(--bg-surface-2);
+  border-color: var(--border-grid);
+  color: var(--text-muted);
+}
+
+.chat-empty,
+.bots-empty-state,
+.bcs-empty {
+  border: 1px dashed var(--border-grid);
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface-1);
+}
+
+.chat-bubble-human,
+.bcs-bubble,
+.delivery-card,
+.inline-preview-card,
+.goal-banner,
+.group-target-strip,
+.kanban-col,
+.task-card,
+.debate-msg,
+.escalation-card,
+.checkpoint-row,
+.secret-row {
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.chat-bubble-human,
+.bcs-bubble.human {
+  border: 1px solid var(--border-active);
+  background: var(--bg-surface-2);
+}
+
+.bcs-bubble.bot {
+  border-width: 1px;
+  border-style: solid;
+}
+
+.bcs-progress,
+.bcs-trace,
+.bcs-artifact,
+.inline-preview-card,
+.delivery-card {
+  border: 1px dashed var(--border-grid);
+  background: var(--bg-surface-1);
+}
+
+.bcs-progress[data-active="true"],
+.bcs-live,
+.chat-thinking-row,
+.skeleton-bar,
+.bf-effort-track-fill,
+.memory-gauge-fill {
+  background-image: var(--grain-noise-image), var(--glow-indigo-gradient);
+  background-size: 120px 120px, cover;
+  background-blend-mode: overlay, normal;
+  box-shadow: none;
+}
+
+.skeleton-bar {
+  animation: bf-indigo-shimmer 1400ms linear infinite;
+}
+
+.bcs-live,
+.chat-thinking-row {
+  color: var(--text-primary);
+}
+
+.bf-effort-thumb {
+  border-radius: var(--radius-xs);
+  background: var(--badge-inverted-bg);
+  border-color: var(--badge-inverted-bg);
+  box-shadow: none;
+}
+
+.bf-effort-track-fill,
+.memory-gauge-fill {
+  border-radius: 0;
+}
+
+.bear-active-aura {
+  animation: none;
+  box-shadow: inset 0 0 0 1.5px var(--accent-orange-border);
+  opacity: 1;
+}
+
+.browser-tab-btn,
+.subview-tab {
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+}
+
+.browser-tab.active .browser-tab-btn,
+.subview-tab.active {
+  position: relative;
+}
+
+.browser-tab.active .browser-tab-btn::before,
+.subview-tab.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background-image: var(--grain-noise-image), var(--glow-indigo-gradient);
+  background-size: 120px 120px, cover;
+  background-blend-mode: overlay, normal;
+}
+
+.task-card,
+.kanban-col,
+.checkpoint-row,
+.secret-row,
+.escalation-card {
+  background: var(--bg-surface-1);
+  border: 1px dashed var(--border-grid);
+}
+
+.task-card:hover,
+.checkpoint-row:hover,
+.escalation-card:hover {
+  background: var(--bg-surface-2);
+  border-color: var(--border-active);
+}
+
+.task-card[data-status="in_progress"],
+.task-card.active,
+.escalation-card.urgent {
+  border-style: solid;
+  border-color: var(--border-active);
+}
+
+.bcs-task-status,
+.escalation-countdown,
+.escalation-cmd {
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.md-code-block,
+.md-pre,
+.md-blockquote,
+.md-table th,
+.md-table td {
+  border-radius: var(--radius-xs);
+  border-color: var(--border-grid);
+}
+
+.md-code-head {
+  border-bottom: 1px dashed var(--border-grid);
+}
+
+.inline-error,
+.pc-error {
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--status-danger-border);
+  background: var(--status-danger-bg);
+  color: var(--status-danger-ink);
+}
+
+.auth-gate-card {
+  position: relative;
+  overflow: visible;
+}
+
+.auth-gate-backdrop {
+  background:
+    linear-gradient(to right, rgba(255, 255, 255, 0.024) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    var(--bg-canvas);
+  background-size: 120px 120px, 76px 76px, auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar,
+  .bcs-progress[data-active="true"] {
+    animation: none;
+  }
+}
+
+/* Composer keeps one architectural toolbar row; lower-priority controls compress
+   while send remains pinned instead of wrapping into a loose row. */
+.pc-bar {
+  position: relative;
+  flex-wrap: nowrap;
+  overflow: visible;
+  padding-right: 48px;
+}
+
+
+.pc-send {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+}
+
+.pc-spacer {
+  flex: 0 0 8px;
+}
+
+@container pc-card (max-width: 560px) {
+  .pc-context-ring {
+    display: none;
+  }
+
+  .pc-model-btn,
+  .pc-model-static {
+    max-width: 108px;
+  }
+}
+
+@container pc-card (max-width: 680px) {
+  .pc-autonomy {
+    padding-inline: 7px;
+  }
+
+  .pc-autonomy > span:last-child {
+    display: none;
+  }
+
+  .pc-model-btn,
+  .pc-model-static {
+    max-width: 136px;
+  }
+
+  .pc-context-ring {
+    padding-inline: 4px;
+    gap: 2px;
+  }
+
+
+  .bf-effort-trigger {
+    padding-inline: 7px;
+    gap: 5px;
+  }
+}
+
+
+@container pc-card (max-width: 520px) {
+  .bf-effort-label,
+  .pc-context-ring > span {
+    display: none;
+  }
+}
+
+@container pc-card (max-width: 420px) {
+  .pc-context-ring {
+    display: none;
+  }
+
+  .pc-model-btn,
+  .pc-model-static {
+    max-width: 104px;
+  }
+}
+
+@container pc-card (max-width: 340px) {
+  .pc-bar {
+    gap: 3px;
+    padding: 6px 42px 8px 5px;
+  }
+
+  .pc-btn {
+    width: 24px;
+  }
+
+  .pc-model-btn,
+  .pc-model-static {
+    max-width: 76px;
+  }
+
+  .bf-effort-trigger > span:last-child {
+    display: none;
+  }
+}
+
+@container pc-card (max-width: 420px) {
+  .pc-anchor {
+    position: static;
+  }
+
+  .pc-pop,
+  .pc-pop.right {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+}

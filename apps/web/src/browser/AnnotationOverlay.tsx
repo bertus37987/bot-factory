@@ -94,7 +94,7 @@ export function AnnotationOverlay({
           bottom: 12,
           width: 316,
           maxWidth: "calc(100% - 24px)",
-          background: "#FFFFFF",
+          background: "var(--bg-surface-1)",
           border: "1px solid var(--border-hairline)",
           borderRadius: "var(--radius-lg)",
           boxShadow: "var(--shadow-modal)",
@@ -117,7 +117,7 @@ export function AnnotationOverlay({
           }}
         >
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <MessageSquare size={13} strokeWidth={1.6} color="#D95D22" />
+            <MessageSquare size={13} strokeWidth={1.6} color="var(--accent-indigo)" />
             <span>New Pin ({pendingAnchor.kind})</span>
           </span>
           {submitting && <BotThinkingOrb activity="shaping" size={20} />}
@@ -173,7 +173,7 @@ export function AnnotationOverlay({
             borderRadius: "var(--radius-sm)",
             padding: "6px 8px",
             color: "var(--ink-primary)",
-            background: "#FFFFFF",
+            background: "var(--bg-surface-1)",
           }}
         />
 
@@ -192,7 +192,7 @@ export function AnnotationOverlay({
             type="checkbox"
             checked={requestFixNow}
             onChange={(e) => onChangeRequestFixNow(e.target.checked)}
-            style={{ marginTop: 2, accentColor: "#D95D22" }}
+            style={{ marginTop: 2, accentColor: "var(--accent-indigo)" }}
           />
           <span>
             <span style={{ display: "block", fontWeight: "var(--weight-medium)", color: "var(--ink-primary)" }}>
@@ -242,7 +242,7 @@ export function AnnotationOverlay({
           maxWidth: "calc(100% - 24px)",
           maxHeight: "calc(100% - 92px)",
           overflowY: "auto",
-          background: "#FFFFFF",
+          background: "var(--bg-surface-1)",
           border: "1px solid var(--border-hairline)",
           borderRadius: "var(--radius-lg)",
           boxShadow: "var(--shadow-modal)",
@@ -298,7 +298,7 @@ export function AnnotationOverlay({
               display: "flex",
               flexDirection: "column",
               gap: 6,
-              background: "#FAFAFA",
+              background: "var(--bg-surface-2)",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
@@ -311,8 +311,9 @@ export function AnnotationOverlay({
                     width: 16,
                     height: 16,
                     borderRadius: "50%",
-                    background: ann.status === "approved" ? "#165E3D" : "#D95D22",
-                    color: "#FFFFFF",
+                    background: "var(--badge-inverted-bg)",
+                    border: ann.status === "approved" ? "1px solid var(--status-success-ink)" : "1px solid var(--accent-indigo)",
+                    color: "var(--badge-inverted-text)",
                     fontSize: 10,
                   }}
                 >
@@ -334,7 +335,7 @@ export function AnnotationOverlay({
                   borderRadius: "var(--radius-sm)",
                   border: "1px solid var(--border-hairline)",
                   display: "block",
-                  background: "#F5F5F5",
+                  background: "var(--bg-surface-2)",
                 }}
               />
             )}

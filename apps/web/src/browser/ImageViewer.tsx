@@ -332,7 +332,7 @@ export function ImageViewer({
 
       if (opts?.highlightRect) {
         ctx.save();
-        ctx.strokeStyle = "#D95D22";
+        ctx.strokeStyle = "#4432E8";
         ctx.lineWidth = Math.max(3, lineWidth * 1.2);
         ctx.strokeRect(
           opts.highlightRect.x * baseW,
@@ -348,8 +348,8 @@ export function ImageViewer({
         const py = opts.highlightPin.y * baseH;
         const r = Math.max(8, Math.round(Math.min(baseW, baseH) * 0.018));
         ctx.save();
-        ctx.fillStyle = "#D95D22";
-        ctx.strokeStyle = "#FFFFFF";
+        ctx.fillStyle = "#4432E8";
+        ctx.strokeStyle = "#DFDFE4";
         ctx.lineWidth = Math.max(2, Math.round(r * 0.28));
         ctx.beginPath();
         ctx.arc(px, py, r, 0, Math.PI * 2);
@@ -945,7 +945,7 @@ export function ImageViewer({
               if (ann.anchor.kind !== "image") return null;
               const isFocused = focusAnnotationId === ann.id;
               const isApproved = ann.status === "approved";
-              const markerColor = isApproved ? "#165E3D" : "#D95D22";
+              const markerColor = isApproved ? "var(--status-success-ink)" : "var(--accent-indigo)";
 
               if (ann.anchor.pin) {
                 return (
@@ -962,15 +962,16 @@ export function ImageViewer({
                       width: 20,
                       height: 20,
                       borderRadius: "50%",
-                      background: markerColor,
-                      color: "#FFFFFF",
+                      background: "var(--badge-inverted-bg)",
+                      border: `1px solid ${markerColor}`,
+                      color: "var(--badge-inverted-text)",
                       fontSize: 10,
                       fontWeight: "var(--weight-semibold)",
                       lineHeight: 1,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      boxShadow: "0 0 0 2px rgba(255,255,255,0.92)",
+                      boxShadow: "0 0 0 2px rgba(0,0,0,0.72)",
                       pointerEvents: "none",
                       zIndex: isFocused ? 4 : 2,
                     }}
@@ -995,7 +996,7 @@ export function ImageViewer({
                       height: `${ann.anchor.rect.h * 100}%`,
                       border: `2px solid ${markerColor}`,
                       borderRadius: 4,
-                      background: isApproved ? "rgba(22, 94, 61, 0.08)" : "rgba(217, 93, 34, 0.12)",
+                      background: isApproved ? "rgba(82, 217, 139, 0.1)" : "rgba(68, 50, 232, 0.16)",
                       pointerEvents: "none",
                       zIndex: isFocused ? 4 : 2,
                     }}
@@ -1017,7 +1018,7 @@ export function ImageViewer({
                   height: `${draftRect.h * 100}%`,
                   border: tool === "crop" ? "2px dashed #06B6D4" : "2px dashed var(--accent-orange)",
                   borderRadius: 4,
-                  background: tool === "crop" ? "rgba(6, 182, 212, 0.12)" : "rgba(217, 93, 34, 0.14)",
+                  background: tool === "crop" ? "rgba(6, 182, 212, 0.12)" : "rgba(68, 50, 232, 0.16)",
                   pointerEvents: "none",
                   zIndex: 5,
                 }}
@@ -1036,7 +1037,7 @@ export function ImageViewer({
                   height: 14,
                   borderRadius: "50%",
                   background: "var(--accent-orange)",
-                  border: "2px solid #FFFFFF",
+                  border: "2px solid var(--badge-inverted-bg)",
                   boxShadow: "0 2px 6px rgba(0,0,0,0.28)",
                   pointerEvents: "none",
                   zIndex: 6,
@@ -1053,7 +1054,7 @@ export function ImageViewer({
                   height: `${pendingComment.rect.h * 100}%`,
                   border: "2px solid var(--accent-orange)",
                   borderRadius: 4,
-                  background: "rgba(217, 93, 34, 0.14)",
+                  background: "rgba(68, 50, 232, 0.16)",
                   pointerEvents: "none",
                   zIndex: 6,
                 }}
@@ -1289,9 +1290,9 @@ export function ImageViewer({
             onClick={() => void handleAddSnapshotToChat()}
             style={{
               ...microBtnStyle(false),
-              background: "var(--accent-orange)",
-              borderColor: "var(--accent-orange)",
-              color: "#FFFFFF",
+              background: "var(--badge-inverted-bg)",
+              borderColor: "var(--badge-inverted-bg)",
+              color: "var(--badge-inverted-text)",
               fontWeight: "var(--weight-semibold)",
             }}
             title="Attach current image preview to chat composer"

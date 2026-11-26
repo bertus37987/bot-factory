@@ -243,7 +243,10 @@ export function BrowserChrome({
 
   useEffect(() => {
     setOmniboxEditing(false);
-  }, [activeTabId]);
+    if (activeTabId) {
+      tabButtonRefs.current.get(activeTabId)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }, [activeTabId, tabs.length]);
 
   useEffect(() => {
     if (omniboxEditing) {
@@ -506,14 +509,14 @@ export function BrowserChrome({
                   display: "inline-flex",
                   alignItems: "center",
                   height: 30,
-                  maxWidth: 196,
-                  minWidth: 0,
+                  maxWidth: active ? 180 : 120,
+                  minWidth: active ? 84 : 64,
                   background: active ? "var(--bg-canvas)" : "transparent",
                   border: active ? "1px solid var(--border-hairline)" : "1px solid transparent",
                   borderBottom: active ? "1px solid var(--bg-canvas)" : "1px solid transparent",
                   marginBottom: active ? -1 : 0,
-                  borderRadius: "7px 7px 0 0",
-                  flexShrink: 0,
+                  borderRadius: "2px 2px 0 0",
+                  flexShrink: active ? 0 : 1,
                   paddingRight: 4,
                 }}
               >
@@ -551,7 +554,7 @@ export function BrowserChrome({
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
-                      maxWidth: 132,
+                      maxWidth: active ? 118 : 70,
                     }}
                   >
                     {tab.label}

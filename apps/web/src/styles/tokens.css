@@ -1,206 +1,186 @@
 /* ==========================================================================
-   Bot-Factory Studio — Design Tokens ("Vanta Black" Default + Crisp Light Mode)
-   Phase 4 V2 Dual-Theme Design System & Per-Role Messenger Palette
+   Bot-Factory Studio — Vanta Grid Design Tokens
+   Locked Phase 3 visual contract: Vanta Black, dark white type, exposed
+   dashed architectural grid, and tactile grainy indigo signal material.
    ========================================================================== */
 
 :root,
 [data-theme="vanta"] {
   color-scheme: dark;
 
-  /* ------------------------------------------------------------------------
-     1. Vanta Black (#000000) Studio Surface & Ink Palette
-     ------------------------------------------------------------------------ */
+  /* Locked canvas, surface, grid, and typography tokens */
   --bg-canvas: #000000;
-  --bg-surface: #07070a;
-  --bg-surface-subtle: #0e0e13;
-  --bg-elevated: #14141b;
-  --bg-hover: #181820;
-  --bg-pill: #15151c;
-  --bg-active: #1f1f29;
-  --bg-overlay: rgba(0, 0, 0, 0.74);
+  --bg-surface-1: #070709;
+  --bg-surface-2: #0f0f14;
+  --border-grid: rgba(255, 255, 255, 0.09);
+  --border-active: rgba(255, 255, 255, 0.16);
+  --text-primary: #dfdfe4;
+  --text-secondary: #8e8e98;
+  --text-muted: #55555f;
+  --badge-inverted-bg: #dcdce2;
+  --badge-inverted-text: #050507;
 
-  /* Hairline Borders */
-  --border-subtle: #14141b;
-  --border-hairline: #1e1e27;
-  --border-strong: #2e2e3c;
+  /* Legacy surface aliases retained for component compatibility */
+  --bg-surface: var(--bg-surface-1);
+  --bg-surface-subtle: var(--bg-surface-2);
+  --bg-elevated: #111118;
+  --bg-hover: #15151c;
+  --bg-pill: #101016;
+  --bg-active: #171720;
+  --bg-overlay: rgba(0, 0, 0, 0.78);
 
-  /* Ink Typography Scale (High-contrast WCAG AA+ on #000000 / #07070A) */
-  --ink-primary: #f5f5f7;
-  --ink-secondary: #b6b6c4;
-  --ink-muted: #848494;
-  --ink-faint: #646474;
+  --border-subtle: rgba(255, 255, 255, 0.055);
+  --border-hairline: var(--border-grid);
+  --border-strong: var(--border-active);
 
-  /* Primary Action (Crisp Pearl Ink) & Warm Burnt-Orange Signature Accent */
-  --action-primary-bg: #f5f5f7;
-  --action-primary-hover: #ffffff;
-  --action-primary-active: #e2e2e8;
-  --action-primary-fg: #050507;
+  /* Legacy ink aliases; large blocks must never use harsh pure white */
+  --ink-primary: var(--text-primary);
+  --ink-secondary: var(--text-secondary);
+  --ink-muted: #80808c;
+  --ink-faint: #80808c;
 
-  /* Burnt-Orange Signature Accent */
-  --accent-orange: #e86b2c;
-  --accent-orange-hover: #f27c40;
-  --accent-orange-soft: rgba(232, 107, 44, 0.14);
-  --accent-orange-border: rgba(232, 107, 44, 0.42);
-  --accent-orange-ink: #ff9c66;
+  /* Inverted primary action and high-signal badge material */
+  --action-primary-bg: var(--badge-inverted-bg);
+  --action-primary-hover: #eeeeF2;
+  --action-primary-active: #c9c9d1;
+  --action-primary-fg: var(--badge-inverted-text);
 
-  /* Per-Role Messenger Bubble Tokens (High-Contrast Vanta Black) */
-  --bubble-user-bg: #b94815;
-  --bubble-user-border: #e26a2e;
-  --bubble-user-fg: #ffffff;
+  /* Indigo signal accent. Legacy orange names are retained as aliases. */
+  --accent-indigo: #4432e8;
+  --accent-indigo-deep: #1f1680;
+  --accent-indigo-void: #080620;
+  --accent-orange: var(--accent-indigo);
+  --accent-orange-hover: #5a48ff;
+  --accent-orange-soft: rgba(68, 50, 232, 0.16);
+  --accent-orange-border: rgba(93, 75, 255, 0.42);
+  --accent-orange-ink: #9a8cff;
+  --glow-indigo-gradient: linear-gradient(135deg, #080620 0%, #1f1680 52%, #4432e8 100%);
+  --grain-noise-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.72'/%3E%3C/svg%3E");
 
-  --bubble-orch-bg: #261907;
-  --bubble-orch-border: #b87818;
-  --bubble-orch-accent: #f5b041;
-  --bubble-orch-fg: #fff7ea;
+  /* Messenger role palette: near-black fills with crisp role signal accents */
+  --bubble-user-bg: #171721;
+  --bubble-user-border: rgba(220, 220, 226, 0.34);
+  --bubble-user-fg: #f0f0f3;
 
-  --bubble-lead-bg: #072117;
-  --bubble-lead-border: #1b7a52;
-  --bubble-lead-accent: #34d399;
-  --bubble-lead-fg: #ecfdf5;
+  --bubble-orch-bg: #0d0c16;
+  --bubble-orch-border: #3d35a8;
+  --bubble-orch-accent: #8f80ff;
+  --bubble-orch-fg: #eceafc;
 
-  --bubble-builder-bg: #081d2f;
-  --bubble-builder-border: #2171a8;
-  --bubble-builder-accent: #38bdf8;
-  --bubble-builder-fg: #f0f9ff;
+  --bubble-lead-bg: #08120f;
+  --bubble-lead-border: #1d5b38;
+  --bubble-lead-accent: #3ed598;
+  --bubble-lead-fg: #e9f8f1;
 
-  --bubble-artist-bg: #20102e;
-  --bubble-artist-border: #853ec2;
-  --bubble-artist-accent: #c084fc;
-  --bubble-artist-fg: #faf5ff;
+  --bubble-builder-bg: #081118;
+  --bubble-builder-border: #1d5570;
+  --bubble-builder-accent: #46b7ec;
+  --bubble-builder-fg: #eaf6fc;
 
-  --bubble-research-bg: #072224;
-  --bubble-research-border: #1b7c80;
-  --bubble-research-accent: #2dd4bf;
-  --bubble-research-fg: #f0fdfa;
+  --bubble-artist-bg: #120e18;
+  --bubble-artist-border: #593579;
+  --bubble-artist-accent: #b987ec;
+  --bubble-artist-fg: #f4edfb;
 
-  --bubble-verifier-bg: #2a1017;
-  --bubble-verifier-border: #a83b58;
-  --bubble-verifier-accent: #fb7185;
-  --bubble-verifier-fg: #fff1f2;
+  --bubble-research-bg: #071314;
+  --bubble-research-border: #1d5b5e;
+  --bubble-research-accent: #39c9c6;
+  --bubble-research-fg: #eafafa;
 
-  --bubble-cub-bg: #1c1714;
-  --bubble-cub-border: #8b7355;
-  --bubble-cub-accent: #d4b08c;
-  --bubble-cub-fg: #f7efe7;
+  --bubble-verifier-bg: #170d12;
+  --bubble-verifier-border: #6f2a3e;
+  --bubble-verifier-accent: #ef6682;
+  --bubble-verifier-fg: #fbeef1;
 
-  /* Legacy aliases */
+  --bubble-cub-bg: #14120f;
+  --bubble-cub-border: #5e4e3d;
+  --bubble-cub-accent: #c8a97f;
+  --bubble-cub-fg: #f3ebdf;
+
   --human-bubble-bg: var(--bubble-user-bg);
   --human-bubble-fg: var(--bubble-user-fg);
 
-  /* ------------------------------------------------------------------------
-     2. Semantic Status Tokens (Vanta Black High-Contrast)
-     ------------------------------------------------------------------------ */
-  --status-active-ink: #67b7ff;
-  --status-active-bg: #0b1e33;
-  --status-active-border: #1b436e;
+  /* Semantic state tokens */
+  --status-active-ink: #9a8cff;
+  --status-active-bg: #0d0b25;
+  --status-active-border: #3a2cae;
 
-  --status-success-ink: #4ade80;
-  --status-success-bg: #072115;
-  --status-success-border: #175434;
+  --status-success-ink: #52d98b;
+  --status-success-bg: #06180f;
+  --status-success-border: #1d5b38;
 
-  --status-warning-ink: #fbbf24;
-  --status-warning-bg: #261907;
-  --status-warning-border: #6e4810;
+  --status-warning-ink: #e8bd55;
+  --status-warning-bg: #1e1506;
+  --status-warning-border: #6f5115;
 
-  --status-danger-ink: #fb7185;
-  --status-danger-bg: #2a0f16;
-  --status-danger-border: #6f2032;
+  --status-danger-ink: #f1667d;
+  --status-danger-bg: #210b11;
+  --status-danger-border: #752035;
 
-  /* 3D Studio Stage */
-  --stage-3d-bg: #07070a;
-  --stage-3d-grid: #1e1e27;
-  --stage-3d-pin-bg: #f5f5f7;
-  --stage-3d-pin-fg: #050507;
+  /* 3D stage */
+  --stage-3d-bg: #020203;
+  --stage-3d-grid: rgba(255, 255, 255, 0.09);
+  --stage-3d-pin-bg: var(--badge-inverted-bg);
+  --stage-3d-pin-fg: var(--badge-inverted-text);
 
-  /* ------------------------------------------------------------------------
-     3. Thinking Orbs — Dark Obsidian Shell & Semantic Shimmers
-     ------------------------------------------------------------------------ */
-  --orb-ink: #f5f5f7;
-  --orb-ink-soft: rgba(245, 245, 247, 0.58);
-  --orb-shell-bg: radial-gradient(
-    circle at 32% 28%,
-    rgba(32, 32, 42, 0.96) 0%,
-    rgba(18, 18, 25, 0.94) 62%,
-    rgba(10, 10, 15, 0.92) 100%
-  );
-  --orb-shell-border: rgba(245, 245, 247, 0.14);
-  --orb-shell-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.12);
-
-  /* Resting / Idle quiet ring */
+  /* Thinking orbs remain circular instruments even inside the angular grid */
+  --orb-ink: var(--text-primary);
+  --orb-ink-soft: rgba(223, 223, 228, 0.56);
+  --orb-shell-bg: radial-gradient(circle at 32% 28%, #15151d 0%, #09090d 68%, #030304 100%);
+  --orb-shell-border: rgba(223, 223, 228, 0.14);
+  --orb-shell-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.09);
   --orb-idle-size: 8px;
-  --orb-idle-bg: #14141b;
-  --orb-idle-ring: #3d3d4e;
-
-  /* Semantic shimmers */
-  --orb-shimmer-neutral: rgba(245, 245, 247, 0.12);
-  --orb-shimmer-active: rgba(103, 183, 255, 0.22);
-  --orb-shimmer-success: rgba(74, 222, 128, 0.2);
-  --orb-shimmer-warning: rgba(251, 191, 36, 0.22);
-  --orb-shimmer-danger: rgba(251, 113, 133, 0.24);
-
-  /* Purpose-tuned canvas dimensions */
+  --orb-idle-bg: #08080b;
+  --orb-idle-ring: #333340;
+  --orb-shimmer-neutral: rgba(223, 223, 228, 0.1);
+  --orb-shimmer-active: rgba(68, 50, 232, 0.28);
+  --orb-shimmer-success: rgba(82, 217, 139, 0.18);
+  --orb-shimmer-warning: rgba(232, 189, 85, 0.2);
+  --orb-shimmer-danger: rgba(241, 102, 125, 0.22);
   --orb-size-inline: 20px;
   --orb-size-focus: 64px;
 
-  /* ------------------------------------------------------------------------
-     4. Typography — Neo-Grotesk Precision (Self-Hosted Fontsource)
-     ------------------------------------------------------------------------ */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
-    monospace;
-
-  --text-2xs: 0.6875rem; /* 11px */
-  --text-xs: 0.75rem;    /* 12px */
-  --text-sm: 0.8125rem;  /* 13px */
-  --text-base: 0.875rem; /* 14px */
-  --text-prose: 0.9375rem; /* 15px */
-  --text-lg: 1rem;       /* 16px */
-  --text-xl: 1.25rem;    /* 20px */
-
+  /* Typography */
+  --font-sans: "Space Grotesk", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-prose: 0.9375rem;
+  --text-lg: 1rem;
+  --text-xl: 1.25rem;
   --leading-tight: 1.25;
   --leading-snug: 1.4;
   --leading-normal: 1.5;
   --leading-prose: 1.65;
-
   --tracking-tight: -0.02em;
   --tracking-snug: -0.012em;
   --tracking-normal: -0.005em;
   --tracking-wide: 0.04em;
-
   --weight-regular: 400;
   --weight-medium: 500;
   --weight-semibold: 600;
-
   --measure-prose: 68ch;
 
-  /* ------------------------------------------------------------------------
-     5. Hybrid-Balance Geometry, Hairlines & Overlay Elevation
-     ------------------------------------------------------------------------ */
-  --radius-xs: 4px;
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 10px;
-  --radius-pill: 9999px;
+  /* Sharp architectural geometry */
+  --radius-xs: 0px;
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 4px;
+  --radius-pill: 2px;
 
-  --hairline: 1px solid var(--border-hairline);
-  --hairline-subtle: 1px solid var(--border-subtle);
+  --hairline: 1px dashed var(--border-hairline);
+  --hairline-subtle: 1px dashed var(--border-subtle);
   --hairline-strong: 1px solid var(--border-strong);
 
+  /* Restrained temporary-layer elevation only */
   --shadow-none: none;
-  --shadow-popover:
-    0 2px 6px rgba(0, 0, 0, 0.55),
-    0 10px 28px -4px rgba(0, 0, 0, 0.78);
-  --shadow-modal:
-    0 4px 12px rgba(0, 0, 0, 0.65),
-    0 22px 52px -8px rgba(0, 0, 0, 0.88);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.55);
+  --shadow-modal: 0 14px 36px rgba(0, 0, 0, 0.68);
+  --focus-ring: 0 0 0 2px var(--bg-canvas), 0 0 0 3.5px var(--text-primary);
 
-  /* Accessible Keyboard Focus Ring */
-  --focus-ring: 0 0 0 2px var(--bg-canvas), 0 0 0 3.5px var(--ink-primary);
-
-  /* ------------------------------------------------------------------------
-     6. Spacing Scale (4px Base)
-     ------------------------------------------------------------------------ */
+  /* Spacing */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -210,7 +190,6 @@
   --space-8: 32px;
   --space-10: 40px;
 
-  /* Default density tokens (overridden per world via [data-density]) */
   --density-text: var(--text-base);
   --density-leading: var(--leading-normal);
   --density-pad-sm: var(--space-2);
@@ -219,12 +198,9 @@
   --density-gap: var(--space-3);
   --density-row-h: 34px;
 
-  /* ------------------------------------------------------------------------
-     7. Motion — Meditative & Organic
-     ------------------------------------------------------------------------ */
+  /* Motion */
   --ease-out-quiet: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-organic: cubic-bezier(0.37, 0, 0.63, 1);
-
   --duration-instant: 0ms;
   --duration-fast: 150ms;
   --duration-base: 200ms;
@@ -232,154 +208,105 @@
   --duration-orb-breath: 5200ms;
   --duration-orb-drift: 6000ms;
 
-  /* Z-Index Layers */
   --z-base: 0;
   --z-sticky: 10;
   --z-popover: 30;
   --z-modal: 50;
   --z-toast: 60;
 
-  /* Scrollbar Tokens */
   --scrollbar-size: 6px;
-  --scrollbar-thumb: rgba(245, 245, 247, 0.16);
-  --scrollbar-thumb-hover: rgba(245, 245, 247, 0.3);
+  --scrollbar-thumb: rgba(223, 223, 228, 0.16);
+  --scrollbar-thumb-hover: rgba(223, 223, 228, 0.3);
 }
 
-/* ==========================================================================
-   Light Mode Override ("Monochrome Ink" Crisp Pearl)
-   ========================================================================== */
+/* Legacy light theme remains token-driven; Vanta Grid is the primary theme. */
 [data-theme="light"] {
   color-scheme: light;
-
   --bg-canvas: #ffffff;
-  --bg-surface: #fafafa;
-  --bg-surface-subtle: #f5f5f5;
+  --bg-surface-1: #fafafa;
+  --bg-surface-2: #f5f5f5;
+  --border-grid: rgba(23, 23, 23, 0.1);
+  --border-active: rgba(23, 23, 23, 0.18);
+  --text-primary: #171717;
+  --text-secondary: #525252;
+  --text-muted: #737373;
+  --badge-inverted-bg: #171717;
+  --badge-inverted-text: #ffffff;
+
+  --bg-surface: var(--bg-surface-1);
+  --bg-surface-subtle: var(--bg-surface-2);
   --bg-elevated: #ffffff;
   --bg-hover: #f2f2f3;
   --bg-pill: #f2f2f3;
   --bg-active: #eaeaeb;
   --bg-overlay: rgba(23, 23, 23, 0.24);
-
-  --border-subtle: #f2f2f2;
-  --border-hairline: #ebebeb;
-  --border-strong: #d9d9dc;
-
-  --ink-primary: #171717;
-  --ink-secondary: #525252;
+  --border-subtle: rgba(23, 23, 23, 0.06);
   --ink-muted: #666666;
-  --ink-faint: #737373;
-
-  --action-primary-bg: #171717;
   --action-primary-hover: #2b2b2b;
   --action-primary-active: #0a0a0a;
-  --action-primary-fg: #ffffff;
+  --accent-orange-soft: rgba(68, 50, 232, 0.08);
+  --accent-orange-border: rgba(68, 50, 232, 0.24);
+  --accent-orange-ink: #3020a8;
 
-  --accent-orange: #d95d22;
-  --accent-orange-hover: #c24e1a;
-  --accent-orange-soft: #fff7f2;
-  --accent-orange-border: #f5d3bf;
-  --accent-orange-ink: #b84312;
-
-  /* Per-Role Messenger Bubble Tokens (Crisp Pastel Light Mode) */
-  --bubble-user-bg: #d95d22;
-  --bubble-user-border: #c24e1a;
-  --bubble-user-fg: #ffffff;
-
-  --bubble-orch-bg: #fff8eb;
-  --bubble-orch-border: #e5b869;
-  --bubble-orch-accent: #b87818;
-  --bubble-orch-fg: #2c1d05;
-
+  --bubble-user-bg: #ececf1;
+  --bubble-user-border: #c9c9d2;
+  --bubble-user-fg: #171717;
+  --bubble-orch-bg: #efedff;
+  --bubble-orch-border: #bdb4f4;
+  --bubble-orch-accent: #4030b8;
+  --bubble-orch-fg: #171236;
   --bubble-lead-bg: #ecfdf5;
   --bubble-lead-border: #86efac;
   --bubble-lead-accent: #15803d;
   --bubble-lead-fg: #062818;
-
   --bubble-builder-bg: #eff8ff;
   --bubble-builder-border: #93c5fd;
   --bubble-builder-accent: #0369a1;
   --bubble-builder-fg: #082032;
-
   --bubble-artist-bg: #f6f0ff;
   --bubble-artist-border: #d8b4fe;
   --bubble-artist-accent: #7e22ce;
   --bubble-artist-fg: #260d3d;
-
   --bubble-research-bg: #eefcfb;
   --bubble-research-border: #99f6e4;
   --bubble-research-accent: #0f766e;
   --bubble-research-fg: #072726;
-
   --bubble-verifier-bg: #fff1f4;
   --bubble-verifier-border: #fda4af;
   --bubble-verifier-accent: #be123c;
   --bubble-verifier-fg: #330b16;
-
   --bubble-cub-bg: #f7f3ef;
   --bubble-cub-border: #c4a98b;
   --bubble-cub-accent: #8c6b48;
   --bubble-cub-fg: #261d14;
 
-  --human-bubble-bg: var(--bubble-user-bg);
-  --human-bubble-fg: var(--bubble-user-fg);
-
-  --status-active-ink: #1e4e79;
-  --status-active-bg: #f3f6fa;
-  --status-active-border: #dae5f0;
-
+  --status-active-ink: #3020a8;
+  --status-active-bg: #f3f1ff;
+  --status-active-border: #d8d2f8;
   --status-success-ink: #165e3d;
   --status-success-bg: #f2f8f5;
   --status-success-border: #d6eae0;
-
   --status-warning-ink: #8a530b;
   --status-warning-bg: #fbf7f0;
   --status-warning-border: #efe0c6;
-
   --status-danger-ink: #9e2626;
   --status-danger-bg: #fcf4f4;
   --status-danger-border: #f1d6d6;
 
   --stage-3d-bg: #f5f5f5;
-  --stage-3d-grid: #e3e3e6;
-  --stage-3d-pin-bg: #171717;
-  --stage-3d-pin-fg: #ffffff;
-
-  --orb-ink: #171717;
-  --orb-ink-soft: rgba(23, 23, 23, 0.56);
-  --orb-shell-bg: radial-gradient(
-    circle at 32% 28%,
-    rgba(255, 255, 255, 0.96) 0%,
-    rgba(246, 246, 247, 0.92) 62%,
-    rgba(236, 236, 239, 0.88) 100%
-  );
+  --stage-3d-grid: rgba(23, 23, 23, 0.12);
+  --orb-shell-bg: radial-gradient(circle at 32% 28%, #ffffff 0%, #f4f4f6 68%, #e8e8ec 100%);
   --orb-shell-border: rgba(23, 23, 23, 0.09);
   --orb-shell-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.92);
-
   --orb-idle-bg: #fafafa;
   --orb-idle-ring: #c9c9ce;
-
   --orb-shimmer-neutral: rgba(23, 23, 23, 0.08);
-  --orb-shimmer-active: rgba(30, 78, 121, 0.14);
-  --orb-shimmer-success: rgba(22, 94, 61, 0.13);
-  --orb-shimmer-warning: rgba(138, 83, 11, 0.14);
-  --orb-shimmer-danger: rgba(158, 38, 38, 0.15);
-
-  --shadow-popover:
-    0 1px 2px rgba(23, 23, 23, 0.04),
-    0 6px 18px -4px rgba(23, 23, 23, 0.07);
-  --shadow-modal:
-    0 1px 2px rgba(23, 23, 23, 0.05),
-    0 16px 40px -8px rgba(23, 23, 23, 0.12);
-
+  --orb-shimmer-active: rgba(68, 50, 232, 0.14);
   --scrollbar-thumb: rgba(23, 23, 23, 0.12);
   --scrollbar-thumb-hover: rgba(23, 23, 23, 0.24);
 }
 
-/* ==========================================================================
-   Dual Information Density ("Deliberate Contrast")
-   ========================================================================== */
-
-/* Main Agent Chat: Editorial, airy, generous whitespace */
+/* Dual information density */
 [data-density="airy"] {
   --density-text: var(--text-base);
   --density-leading: var(--leading-prose);
@@ -390,7 +317,6 @@
   --density-row-h: 36px;
 }
 
-/* Bots Workbench: Precision workbench for Live Watch, Todo Board, Previews & Phase 3 */
 [data-density="compact"] {
   --density-text: var(--text-sm);
   --density-leading: var(--leading-snug);
@@ -401,22 +327,98 @@
   --density-row-h: 30px;
 }
 
-/* ==========================================================================
-   Thinking Orb Shell Primitives
-   ========================================================================== */
+/* Shared architectural primitives */
+.bf-grid-frame {
+  position: relative;
+  border: 1px dashed var(--border-grid);
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface-1);
+}
 
+.bf-grid-frame::before,
+.bf-grid-frame::after {
+  content: "";
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--border-active);
+  background: var(--bg-canvas);
+  pointer-events: none;
+}
+
+.bf-grid-frame::before {
+  top: -4px;
+  left: -4px;
+}
+
+.bf-grid-frame::after {
+  right: -4px;
+  bottom: -4px;
+}
+
+.bf-chip-inverted {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: var(--radius-xs);
+  background: var(--badge-inverted-bg);
+  color: var(--badge-inverted-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  padding: 4px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.015em;
+  font-variant-numeric: tabular-nums;
+}
+
+.bf-glow-panel {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: var(--radius-xs);
+  background: var(--glow-indigo-gradient);
+}
+
+.bf-glow-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.2;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.72'/%3E%3C/svg%3E");
+  background-size: 120px 120px;
+}
+
+@keyframes bf-indigo-shimmer {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 180% 50%; }
+}
+
+.bf-signal-bar {
+  position: relative;
+  overflow: hidden;
+  min-height: 3px;
+  border-radius: 0;
+  background: var(--glow-indigo-gradient);
+  background-size: 180% 100%;
+}
+
+.bf-signal-bar[data-active="true"] {
+  animation: bf-indigo-shimmer 1300ms linear infinite;
+}
+
+/* Thinking orb primitives */
 @keyframes bf-orb-breath {
-  0%,
-  100% {
-    box-shadow:
-      var(--orb-shell-highlight),
-      0 0 0 0px var(--orb-shimmer-color, var(--orb-shimmer-neutral));
+  0%, 100% {
+    box-shadow: var(--orb-shell-highlight), 0 0 0 0 var(--orb-shimmer-color, var(--orb-shimmer-neutral));
     opacity: 0.94;
   }
   50% {
-    box-shadow:
-      var(--orb-shell-highlight),
-      0 0 0 3px var(--orb-shimmer-color, var(--orb-shimmer-neutral));
+    box-shadow: var(--orb-shell-highlight), 0 0 0 3px var(--orb-shimmer-color, var(--orb-shimmer-neutral));
     opacity: 1;
   }
 }
@@ -427,49 +429,35 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-pill);
+  border-radius: 50%;
   background: var(--orb-shell-bg);
   border: 1px solid var(--orb-shell-border);
   box-shadow: var(--orb-shell-highlight);
   flex-shrink: 0;
 }
 
-.bf-orb-shell[data-orb-tone="active"] {
-  --orb-shimmer-color: var(--orb-shimmer-active);
-}
-
-.bf-orb-shell[data-orb-tone="success"] {
-  --orb-shimmer-color: var(--orb-shimmer-success);
-}
-
-.bf-orb-shell[data-orb-tone="warning"] {
-  --orb-shimmer-color: var(--orb-shimmer-warning);
-}
-
-.bf-orb-shell[data-orb-tone="danger"] {
-  --orb-shimmer-color: var(--orb-shimmer-danger);
-}
-
-.bf-orb-shell[data-orb-active="true"] {
-  animation: bf-orb-breath var(--duration-orb-breath) var(--ease-organic)
-    infinite;
-}
+.bf-orb-shell[data-orb-tone="active"] { --orb-shimmer-color: var(--orb-shimmer-active); }
+.bf-orb-shell[data-orb-tone="success"] { --orb-shimmer-color: var(--orb-shimmer-success); }
+.bf-orb-shell[data-orb-tone="warning"] { --orb-shimmer-color: var(--orb-shimmer-warning); }
+.bf-orb-shell[data-orb-tone="danger"] { --orb-shimmer-color: var(--orb-shimmer-danger); }
+.bf-orb-shell[data-orb-active="true"] { animation: bf-orb-breath var(--duration-orb-breath) var(--ease-organic) infinite; }
 
 .bf-orb-idle {
   display: inline-block;
   width: var(--orb-idle-size);
   height: var(--orb-idle-size);
-  border-radius: var(--radius-pill);
+  border-radius: 50%;
   background: var(--orb-idle-bg);
   border: 1px solid var(--orb-idle-ring);
   flex-shrink: 0;
 }
 
-/* ==========================================================================
-   Tabular Numerals & Reduced Motion Guardrails
-   ========================================================================== */
-
-.bf-tabular {
+.bf-tabular,
+table,
+time,
+code,
+kbd,
+.mono-tag {
   font-variant-numeric: tabular-nums;
 }
 
@@ -482,10 +470,8 @@
     --duration-slow: 0.01ms;
   }
 
-  .bf-orb-shell[data-orb-active="true"] {
+  .bf-orb-shell[data-orb-active="true"],
+  .bf-signal-bar[data-active="true"] {
     animation: none;
-    box-shadow:
-      var(--orb-shell-highlight),
-      0 0 0 2px var(--orb-shimmer-color, var(--orb-shimmer-neutral));
   }
 }
