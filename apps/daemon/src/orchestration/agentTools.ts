@@ -604,6 +604,7 @@ export const TEAM_LEAD_TOOL_DEFS: ToolDefinition[] = [
         summary: { type: "string" },
         verifiedTaskIds: { type: "array", items: { type: "string" } },
         blockedReasons: { type: "array", items: { type: "string" } },
+        goalId: { type: "string" },
       },
       required: ["status", "summary"],
     },
@@ -794,6 +795,7 @@ export function createMainManagerToolExecutor(ctx: MainManagerToolContext): Tool
           goal: cleanGoal,
           autonomyLevel,
           reasoningEffort,
+          deferPersistence: true,
         });
 
         const now = Date.now();
@@ -839,6 +841,7 @@ export function createMainManagerToolExecutor(ctx: MainManagerToolContext): Tool
         ctx.core.commitCommand(newId("cmd"), "team.delegate", () => ({
           result: { ok: true, goalId: goalCtx.goalId, projectId: project.id, pmAgentId: pm.id, status: goalCtx.status },
           applyProjections: () => {
+            ctx.autonomyLoop.persistGoalWithinTransaction(goalCtx);
             if (pmTimelineItem) ctx.db.appendMessage(pmTimelineItem);
             ctx.db.updateAgentStatus(pm.id, "working", {
               lastSummary: `Planning goal: ${cleanGoal.slice(0, 60)}`,
@@ -1274,6 +1277,12 @@ export function createTeamLeadToolExecutor(ctx: TeamLeadToolContext): ToolCallEx
             for (const task of createdTasks) {
               ctx.db.upsertTask(task);
             }
+            ctx.autonomyLoop.attachTasks(
+              project.id,
+              createdTasks.map((t) => t.id),
+              undefined,
+              true,
+            );
           },
           events: [
             ...createdTasks.map((task) => ({
@@ -1289,11 +1298,6 @@ export function createTeamLeadToolExecutor(ctx: TeamLeadToolContext): ToolCallEx
           ],
           effects: [],
         }));
-
-        ctx.autonomyLoop.attachTasks(
-          project.id,
-          createdTasks.map((t) => t.id),
-        );
 
         return {
           tasks: createdTasks,
@@ -1453,9 +1457,13 @@ export function createTeamLeadToolExecutor(ctx: TeamLeadToolContext): ToolCallEx
           ? args.blockedReasons.map((r) => ctx.scrubber.scrub(String(r).trim())).filter(Boolean)
           : [];
 
-        const goalCtx = ctx.autonomyLoop.markGoalReported(project.id, status);
+        const explicitGoalId = typeof args.goalId === "string" && args.goalId.trim() ? args.goalId.trim() : undefined;
+        const inferredGoalId = verifiedTaskIds.map((taskId) => ctx.db.getTask(taskId)?.goalId).find((id): id is string => Boolean(id));
+        const goalId = explicitGoalId ?? inferredGoalId;
+        const goalCtx = ctx.autonomyLoop.markGoalReported(project.id, status, goalId);
         const reportContent = [
           `Team Lead Report (${project.name} / ${status.toUpperCase()})`,
+          goalCtx ? `Goal: ${goalCtx.goalId}` : "",
           `Summary: ${cleanSummary}`,
           verifiedTaskIds.length > 0 ? `Verified Tasks: ${verifiedTaskIds.join(", ")}` : "",
           blockedReasons.length > 0 ? `Blocked Reasons: ${blockedReasons.join("; ")}` : "",

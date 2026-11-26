@@ -7,6 +7,7 @@ import { startBotFactoryDaemon, type BotFactoryApp } from "../apps/daemon/src/in
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const WEB_DIST_INDEX = resolve(REPO_ROOT, "apps/web/dist/index.html");
 const PLAYWRIGHT_SCRIPT = resolve(import.meta.dir, "ui_e2e_playwright.py");
+const PYTHON_EXE = Bun.which("python3") ?? Bun.which("python") ?? "python3";
 
 interface PlaywrightProbeResult {
   available: boolean;
@@ -20,7 +21,7 @@ function probePythonPlaywright(): PlaywrightProbeResult {
   try {
     const probe = Bun.spawnSync(
       [
-        "python",
+        PYTHON_EXE,
         "-c",
         [
           "import os",
@@ -50,9 +51,7 @@ function probePythonPlaywright(): PlaywrightProbeResult {
 }
 
 const playwrightProbe = probePythonPlaywright();
-const shouldSkipPlaywright =
-  process.env.BOT_FACTORY_SKIP_PLAYWRIGHT === "1" ||
-  (Boolean(process.env.CI) && !playwrightProbe.available);
+const shouldSkipPlaywright = process.env.BOT_FACTORY_SKIP_PLAYWRIGHT === "1" || !playwrightProbe.available;
 
 let prevOfflineMock: string | undefined;
 let prevOpenAiKey: string | undefined;
@@ -116,7 +115,7 @@ describe("Bot-Factory Studio Playwright UI E2E", () => {
       };
       delete childEnv.OPENAI_API_KEY;
 
-      const proc = Bun.spawn(["python", PLAYWRIGHT_SCRIPT], {
+      const proc = Bun.spawn([PYTHON_EXE, PLAYWRIGHT_SCRIPT], {
         cwd: REPO_ROOT,
         env: childEnv,
         stdout: "pipe",

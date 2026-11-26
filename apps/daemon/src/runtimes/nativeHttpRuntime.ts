@@ -54,7 +54,16 @@ function lexicalWithinRoot(absRoot: string, absTarget: string): boolean {
   return sameDrive && (normTarget === normRoot || normTarget.startsWith(rootPrefix));
 }
 
+function mapIntoRealRoot(inputRoot: string, realRoot: string, target: string): string {
+  if (lexicalWithinRoot(realRoot, target)) return target;
+  if (lexicalWithinRoot(inputRoot, target)) {
+    return resolve(realRoot, relative(inputRoot, target));
+  }
+  return target;
+}
+
 function resolveSymlinkStep(
+  inputRoot: string,
   realRoot: string,
   current: string,
   depth: number,
@@ -98,17 +107,19 @@ function resolveSymlinkStep(
   if (!rawLink || rawLink.includes("\0") || rawLink.startsWith("\\\\") || rawLink.startsWith("//")) {
     return { exists: true, escaped: true, resolvedPath: current };
   }
-  const absLinkTarget = resolve(dirname(current), rawLink);
+  const rawAbsLinkTarget = resolve(dirname(current), rawLink);
+  const absLinkTarget = mapIntoRealRoot(inputRoot, realRoot, rawAbsLinkTarget);
   if (!lexicalWithinRoot(realRoot, absLinkTarget)) {
     return { exists: true, escaped: true, resolvedPath: absLinkTarget };
   }
-  if (!checkSegmentsWithinRealRoot(realRoot, realRoot, relative(realRoot, absLinkTarget), depth + 1)) {
+  if (!checkSegmentsWithinRealRoot(inputRoot, realRoot, realRoot, relative(realRoot, absLinkTarget), depth + 1)) {
     return { exists: true, escaped: true, resolvedPath: absLinkTarget };
   }
   return { exists: true, escaped: false, resolvedPath: absLinkTarget };
 }
 
 function checkSegmentsWithinRealRoot(
+  inputRoot: string,
   realRoot: string,
   baseStart: string,
   relFromRoot: string,
@@ -123,7 +134,7 @@ function checkSegmentsWithinRealRoot(
   for (const seg of segments) {
     if (seg === "..") return false;
     current = join(current, seg);
-    const step = resolveSymlinkStep(realRoot, current, depth);
+    const step = resolveSymlinkStep(inputRoot, realRoot, current, depth);
     if (step.escaped) return false;
     if (!step.exists) return true;
     current = step.resolvedPath;
@@ -132,7 +143,7 @@ function checkSegmentsWithinRealRoot(
   return true;
 }
 
-function checkRawRelativeSegmentsWithinRealRoot(realRoot: string, candidatePath: string): boolean {
+function checkRawRelativeSegmentsWithinRealRoot(inputRoot: string, realRoot: string, candidatePath: string): boolean {
   if (isAbsolute(candidatePath)) return true;
   const rawParts = candidatePath.split(/[\\/]+/).filter(Boolean);
   if (!rawParts.includes("..")) return true;
@@ -152,7 +163,7 @@ function checkRawRelativeSegmentsWithinRealRoot(realRoot: string, candidatePath:
     }
     current = join(current, seg);
     if (missingPrefix) continue;
-    const step = resolveSymlinkStep(realRoot, current, 0);
+    const step = resolveSymlinkStep(inputRoot, realRoot, current, 0);
     if (step.escaped) return false;
     if (!step.exists) {
       missingPrefix = true;
@@ -164,37 +175,68 @@ function checkRawRelativeSegmentsWithinRealRoot(realRoot: string, candidatePath:
 }
 
 export function isPathStrictlyWithinRoot(rootDir: string, candidatePath: string): { ok: boolean; absTarget: string } {
-  if (!candidatePath || candidatePath.includes("\0") || candidatePath.startsWith("\\\\") || candidatePath.startsWith("//")) {
+  const hasWindowsDrivePrefix = /^[a-zA-Z]:/.test(candidatePath);
+  if (
+    !candidatePath ||
+    candidatePath.includes("\0") ||
+    candidatePath.startsWith("\\\\") ||
+    candidatePath.startsWith("//") ||
+    (hasWindowsDrivePrefix && process.platform !== "win32")
+  ) {
     return { ok: false, absTarget: "" };
   }
-  const absRoot = resolve(rootDir);
-  const absTarget = resolve(absRoot, candidatePath);
-  if (!lexicalWithinRoot(absRoot, absTarget)) {
-    return { ok: false, absTarget };
-  }
-  // Guard against symlinks / dangling symlinks / Windows reparse points escaping rootDir
+
+  const inputRoot = resolve(rootDir);
+  const inputTarget = resolve(inputRoot, candidatePath);
+  const inputTargetWithinRoot = lexicalWithinRoot(inputRoot, inputTarget);
+
+  // Guard against symlinks / dangling symlinks / Windows reparse points escaping rootDir.
+  // realpathSync(rootDir) can differ from the typed root on platforms where /tmp or /var
+  // is itself a symlink (notably macOS), so all recursive checks run in canonical root space.
   try {
     try {
-      lstatSync(absRoot);
+      lstatSync(inputRoot);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code;
       if (code === "ENOENT") {
-        return { ok: true, absTarget };
+        return { ok: inputTargetWithinRoot, absTarget: inputTarget };
       }
+      return { ok: false, absTarget: inputTarget };
+    }
+
+    const realRoot = stripWinExtendedPrefix(realpathSync(inputRoot));
+    let relFromRoot: string;
+    if (inputTargetWithinRoot) {
+      relFromRoot = relative(inputRoot, inputTarget);
+    } else if (lexicalWithinRoot(realRoot, inputTarget)) {
+      relFromRoot = relative(realRoot, inputTarget);
+    } else {
+      return { ok: false, absTarget: inputTarget };
+    }
+
+    const absTarget = resolve(realRoot, relFromRoot);
+    if (!lexicalWithinRoot(realRoot, absTarget)) {
       return { ok: false, absTarget };
     }
-    const realRoot = stripWinExtendedPrefix(realpathSync(absRoot));
-    if (!checkRawRelativeSegmentsWithinRealRoot(realRoot, candidatePath)) {
+    if (!checkRawRelativeSegmentsWithinRealRoot(inputRoot, realRoot, candidatePath)) {
       return { ok: false, absTarget };
     }
-    const relFromRoot = relative(absRoot, absTarget);
-    if (!checkSegmentsWithinRealRoot(realRoot, realRoot, relFromRoot, 0)) {
+    if (!checkSegmentsWithinRealRoot(inputRoot, realRoot, realRoot, relFromRoot, 0)) {
       return { ok: false, absTarget };
     }
+    return { ok: true, absTarget };
   } catch {
-    return { ok: false, absTarget };
+    return { ok: false, absTarget: inputTarget };
   }
-  return { ok: true, absTarget };
+}
+
+export function canonicalRelativePathWithinRoot(rootDir: string, absTarget: string): string {
+  try {
+    const realRoot = stripWinExtendedPrefix(realpathSync(resolve(rootDir)));
+    return relative(realRoot, absTarget).split(sep).join("/");
+  } catch {
+    return relative(resolve(rootDir), absTarget).split(sep).join("/");
+  }
 }
 
 export function resolveSafeWorktreePath(cwd: string, relPath: string): string {

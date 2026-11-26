@@ -6,7 +6,7 @@ import { newId, type HubConfig, type TaskRecord, type VerificationReportRecord }
 import { loadHubConfig, saveHubConfig, SecretScrubber } from "../apps/daemon/src/config";
 import { CommandCore } from "../apps/daemon/src/core/commandCore";
 import { StateDatabase } from "../apps/daemon/src/db/database";
-import { createSubagentWorktree, extractAndApplySubagentPatch } from "../apps/daemon/src/git/worktrees";
+import { createBotWorktree, createSubagentWorktree, extractAndApplySubagentPatch } from "../apps/daemon/src/git/worktrees";
 import { startBotFactoryDaemon, type BotFactoryApp } from "../apps/daemon/src/index";
 import { computeMcpFetchTimeoutMs, DEFAULT_SUBAGENT_WAIT_MS } from "../apps/daemon/src/mcp/mcpBridge";
 import { LocalSuperHermesMemory } from "../apps/daemon/src/memory/memoryEngine";
@@ -804,6 +804,394 @@ describe("Wave 2 Harness & Multi-Agent Upgrades", () => {
     };
     autonomy.onVerificationCompleted(projectId, taskBId, passReport);
     expect(dispatchedTasks).toContain(taskCId);
+  });
+
+  it("persists and rehydrates autonomous goal DAG state across database restarts", () => {
+    const rootDir = makeTempDir();
+    const dbPath = join(rootDir, "state.db");
+    const cfg = makeBaseTestConfig(rootDir);
+    const scrubber = new SecretScrubber({});
+    const now = Date.now();
+    const projectId = newId("prj");
+    const taskAId = newId("tsk");
+    const taskBId = newId("tsk");
+
+    const makeLoop = (db: StateDatabase) =>
+      new AutonomyLoop(db, new CommandCore(db, 1), scrubber, {
+        getConfig: () => cfg,
+        getQuietStatusProjection: () => ({
+          activeProjects: 0,
+          runningBots: 0,
+          waitingReviews: 0,
+          openAnnotations: 0,
+          activeDebates: 0,
+          stagedSelfMods: 0,
+          inboxNotices: [],
+        }),
+        getProjectBoardSnapshot: () => ({}),
+        spawnPeerBot: () => {
+          throw new Error("not_needed");
+        },
+        dispatchTask: () => {},
+        runAgentTurn: async () => ({ ok: true, text: "ok" }),
+        onGoalReportFallback: async () => {},
+      });
+
+    const firstDb = new StateDatabase(dbPath);
+    let goalId = "";
+    try {
+      firstDb.insertProject({
+        id: projectId,
+        name: "Restart DAG Lab",
+        slug: "restart-dag-lab",
+        rootPath: rootDir,
+        repoPath: rootDir,
+        routingOverrides: {},
+        verifyChecks: [],
+        status: "active",
+        createdAt: now,
+      });
+      for (const [id, title, deps] of [
+        [taskAId, "Restart root", []],
+        [taskBId, "Restart dependent", [taskAId]],
+      ] as Array<[string, string, string[]]>) {
+        firstDb.upsertTask({
+          id,
+          projectId,
+          parentTaskId: null,
+          title,
+          specMd: `${title} spec`,
+          status: "ready",
+          priority: 1,
+          assignedAgentId: null,
+          sourceAnnotationId: null,
+          worktreeBranch: null,
+          handoffPath: null,
+          retryCount: 0,
+          dependsOn: deps,
+          autoRetryCount: 0,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      const firstLoop = makeLoop(firstDb);
+      const goal = firstLoop.startGoal({ projectId, goal: "Survive restart", autonomyLevel: "high" });
+      goalId = goal.goalId;
+      firstLoop.attachTasks(projectId, [taskAId, taskBId], goal.goalId);
+      expect(firstDb.getTask(taskAId)?.goalId).toBe(goalId);
+      expect(firstDb.getTask(taskBId)?.goalId).toBe(goalId);
+    } finally {
+      firstDb.close();
+    }
+
+    const restartedDb = new StateDatabase(dbPath);
+    try {
+      const restartedLoop = makeLoop(restartedDb);
+      const goals = restartedLoop.listGoals(projectId);
+      expect(goals).toHaveLength(1);
+      expect(goals[0]).toMatchObject({
+        goalId,
+        projectId,
+        goal: "Survive restart",
+        status: "active",
+      });
+      expect(goals[0]?.taskIds).toEqual(expect.arrayContaining([taskAId, taskBId]));
+      expect(restartedLoop.isAutonomousTask(taskAId)).toBe(true);
+      expect(restartedLoop.isAutonomousTask(taskBId)).toBe(true);
+      expect(restartedLoop.getActiveGoalForProject(projectId)?.goalId).toBe(goalId);
+    } finally {
+      restartedDb.close();
+    }
+  });
+
+  it("preserves original goal links and resumes independent branches across multiple persisted goals", () => {
+    const rootDir = makeTempDir();
+    const dbPath = join(rootDir, "state.db");
+    const cfg = makeBaseTestConfig(rootDir);
+    cfg.guardrails.maxConcurrentBotsPerProject = 1;
+    const scrubber = new SecretScrubber({});
+    const now = Date.now();
+    const projectId = newId("prj");
+    const agentId = newId("agt");
+    const sessionId = newId("ses");
+    const makeTask = (id: string, title: string): TaskRecord => ({
+      id,
+      projectId,
+      parentTaskId: null,
+      title,
+      specMd: `${title} spec`,
+      status: "ready",
+      priority: 1,
+      assignedAgentId: null,
+      sourceAnnotationId: null,
+      worktreeBranch: null,
+      handoffPath: null,
+      retryCount: 0,
+      dependsOn: [],
+      autoRetryCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const makeLoop = (
+      db: StateDatabase,
+      dispatchTask: (params: { projectId: string; taskId: string; agentId?: string; autonomous: boolean }) => void = () => {},
+    ) =>
+      new AutonomyLoop(db, new CommandCore(db, 1), scrubber, {
+        getConfig: () => cfg,
+        getQuietStatusProjection: () => ({
+          activeProjects: 0,
+          runningBots: 0,
+          waitingReviews: 0,
+          openAnnotations: 0,
+          activeDebates: 0,
+          stagedSelfMods: 0,
+          inboxNotices: [],
+        }),
+        getProjectBoardSnapshot: () => ({}),
+        spawnPeerBot: () => {
+          throw new Error("capacity_exhausted");
+        },
+        dispatchTask,
+        runAgentTurn: async () => ({ ok: true, text: "ok" }),
+        onGoalReportFallback: async () => {},
+      });
+
+    const firstDb = new StateDatabase(dbPath);
+    let oldGoalId = "";
+    let blockedGoalId = "";
+    let newerGoalId = "";
+    try {
+      firstDb.insertProject({
+        id: projectId,
+        name: "Goal Branch Lab",
+        slug: "goal-branch-lab",
+        rootPath: rootDir,
+        repoPath: rootDir,
+        routingOverrides: {},
+        verifyChecks: [],
+        status: "active",
+        createdAt: now,
+      });
+      firstDb.upsertAgent({
+        id: agentId,
+        projectId,
+        parentAgentId: null,
+        scope: "peer",
+        name: "Restart-Peer",
+        runtimeType: "native_http",
+        provider: "mock",
+        model: "smart",
+        status: "idle",
+        worktreePath: rootDir,
+        worktreeBranch: "main",
+        pid: null,
+        activeSessionId: sessionId,
+        lastSummary: "",
+        updatedAt: now,
+      });
+      firstDb.createSession({
+        id: sessionId,
+        agentId,
+        parentSessionId: null,
+        systemPrompt: "sys",
+        systemPromptHash: "hash",
+        generation: 1,
+        tokenIn: 0,
+        tokenOut: 0,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      });
+      for (const task of [makeTask("tsk_old", "Old goal branch"), makeTask("tsk_blocked", "Blocked goal independent branch"), makeTask("tsk_new", "New goal branch")]) {
+        firstDb.upsertTask(task);
+      }
+
+      const loop = makeLoop(firstDb);
+      const oldGoal = loop.startGoal({ projectId, goal: "Old goal" });
+      oldGoalId = oldGoal.goalId;
+      loop.attachTasks(projectId, ["tsk_old"], oldGoalId);
+      const blockedGoal = loop.startGoal({ projectId, goal: "Blocked goal with independent branch" });
+      blockedGoalId = blockedGoal.goalId;
+      loop.attachTasks(projectId, ["tsk_blocked"], blockedGoalId);
+      loop.markGoalReported(projectId, "blocked", blockedGoalId);
+      const newerGoal = loop.startGoal({ projectId, goal: "Newer goal" });
+      newerGoalId = newerGoal.goalId;
+      loop.attachTasks(projectId, ["tsk_new"], newerGoalId);
+
+      loop.markTaskAutonomous("tsk_old", projectId);
+      expect(firstDb.getTask("tsk_old")?.goalId).toBe(oldGoalId);
+      expect(loop.getGoal(oldGoalId)?.taskIds).toContain("tsk_old");
+      expect(loop.getGoal(newerGoalId)?.taskIds).not.toContain("tsk_old");
+    } finally {
+      firstDb.close();
+    }
+
+    const restartedDb = new StateDatabase(dbPath);
+    try {
+      const dispatched: string[] = [];
+      const restartedLoop = makeLoop(restartedDb, ({ taskId }) => {
+        dispatched.push(taskId);
+      });
+      expect(restartedLoop.getGoal(blockedGoalId)?.status).toBe("blocked");
+      expect(restartedLoop.getGoal(newerGoalId)?.status).toBe("active");
+      expect(restartedLoop.resumePersistedGoals()).toBe(3);
+      expect(dispatched).toEqual(expect.arrayContaining(["tsk_old", "tsk_blocked", "tsk_new"]));
+    } finally {
+      restartedDb.close();
+    }
+  });
+
+  it("does not restart autonomous work on bots with unresolved crash admissions", () => {
+    const rootDir = makeTempDir();
+    const dbPath = join(rootDir, "state.db");
+    const cfg = makeBaseTestConfig(rootDir);
+    cfg.guardrails.maxConcurrentBotsPerProject = 1;
+    const scrubber = new SecretScrubber({});
+    const now = Date.now();
+    const projectId = newId("prj");
+    const agentId = newId("agt");
+    const sessionId = newId("ses");
+    const taskId = newId("tsk");
+
+    const db = new StateDatabase(dbPath);
+    try {
+      const repoDir = initTempGitRepo(rootDir);
+      db.insertProject({
+        id: projectId,
+        name: "Crash Admission Lab",
+        slug: "crash-admission-lab",
+        rootPath: rootDir,
+        repoPath: repoDir,
+        routingOverrides: {},
+        verifyChecks: [],
+        status: "active",
+        createdAt: now,
+      });
+      const cleanWorktree = createBotWorktree({
+        projectRoot: rootDir,
+        repoPath: repoDir,
+        agentId,
+        taskId: "bootstrap_clean_worktree",
+      });
+      db.upsertAgent({
+        id: agentId,
+        projectId,
+        parentAgentId: null,
+        scope: "peer",
+        name: "Crash-Blocked-Peer",
+        runtimeType: "native_http",
+        provider: "mock",
+        model: "smart",
+        status: "idle",
+        worktreePath: cleanWorktree.worktreePath,
+        worktreeBranch: cleanWorktree.branch,
+        pid: null,
+        activeSessionId: sessionId,
+        lastSummary: "",
+        updatedAt: now,
+      });
+      db.createSession({
+        id: sessionId,
+        agentId,
+        parentSessionId: null,
+        systemPrompt: "sys",
+        systemPromptHash: "hash",
+        generation: 1,
+        tokenIn: 0,
+        tokenOut: 0,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      });
+      const admission = db.enqueueAdmission(sessionId, "crashed turn", "started");
+      db.updateAdmissionStatus(admission.id, "unknown");
+      db.upsertTask({
+        id: "tsk_crashed_unmerged",
+        projectId,
+        parentTaskId: null,
+        title: "Crashed unmerged task",
+        specMd: "spec",
+        status: "claimed",
+        priority: 1,
+        assignedAgentId: agentId,
+        sourceAnnotationId: null,
+        worktreeBranch: null,
+        handoffPath: null,
+        retryCount: 0,
+        dependsOn: [],
+        autoRetryCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+      db.upsertTask({
+        id: taskId,
+        projectId,
+        parentTaskId: null,
+        title: "Ready after restart",
+        specMd: "spec",
+        status: "ready",
+        priority: 1,
+        assignedAgentId: agentId,
+        sourceAnnotationId: null,
+        worktreeBranch: null,
+        handoffPath: null,
+        retryCount: 0,
+        dependsOn: [],
+        autoRetryCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const dispatched: string[] = [];
+      const loop = new AutonomyLoop(db, new CommandCore(db, 1), scrubber, {
+        getConfig: () => cfg,
+        getQuietStatusProjection: () => ({
+          activeProjects: 0,
+          runningBots: 0,
+          waitingReviews: 0,
+          openAnnotations: 0,
+          activeDebates: 0,
+          stagedSelfMods: 0,
+          inboxNotices: [],
+        }),
+        getProjectBoardSnapshot: () => ({}),
+        spawnPeerBot: () => {
+          throw new Error("capacity_exhausted");
+        },
+        dispatchTask: ({ taskId: dispatchedTaskId }) => {
+          dispatched.push(dispatchedTaskId);
+        },
+        runAgentTurn: async () => ({ ok: true, text: "ok" }),
+        onGoalReportFallback: async () => {},
+      });
+      const goal = loop.startGoal({ projectId, goal: "Recover safely" });
+      loop.attachTasks(projectId, [taskId], goal.goalId);
+
+      expect(loop.resumePersistedGoals()).toBe(0);
+      expect(dispatched).toEqual([]);
+      expect(db.getTask(taskId)?.status).toBe("ready");
+
+      db.updateAdmissionStatus(admission.id, "terminal");
+      expect(loop.resumePersistedGoals()).toBe(0);
+      expect(dispatched).toEqual([]);
+      expect(db.getTask(taskId)?.status).toBe("ready");
+
+      const crashedTask = db.getTask("tsk_crashed_unmerged")!;
+      db.upsertTask({ ...crashedTask, status: "verified", updatedAt: Date.now() });
+      expect(loop.resumePersistedGoals()).toBe(0);
+      expect(dispatched).toEqual([]);
+
+      db.upsertTask({ ...crashedTask, status: "blocked", updatedAt: Date.now() });
+      expect(loop.resumePersistedGoals()).toBe(1);
+      expect(dispatched).toEqual([taskId]);
+
+      writeFileSync(join(cleanWorktree.worktreePath, "failed-wip.txt"), "unmerged failed attempt\n", "utf8");
+      dispatched.length = 0;
+      expect(loop.resumePersistedGoals()).toBe(0);
+      expect(dispatched).toEqual([]);
+    } finally {
+      db.close();
+    }
   });
 
   it("enforces symlink & path-escape rejection in extractAndApplySubagentPatch, returns typed SubagentResultEnvelope, and honors 60s MCP wait default", async () => {

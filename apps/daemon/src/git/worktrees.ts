@@ -22,7 +22,7 @@ import {
   type RepoFileEntry,
 } from "@bot-factory/shared";
 import type { StateDatabase } from "../db/database";
-import { isPathStrictlyWithinRoot } from "../runtimes/nativeHttpRuntime";
+import { canonicalRelativePathWithinRoot, isPathStrictlyWithinRoot } from "../runtimes/nativeHttpRuntime";
 
 // --- Low-level git runners ---
 
@@ -531,6 +531,35 @@ export function createBotWorktree(params: {
   const branch = `bf/${shortId}`;
   runGitSync(["worktree", "add", "-b", branch, worktreePath, "HEAD"], params.repoPath);
   return { worktreePath, branch };
+}
+
+export function worktreeHasUnmergedChangesSync(params: {
+  repoPath: string;
+  worktreePath?: string | null;
+  branch?: string | null;
+}): boolean {
+  if (!params.worktreePath || !params.branch || !existsSync(params.worktreePath)) return false;
+  if (!params.repoPath || !existsSync(params.repoPath)) return true;
+
+  try {
+    const inside = runGitSync(["rev-parse", "--is-inside-work-tree"], params.worktreePath, { allowFail: true });
+    if (inside.code !== 0) return true;
+
+    const status = runGitSync(["--no-optional-locks", "status", "--porcelain", "-uall"], params.worktreePath, {
+      allowFail: true,
+    });
+    if (status.code !== 0 || status.stdout.trim().length > 0) return true;
+
+    const baseHead = runGitSync(["rev-parse", "--verify", "HEAD"], params.repoPath, { allowFail: true });
+    if (baseHead.code !== 0 || !baseHead.stdout) return true;
+    const ahead = runGitSync(["rev-list", "--count", `${baseHead.stdout}..${params.branch}`], params.repoPath, {
+      allowFail: true,
+    });
+    if (ahead.code !== 0) return true;
+    return Number(ahead.stdout || "0") > 0;
+  } catch {
+    return true;
+  }
 }
 
 export function removeBotWorktree(repoPath: string, worktreePath: string): void {
@@ -1073,6 +1102,7 @@ export async function mergeBotWorktree(params: {
   preMergeRef?: string;
   conflicts?: string[];
   cleanedWorktree: boolean;
+  cleanupError?: string;
   error?: string;
 }> {
   if (!params.repoPath || !existsSync(params.repoPath)) {
@@ -1177,8 +1207,15 @@ export async function mergeBotWorktree(params: {
   }
 
   const mergeCommitSha = (await runGit(["rev-parse", "HEAD"], params.repoPath)).stdout;
+  let cleanedWorktree = true;
+  let cleanupError: string | undefined;
   if (params.worktreePath) {
-    removeBotWorktree(params.repoPath, params.worktreePath);
+    try {
+      removeBotWorktree(params.repoPath, params.worktreePath);
+    } catch (err) {
+      cleanedWorktree = false;
+      cleanupError = err instanceof Error ? err.message : String(err);
+    }
   }
   await runGit(["branch", "-D", params.branch], params.repoPath, { allowFail: true });
 
@@ -1186,7 +1223,8 @@ export async function mergeBotWorktree(params: {
     ok: true,
     mergeCommitSha,
     preMergeRef,
-    cleanedWorktree: true,
+    cleanedWorktree,
+    ...(cleanupError ? { cleanupError } : {}),
   };
 }
 
@@ -1515,7 +1553,7 @@ export function readSafeRepoFile(
   if (!check.ok) {
     throw new Error("path_traversal_blocked");
   }
-  const posixRel = relative(resolve(targetRoot), check.absTarget).split(sep).join("/");
+  const posixRel = canonicalRelativePathWithinRoot(targetRoot, check.absTarget);
   if (posixRel && isSensitiveRepoRelPath(posixRel)) {
     throw new Error("sensitive_path_blocked");
   }

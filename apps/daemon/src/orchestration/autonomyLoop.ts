@@ -15,6 +15,7 @@ import {
 import type { SecretScrubber } from "../config";
 import type { CommandCore } from "../core/commandCore";
 import type { StateDatabase } from "../db/database";
+import { worktreeHasUnmergedChangesSync } from "../git/worktrees";
 
 export interface GoalContext {
   goalId: string;
@@ -157,13 +158,68 @@ export class AutonomyLoop {
     private readonly core: CommandCore,
     private readonly scrubber: SecretScrubber,
     private readonly callbacks: AutonomyLoopCallbacks,
-  ) {}
+  ) {
+    this.rehydrateFromDatabase();
+  }
+
+  private rehydrateFromDatabase(): void {
+    const tasks = this.db.listTasks();
+    for (const stored of this.db.listTeamGoals()) {
+      const taskIds = tasks.filter((t) => t.goalId === stored.goalId).map((t) => t.id);
+      const ctx: GoalContext = {
+        goalId: stored.goalId,
+        projectId: stored.projectId,
+        goal: stored.goal,
+        status: stored.status,
+        autonomyLevel: stored.autonomyLevel as AutonomyLevel | undefined,
+        reasoningEffort: stored.reasoningEffort as ReasoningEffort | undefined,
+        taskIds,
+        reported: stored.reported,
+        createdAt: stored.createdAt,
+        updatedAt: stored.updatedAt,
+      };
+      this.goals.set(ctx.goalId, ctx);
+      for (const taskId of taskIds) this.autonomousTaskIds.add(taskId);
+      if (ctx.status === "active") {
+        const existingId = this.activeGoalByProject.get(ctx.projectId);
+        const existing = existingId ? this.goals.get(existingId) : null;
+        if (!existing || ctx.updatedAt >= existing.updatedAt) {
+          this.activeGoalByProject.set(ctx.projectId, ctx.goalId);
+        }
+      }
+    }
+  }
+
+  public persistGoalWithinTransaction(goal: GoalContext, taskIdsToLink: string[] = []): void {
+    this.db.upsertTeamGoal({
+      goalId: goal.goalId,
+      projectId: goal.projectId,
+      goal: goal.goal,
+      status: goal.status,
+      autonomyLevel: goal.autonomyLevel ?? null,
+      reasoningEffort: goal.reasoningEffort ?? null,
+      reported: goal.reported,
+      createdAt: goal.createdAt,
+      updatedAt: goal.updatedAt,
+    });
+    for (const taskId of taskIdsToLink) {
+      const task = this.db.getTask(taskId);
+      if (task && task.goalId !== goal.goalId) {
+        this.db.upsertTask({ ...task, goalId: goal.goalId });
+      }
+    }
+  }
+
+  private persistGoal(goal: GoalContext, taskIdsToLink: string[] = []): void {
+    this.db.runAtomicWrite(() => this.persistGoalWithinTransaction(goal, taskIdsToLink));
+  }
 
   public startGoal(params: {
     projectId: string;
     goal: string;
     autonomyLevel?: AutonomyLevel;
     reasoningEffort?: ReasoningEffort;
+    deferPersistence?: boolean;
   }): GoalContext {
     const now = Date.now();
     const goalId = newId("goal");
@@ -181,6 +237,9 @@ export class AutonomyLoop {
     };
     this.goals.set(goalId, ctx);
     this.activeGoalByProject.set(params.projectId, goalId);
+    if (!params.deferPersistence) {
+      this.persistGoal(ctx);
+    }
     return ctx;
   }
 
@@ -215,7 +274,7 @@ export class AutonomyLoop {
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  public attachTasks(projectId: string, taskIds: string[], goalId?: string): GoalContext | null {
+  public attachTasks(projectId: string, taskIds: string[], goalId?: string, withinTransaction = false): GoalContext | null {
     for (const tid of taskIds) {
       this.autonomousTaskIds.add(tid);
     }
@@ -231,16 +290,24 @@ export class AutonomyLoop {
     goal.reported = false;
     goal.status = "active";
     goal.updatedAt = Date.now();
+    if (withinTransaction) {
+      this.persistGoalWithinTransaction(goal, taskIds);
+    } else {
+      this.persistGoal(goal, taskIds);
+    }
     return goal;
   }
 
   public markTaskAutonomous(taskId: string, projectId?: string): void {
     this.autonomousTaskIds.add(taskId);
     if (projectId) {
-      const active = this.getActiveGoalForProject(projectId);
-      if (active && !active.taskIds.includes(taskId)) {
-        active.taskIds.push(taskId);
-        active.updatedAt = Date.now();
+      const existingGoalId = this.db.getTask(taskId)?.goalId;
+      const owningGoal = existingGoalId ? this.goals.get(existingGoalId) : null;
+      const targetGoal = owningGoal ?? this.getActiveGoalForProject(projectId);
+      if (targetGoal && !targetGoal.taskIds.includes(taskId)) {
+        targetGoal.taskIds.push(taskId);
+        targetGoal.updatedAt = Date.now();
+        this.persistGoal(targetGoal, [taskId]);
       }
     }
   }
@@ -249,12 +316,37 @@ export class AutonomyLoop {
     return this.autonomousTaskIds.has(taskId);
   }
 
+  public resumePersistedGoalsForProject(projectId: string): number {
+    let dispatched = 0;
+    const resumableGoals = [...this.goals.values()]
+      .filter((goal) => goal.projectId === projectId && (goal.status === "active" || goal.status === "blocked"))
+      .sort((a, b) => a.updatedAt - b.updatedAt);
+    for (const goal of resumableGoals) {
+      dispatched += this.dispatchUnblockedTasks(projectId, goal.goalId);
+    }
+    return dispatched;
+  }
+
+  public resumePersistedGoals(): number {
+    let dispatched = 0;
+    const projectIds = new Set(
+      [...this.goals.values()].filter((goal) => goal.status === "active" || goal.status === "blocked").map((goal) => goal.projectId),
+    );
+    for (const projectId of projectIds) {
+      try {
+        dispatched += this.resumePersistedGoalsForProject(projectId);
+      } catch {
+        // Restart recovery must never prevent daemon boot.
+      }
+    }
+    return dispatched;
+  }
+
   public markGoalReported(projectId: string, status: "milestone" | "completed" | "blocked", goalId?: string): GoalContext | null {
-    const goal =
-      (goalId ? this.goals.get(goalId) : null) ??
-      this.getActiveGoalForProject(projectId) ??
-      this.findLatestGoalForProject(projectId);
-    if (!goal) return null;
+    const goal = goalId
+      ? (this.goals.get(goalId) ?? null)
+      : (this.getActiveGoalForProject(projectId) ?? this.findLatestGoalForProject(projectId));
+    if (!goal || goal.projectId !== projectId) return null;
     if (status === "completed") {
       goal.status = "completed";
       goal.reported = true;
@@ -263,6 +355,7 @@ export class AutonomyLoop {
       goal.reported = true;
     }
     goal.updatedAt = Date.now();
+    this.persistGoal(goal);
     return goal;
   }
 
@@ -322,7 +415,8 @@ export class AutonomyLoop {
     if (goal) {
       goal.status = "blocked";
       goal.updatedAt = Date.now();
-      this.dispatchUnblockedTasks(projectId, goal.goalId);
+      this.persistGoal(goal);
+      this.resumePersistedGoalsForProject(projectId);
       this.enqueuePmGoalCheck(projectId, goal.goalId, "task_blocked", task.id, [errorMsg]);
     }
   }
@@ -336,7 +430,7 @@ export class AutonomyLoop {
     if (report.verdict === "pass") {
       this.releaseAuthorAgentIfIdleable(projectId, taskId, task?.assignedAgentId ?? null, `Verified: ${task?.title.slice(0, 60) ?? taskId}`);
       if (goal) {
-        this.dispatchUnblockedTasks(projectId, goal.goalId);
+        this.resumePersistedGoalsForProject(projectId);
         this.checkGoalCompletion(projectId, goal);
       }
       return;
@@ -356,7 +450,8 @@ export class AutonomyLoop {
       if (goal) {
         goal.status = "blocked";
         goal.updatedAt = Date.now();
-        this.dispatchUnblockedTasks(projectId, goal.goalId);
+        this.persistGoal(goal);
+        this.resumePersistedGoalsForProject(projectId);
         this.enqueuePmGoalCheck(projectId, goal.goalId, "task_blocked", task.id, report.findings);
       }
       return;
@@ -364,7 +459,7 @@ export class AutonomyLoop {
 
     if (report.verdict === "needs_human" && goal) {
       this.releaseAuthorAgentIfIdleable(projectId, taskId, task?.assignedAgentId ?? null, `Needs review: ${task?.title.slice(0, 50) ?? taskId}`);
-      this.dispatchUnblockedTasks(projectId, goal.goalId);
+      this.resumePersistedGoalsForProject(projectId);
       this.enqueuePmGoalCheck(projectId, goal.goalId, "needs_human", taskId, report.findings);
     }
   }
@@ -493,21 +588,40 @@ export class AutonomyLoop {
     maxConcurrent: number,
   ): AgentRecord | null {
     const allAgents = this.db.listAgents(projectId);
+    const crashBlockedAgentIds = new Set(this.db.listUnknownAdmissions().map((a) => a.agentId));
     const activePeers = allAgents.filter((a) => a.scope === "peer" && a.status !== "stopped");
-    const idlePeers = activePeers.filter((a) => a.status === "idle");
-
-    if (task.assignedAgentId) {
-      const preferred = idlePeers.find((a) => a.id === task.assignedAgentId);
-      if (preferred) return preferred;
-    }
+    const selectablePeers = activePeers.filter((a) => !crashBlockedAgentIds.has(a.id));
+    const idlePeers = selectablePeers.filter((a) => a.status === "idle");
 
     const allTasks = this.db.listTasks(projectId);
+    const projectRepoPath = this.db.getProject(projectId)?.repoPath ?? "";
+    const agentById = new Map(allAgents.map((agent) => [agent.id, agent]));
+    const blockedWorktreeProtection = new Map<string, boolean>();
+    const protectsBlockedWorktree = (agentId: string): boolean => {
+      const cached = blockedWorktreeProtection.get(agentId);
+      if (cached !== undefined) return cached;
+      const agent = agentById.get(agentId);
+      const protectedWork = agent
+        ? worktreeHasUnmergedChangesSync({
+            repoPath: projectRepoPath,
+            worktreePath: agent.worktreePath,
+            branch: agent.worktreeBranch,
+          })
+        : false;
+      blockedWorktreeProtection.set(agentId, protectedWork);
+      return protectedWork;
+    };
     const hasUnmergedWork = (agentId: string): boolean =>
-      allTasks.some(
-        (t) =>
-          t.assignedAgentId === agentId &&
-          (t.status === "claimed" || t.status === "in_review" || t.status === "verified"),
-      );
+      allTasks.some((t) => {
+        if (t.assignedAgentId !== agentId) return false;
+        if (t.status === "claimed" || t.status === "in_review" || t.status === "verified") return true;
+        return t.status === "blocked" && protectsBlockedWorktree(agentId);
+      });
+
+    if (task.assignedAgentId) {
+      const preferred = idlePeers.find((a) => a.id === task.assignedAgentId && !hasUnmergedWork(a.id));
+      if (preferred) return preferred;
+    }
 
     const cleanIdle = idlePeers.find((a) => !hasUnmergedWork(a.id));
     if (cleanIdle) return cleanIdle;
@@ -521,7 +635,7 @@ export class AutonomyLoop {
       });
     }
 
-    return idlePeers[0] ?? null;
+    return null;
   }
 
   private checkGoalCompletion(projectId: string, goal: GoalContext): void {
@@ -536,6 +650,7 @@ export class AutonomyLoop {
 
     goal.status = "completed";
     goal.updatedAt = Date.now();
+    this.persistGoal(goal);
     if (!goal.reported) {
       this.enqueuePmGoalCheck(projectId, goal.goalId, "all_verified");
     }
@@ -607,8 +722,8 @@ export class AutonomyLoop {
       `Tasks:\n${statusLines || "(none)"}`,
       findingsBlock,
       payload.outcome === "all_verified"
-        ? "All tasks passed independent verification! Call `bf_report_to_manager` with status='completed', verifiedTaskIds, and a concise verified summary."
-        : "A task is blocked or needs review. Inspect/resolve if possible, or call `bf_report_to_manager` with status='blocked' and blockedReasons.",
+        ? `All tasks passed independent verification! Call \`bf_report_to_manager\` with goalId='${goal.goalId}', status='completed', verifiedTaskIds, and a concise verified summary.`
+        : `A task is blocked or needs review. Inspect/resolve if possible, or call \`bf_report_to_manager\` with goalId='${goal.goalId}', status='blocked', and blockedReasons.`,
     ]
       .filter(Boolean)
       .join("\n\n");

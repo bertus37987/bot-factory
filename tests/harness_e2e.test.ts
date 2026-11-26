@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startBotFactoryDaemon, type BotFactoryApp } from "../apps/daemon/src/index";
@@ -126,6 +126,8 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
     expect(() => resolveSafeProjectFile(created.project.rootPath, "../../system/secrets.env")).toThrow("path_traversal_blocked");
     expect(() => resolveSafeProjectFile(created.project.rootPath, "\\\\localhost\\c$\\Users\\secret.txt")).toThrow("path_traversal_blocked");
     expect(() => resolveSafeProjectFile(created.project.rootPath, "repo/.git/config")).toThrow("artifact_scope_restricted");
+    expect(() => resolveSafeProjectFile(created.project.rootPath, "plans/../config.json")).toThrow("artifact_scope_restricted");
+    expect(() => resolveSafeProjectFile(created.project.rootPath, "plans/../package.json")).toThrow("artifact_scope_restricted");
     expect(() => resolveSafeWorktreePath(created.project.repoPath, "\\\\localhost\\c$\\secret.txt")).toThrow("worktree_boundary_violation");
     const uncPerm = resolveAcpPermission(
       {
@@ -416,6 +418,19 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
       }) as { agent: { id: string } }
     ).agent;
 
+    const worktreesBeforeDuplicateSpawn = readdirSync(join(projA.project.rootPath, "worktrees")).length;
+    const duplicatePeerA = (
+      app.engine.executeCommand({
+        commandId: "cmd_peer_a",
+        type: "bot.spawn",
+        projectId: projA.project.id,
+        name: "Peer-A",
+        scope: "peer",
+      }) as { agent: { id: string } }
+    ).agent;
+    expect(duplicatePeerA.id).toBe(peerA.id);
+    expect(readdirSync(join(projA.project.rootPath, "worktrees")).length).toBe(worktreesBeforeDuplicateSpawn);
+
     const peerB = (
       app.engine.executeCommand({
         commandId: "cmd_peer_b",
@@ -475,7 +490,30 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
       }),
     ).toThrow("agent_unavailable:stopped");
 
-    // Valid dispatch succeeds, and re-dispatching the already-claimed task is rejected
+    // Valid dispatch succeeds, releases clean blocked-task ownership before worktree reuse,
+    // and re-dispatching the already-claimed task is rejected
+    const blockedCleanTask = (
+      app.engine.executeCommand({
+        commandId: "cmd_tsk_blocked_clean",
+        type: "task.create",
+        projectId: projA.project.id,
+        title: "Blocked task without work",
+        specMd: "No filesystem changes were produced",
+        priority: 3,
+      }) as { task: { id: string } }
+    ).task;
+    const peerAState = app.db.getAgent(peerA.id)!;
+    const blockedRecord = app.db.getTask(blockedCleanTask.id)!;
+    app.db.runAtomicWrite(() => {
+      app.db.upsertTask({
+        ...blockedRecord,
+        status: "blocked",
+        assignedAgentId: peerA.id,
+        worktreeBranch: peerAState.worktreeBranch,
+        updatedAt: Date.now(),
+      });
+    });
+
     app.engine.executeCommand({
       commandId: "cmd_disp_ok",
       type: "task.dispatch",
@@ -483,6 +521,18 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
       taskId: taskA.id,
       agentId: peerA.id,
     });
+    expect(app.db.getTask(blockedCleanTask.id)!.assignedAgentId).toBe(peerA.id);
+    expect(app.db.getTask(blockedCleanTask.id)!.worktreeBranch).toBeNull();
+    expect(() =>
+      app.engine.executeCommand({
+        commandId: "cmd_merge_detached_blocked",
+        type: "task.merge",
+        projectId: projA.project.id,
+        taskId: blockedCleanTask.id,
+        strategy: "squash",
+        overrideReason: "regression coverage",
+      }),
+    ).toThrow("task_missing_worktree_for_merge");
     expect(() =>
       app.engine.executeCommand({
         commandId: "cmd_disp_double",
@@ -509,13 +559,19 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
         scope: "peer",
       }) as { agent: { id: string } }
     ).agent;
+    const staleClaimTask = app.db.getTask(taskB.id)!;
+    app.db.runAtomicWrite(() => {
+      app.db.upsertTask({ ...staleClaimTask, worktreeBranch: "bf/stale-previous-claimer", updatedAt: Date.now() });
+    });
     const claimed = (await app.engine.handleMcpToolCall("bf_task_claim", {
       projectId: projB.project.id,
       agentId: peerB2.id,
       args: {},
-    })) as { task?: { id: string; status: string } };
+    })) as { task?: { id: string; status: string; worktreeBranch?: string | null } };
+    const peerB2State = app.db.getAgent(peerB2.id)!;
     expect(claimed.task?.id).toBe(taskB.id);
     expect(claimed.task?.status).toBe("claimed");
+    expect(claimed.task?.worktreeBranch).toBe(peerB2State.worktreeBranch);
 
     // 5. Bound port propagated to engine URL & IPv6 loopback origin allowed
     const token = readFileSync(join(rootDir, "system", ".daemon-token"), "utf8").trim();

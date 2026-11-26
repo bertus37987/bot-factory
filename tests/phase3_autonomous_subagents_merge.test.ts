@@ -971,6 +971,31 @@ process.stdin.on("data", (chunk) => {
     expect(parentsLine.split(/\s+/)).toHaveLength(3);
     expect(gitSync(["log", "-1", "--format=%s"], repoDir).stdout).toBe("merge: bring feature.txt with no-ff");
 
+    // 1b. A locked/unremovable worktree must not turn an already-successful merge into an outbox retry.
+    const wtLocked = createBotWorktree({
+      projectRoot,
+      repoPath: repoDir,
+      agentId: "bot_m_locked",
+      taskId: "tsk_m_locked",
+    });
+    writeFileSync(join(wtLocked.worktreePath, "locked-cleanup.txt"), "merged despite cleanup failure\n", "utf8");
+    gitSync(["worktree", "lock", wtLocked.worktreePath], repoDir);
+    const lockedRes = await mergeBotWorktree({
+      repoPath: repoDir,
+      worktreePath: wtLocked.worktreePath,
+      branch: wtLocked.branch,
+      strategy: "squash",
+      commitMessage: "merge: tolerate locked cleanup",
+    });
+    expect(lockedRes.ok).toBe(true);
+    expect(lockedRes.cleanedWorktree).toBe(false);
+    expect(lockedRes.cleanupError).toContain("git_worktree_remove_failed");
+    expect(existsSync(wtLocked.worktreePath)).toBe(true);
+    expect(existsSync(join(repoDir, "locked-cleanup.txt"))).toBe(true);
+    gitSync(["worktree", "unlock", wtLocked.worktreePath], repoDir);
+    gitSync(["worktree", "remove", "--force", wtLocked.worktreePath], repoDir);
+    gitSync(["branch", "-D", wtLocked.branch], repoDir, true);
+
     // 2. merge_conflict clean abort (for both merge_commit and squash)
     const wtConflict = createBotWorktree({
       projectRoot,

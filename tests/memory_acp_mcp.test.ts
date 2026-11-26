@@ -109,6 +109,30 @@ describe("1. Hermes Frozen System-Prompt Invariant & CWD-free Prefix Ordering", 
     expect(() => memory.writeL1File(targetFile, "x".repeat(51), 50)).toThrow("l1_capacity_exceeded");
     const saved = memory.writeL1File(targetFile, "x".repeat(50), 50);
     expect(saved).toEqual({ usedChars: 50, maxChars: 50 });
+    expect(readFileSync(targetFile, "utf8")).toHaveLength(50);
+
+    writeFileSync(targetFile, "y".repeat(80), "utf8");
+    const clamped = memory.readL1File(targetFile, 50);
+    expect(clamped.content).toHaveLength(50);
+    expect(clamped.usedChars).toBe(80);
+    expect(clamped.truncated).toBe(true);
+    expect(clamped.gaugeHeader).toContain("truncated");
+
+    const editorRead = memory.readL1File(targetFile, 50, { maxReadChars: 200 });
+    expect(editorRead.content).toHaveLength(80);
+    expect(editorRead.truncated).toBe(false);
+  });
+
+  it("redacts secrets before clipping L1 prompt memory so partial secret fragments cannot leak", () => {
+    const secret = "sk-live-secret-123456789";
+    const { memory } = createMemoryHarness({ secrets: { OPENAI_API_KEY: secret } });
+    const targetFile = join(makeTempDir(), "SECRET_L1.md");
+    writeFileSync(targetFile, `prefix ${secret} suffix`, "utf8");
+
+    const read = memory.readL1File(targetFile, 24);
+    expect(read.content).not.toContain(secret);
+    expect(read.content).not.toContain("sk-live");
+    expect(read.content).not.toContain("cret-123");
   });
 });
 

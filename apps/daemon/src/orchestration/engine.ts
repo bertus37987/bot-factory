@@ -40,6 +40,7 @@ import {
   provisionProjectWorkspace,
   removeBotWorktree,
   restoreCheckpoint,
+  worktreeHasUnmergedChangesSync,
   writeTaskHandoff,
 } from "../git/worktrees";
 import type { LocalSuperHermesMemory } from "../memory/memoryEngine";
@@ -672,6 +673,15 @@ export class OrchestrationEngine {
     );
 
     this.core.registerEffectHandler(
+      "autonomy.resume_project",
+      async (eff) => {
+        const projectId = String(eff.payload.projectId ?? "");
+        if (projectId) this.autonomyLoop.resumePersistedGoalsForProject(projectId);
+      },
+      { lane: "work", concurrencyKey: (eff) => `project:${String(eff.payload.projectId ?? "")}` },
+    );
+
+    this.core.registerEffectHandler(
       "meta.team_report",
       async (eff) => {
         const projectId = String(eff.payload.projectId ?? "");
@@ -1121,6 +1131,9 @@ export class OrchestrationEngine {
   }
 
   private handleBotSpawn(cmd: Extract<RpcCommand, { type: "bot.spawn" }>) {
+    const existingReceipt = this.core.getCommandReceipt<{ agent: AgentRecord }>(cmd.commandId);
+    if (existingReceipt) return existingReceipt;
+
     const project = this.db.getProject(cmd.projectId);
     if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
 
@@ -1359,6 +1372,9 @@ export class OrchestrationEngine {
   }
 
   private handleTaskDispatch(cmd: Extract<RpcCommand, { type: "task.dispatch" }>) {
+    const existingReceipt = this.core.getCommandReceipt(cmd.commandId);
+    if (existingReceipt) return existingReceipt;
+
     const project = this.db.getProject(cmd.projectId);
     if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
     const task = this.db.getTask(cmd.taskId);
@@ -1416,6 +1432,20 @@ export class OrchestrationEngine {
       };
     }
 
+    const releasedBlockedTasks = this.db
+      .listTasks(project.id)
+      .filter(
+        (t) =>
+          t.assignedAgentId === bot!.id &&
+          t.status === "blocked" &&
+          !worktreeHasUnmergedChangesSync({
+            repoPath: project.repoPath,
+            worktreePath: bot!.worktreePath,
+            branch: bot!.worktreeBranch,
+          }),
+      )
+      .map((t) => ({ ...t, worktreeBranch: null, updatedAt: Date.now() }));
+
     const updatedTask: TaskRecord = {
       ...task,
       status: "claimed",
@@ -1431,10 +1461,21 @@ export class OrchestrationEngine {
           if (recreatedWorktree) {
             this.db.upsertAgent(bot!);
           }
+          for (const released of releasedBlockedTasks) {
+            const freshReleased = this.db.getTask(released.id);
+            if (freshReleased?.status === "blocked" && freshReleased.assignedAgentId === bot!.id && freshReleased.worktreeBranch) {
+              this.db.upsertTask(released);
+            }
+          }
           this.db.upsertTask(updatedTask);
           this.db.updateAgentStatus(bot!.id, "working", { lastSummary: `Claimed task: ${task.title}` });
         },
         events: [
+          ...releasedBlockedTasks.map((released) => ({
+            topic: `project:${project.id}:board` as SubscriptionTopic,
+            eventType: "task.updated",
+            payload: released,
+          })),
           { topic: `project:${project.id}:board`, eventType: "task.updated", payload: updatedTask },
           { topic: "global:status", eventType: "status.updated", payload: this.getQuietStatusProjection() },
         ],
@@ -1656,17 +1697,23 @@ export class OrchestrationEngine {
   }
 
   private handleResolveUnknownAdmission(cmd: Extract<RpcCommand, { type: "session.resolve_unknown" }>) {
-    return this.core.commitCommand(cmd.commandId, cmd.type, () => ({
-      result: { admissionId: cmd.admissionId, status: "terminal" },
-      applyProjections: () => {
-        const row = this.db.getAdmission(cmd.admissionId);
-        if (!row || row.status !== "unknown") throw new Error("admission_not_unknown");
-        if (row.executionGeneration !== cmd.expectedGeneration) throw new Error("stale_generation");
-        this.db.updateAdmissionStatus(cmd.admissionId, "terminal");
-      },
-      events: [{ topic: "global:status", eventType: "status.updated", payload: this.getQuietStatusProjection() }],
-      effects: [],
-    }));
+    return this.core.commitCommand(cmd.commandId, cmd.type, () => {
+      const admission = this.db.getAdmission(cmd.admissionId);
+      const session = admission ? this.db.getSession(admission.sessionId) : null;
+      const agent = session ? this.db.getAgent(session.agentId) : null;
+      const projectId = agent?.projectId ?? null;
+      return {
+        result: { admissionId: cmd.admissionId, status: "terminal" },
+        applyProjections: () => {
+          const row = this.db.getAdmission(cmd.admissionId);
+          if (!row || row.status !== "unknown") throw new Error("admission_not_unknown");
+          if (row.executionGeneration !== cmd.expectedGeneration) throw new Error("stale_generation");
+          this.db.updateAdmissionStatus(cmd.admissionId, "terminal");
+        },
+        events: [{ topic: "global:status" as const, eventType: "status.updated", payload: this.getQuietStatusProjection() }],
+        effects: projectId ? [{ effectType: "autonomy.resume_project", payload: { projectId } }] : [],
+      };
+    });
   }
 
   private async cleanupUnusedWorktreeOnHardStop(agentId: string): Promise<void> {
@@ -1951,6 +1998,8 @@ export class OrchestrationEngine {
     let thoughtText = "";
     let runtimeError: string | null = null;
     let receivedDone = false;
+    let latestTurnTokenIn = 0;
+    let latestTurnTokenOut = 0;
 
     try {
       if (!handle) {
@@ -2045,11 +2094,11 @@ export class OrchestrationEngine {
 
       let recalled = "";
       try {
-        recalled = await this.memory.recallForTurn(opts.namespace, userText, 6);
+        recalled = await this.memory.recallForTurn(opts.namespace, userText, 6, agent.id);
       } catch {
         recalled = "";
       }
-      const memoryContext = recalled || this.memory.prefetch(opts.namespace);
+      const memoryContext = recalled || this.memory.prefetch(opts.namespace, agent.id);
       const projectSummary = opts.projectId ? this.buildConciseProjectSummary(opts.projectId) : "";
       const ephemeralContext = [projectSummary, memoryContext].filter(Boolean).join("\n\n");
 
@@ -2168,6 +2217,8 @@ export class OrchestrationEngine {
           });
           this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
         } else if (evt.type === "usage") {
+          latestTurnTokenIn = Math.max(0, Math.trunc(evt.tokenIn));
+          latestTurnTokenOut = Math.max(0, Math.trunc(evt.tokenOut));
           this.db.runAtomicWrite(() => this.db.addSessionTokenUsage(session.id, evt.tokenIn, evt.tokenOut));
         } else if (evt.type === "text_delta") {
           finalText += evt.text;
@@ -2287,9 +2338,15 @@ export class OrchestrationEngine {
         }
       }
 
-      const totalTokens = this.db.getSessionTokenTotal(session.id);
-      if (totalTokens >= this.runtimeCfg.config.guardrails.autoCompactThresholdTokens) {
-        const activeMsgs = this.db.listActiveSessionMessages(session.id, 40);
+      const activeMsgs = this.db.listActiveSessionMessages(session.id, 120);
+      const estimatedTranscriptTokens = Math.ceil(
+        (session.systemPrompt.length +
+          activeMsgs.reduce((sum, m) => sum + m.content.length + (m.title?.length ?? 0) + 24, 0)) /
+          4,
+      );
+      const measuredContextTokens = latestTurnTokenIn + latestTurnTokenOut;
+      const currentContextTokens = Math.max(measuredContextTokens, estimatedTranscriptTokens);
+      if (currentContextTokens >= this.runtimeCfg.config.guardrails.autoCompactThresholdTokens) {
         const priorSummary = activeMsgs.find((m) => m.kind === "status" && m.title?.startsWith("Compaction Gen #"));
         const summaryLines = activeMsgs
           .filter((m) => m.kind === "message" && (m.role === "user" || m.role === "assistant"))
@@ -2299,7 +2356,7 @@ export class OrchestrationEngine {
           ? `Prior summary (${priorSummary.title}): ${priorSummary.content.replace(/\s+/g, " ").slice(0, 600)}\n`
           : "";
         const summaryText = this.scrubber.scrub(
-          `Compacted ${activeMsgs.length} active messages (${totalTokens} tokens).\n${priorBlock}${summaryLines.join("\n")}`,
+          `Compacted ${activeMsgs.length} active messages (${currentContextTokens} current-context tokens).\n${priorBlock}${summaryLines.join("\n")}`,
         );
         const freshAgent = this.db.getAgent(agent.id) ?? agent;
         const rebuilt = this.buildAgentSystemPrompt(freshAgent);
@@ -2312,7 +2369,7 @@ export class OrchestrationEngine {
           agentId: agent.id,
           sessionId: session.id,
           generation: nextGen,
-          previousTokens: totalTokens,
+          previousTokens: currentContextTokens,
         };
         this.core.emitDirectEvent(botTimelineTopic, "session.compacted", compactPayload);
         if (opts.emitTopic === "chat:meta") {
@@ -2321,7 +2378,7 @@ export class OrchestrationEngine {
       }
 
       // Non-blocking memory pre-warm for next turn
-      this.memory.queuePrefetch(opts.namespace, `${userText}\n${finalText}`);
+      this.memory.queuePrefetch(opts.namespace, `${userText}\n${finalText}`, agent.id);
       return { ok: true, text: finalText };
     } catch (err) {
       const msg = this.scrubber.scrub(err instanceof Error ? err.message : String(err));
@@ -2387,7 +2444,7 @@ export class OrchestrationEngine {
             ...task,
             status: "claimed",
             assignedAgentId: agent.id,
-            worktreeBranch: task.worktreeBranch ?? agent.worktreeBranch,
+            worktreeBranch: agent.worktreeBranch,
             updatedAt: Date.now(),
           };
           this.db.upsertTask(updated);
@@ -3491,9 +3548,9 @@ export class OrchestrationEngine {
     }
 
     const agent = task.assignedAgentId ? this.db.getAgent(task.assignedAgentId) : null;
-    const branch = agent?.worktreeBranch || task.worktreeBranch;
-    const worktreePath = agent?.worktreePath ?? "";
-    if (!branch || branch === "main" || (!worktreePath && !branch)) {
+    const branch = task.worktreeBranch;
+    const worktreePath = branch && agent?.worktreeBranch === branch ? (agent.worktreePath ?? "") : "";
+    if (!branch || branch === "main") {
       throw new Error("task_missing_worktree_for_merge");
     }
 
@@ -3541,6 +3598,15 @@ export class OrchestrationEngine {
     const project = this.db.getProject(params.projectId);
     const task = this.db.getTask(params.taskId);
     if (!project || !task || task.status === "merged") return;
+    if (!task.worktreeBranch || task.worktreeBranch !== params.branch) {
+      this.db.runAtomicWrite(() => {
+        this.db.addInboxNotice("warn", `Merge for '${task.title}' skipped: task branch changed before execution`, {
+          projectId: project.id,
+          agentId: params.agentId ?? undefined,
+        });
+      });
+      return;
+    }
 
     const agent = params.agentId ? this.db.getAgent(params.agentId) : null;
     if (agent) {
@@ -3570,7 +3636,7 @@ export class OrchestrationEngine {
         };
         this.db.upsertTask(mergedTask);
 
-        if (agent && res.cleanedWorktree) {
+        if (agent) {
           const freshAgent = this.db.getAgent(agent.id);
           if (freshAgent) {
             this.db.upsertAgent({
@@ -3579,7 +3645,7 @@ export class OrchestrationEngine {
               pid: null,
               worktreePath: null,
               worktreeBranch: null,
-              lastSummary: `Merged ${params.branch}${res.mergeCommitSha ? ` (${res.mergeCommitSha.slice(0, 7)})` : ""}`,
+              lastSummary: `Merged ${params.branch}${res.mergeCommitSha ? ` (${res.mergeCommitSha.slice(0, 7)})` : ""}${res.cleanedWorktree ? "" : " · worktree cleanup incomplete"}`,
               updatedAt: now,
             });
           }
@@ -3590,6 +3656,13 @@ export class OrchestrationEngine {
           `Merged '${freshTask.title}' into main (${params.strategy}${res.mergeCommitSha ? ` · ${res.mergeCommitSha.slice(0, 7)}` : ""})`,
           { projectId: project.id, agentId: agent?.id },
         );
+        if (res.cleanupError) {
+          this.db.addInboxNotice(
+            "warn",
+            `Merged '${freshTask.title}', but physical worktree cleanup failed: ${this.scrubber.scrub(res.cleanupError)}`,
+            { projectId: project.id, agentId: agent?.id },
+          );
+        }
       });
 
       if (mergedTask) {
@@ -3597,7 +3670,7 @@ export class OrchestrationEngine {
       }
       this.core.emitDirectEvent(`project:${project.id}:board`, "board.updated", this.getProjectBoardSnapshot(project.id));
       this.core.emitDirectEvent("global:status", "status.updated", this.getQuietStatusProjection());
-      this.autonomyLoop.dispatchUnblockedTasks(project.id);
+      this.autonomyLoop.resumePersistedGoalsForProject(project.id);
       return;
     }
 

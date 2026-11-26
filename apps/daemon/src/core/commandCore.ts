@@ -43,6 +43,10 @@ export class CommandCore {
     return () => this.listeners.delete(listener);
   }
 
+  public getCommandReceipt<TResult = unknown>(commandId: string): TResult | null {
+    return this.db.getCommandReceipt(commandId) as TResult | null;
+  }
+
   public registerEffectHandler(effectType: string, handler: EffectHandler, options?: RegisterEffectOptions): void {
     this.handlers.set(effectType, {
       handler,

@@ -49,5 +49,5 @@ database; the running daemon was not restarted.
 
 ## Open Work
 
-- The [research matrix](./HARNESS_RESEARCH_2026.md#4-implementation-matrix-implemented-now-bot-factory-v2-vs-future-roadmap) tracks DAG goal rehydration across restarts, context-window-aware compaction, bounded memory reads and dreaming retries, and OS-level subprocess sandboxing.
+- The [research matrix](./HARNESS_RESEARCH_2026.md#4-implementation-matrix-implemented-now-bot-factory-v2-vs-future-roadmap) now marks schema-v4 DAG goal rehydration, measured-context compaction, bounded L1 reads, atomic L1 writes, and per-agent prefetch scoping as implemented; dreaming retries and OS-level subprocess sandboxing remain open.
 - Live model credentials and subscriptions were not exercised in the recovery checks. Use the existing approval and containment boundaries in [`AGENTS.md`](../AGENTS.md) rather than enabling live providers for routine tests.
