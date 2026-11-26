@@ -81,7 +81,7 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
         <GitCompareArrows size={13} strokeWidth={1.6} />
         {gitDiff ? (
           <>
-            <span className="mono-tag" style={{ fontWeight: "var(--weight-semibold)", color: "var(--ink-primary)" }}>
+            <span className="mono-tag" style={{ fontWeight: "var(--weight-semibold)" }}>
               {gitDiff.branch}
             </span>
             <span>
