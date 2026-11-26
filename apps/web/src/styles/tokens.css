@@ -36,8 +36,8 @@
   /* Legacy ink aliases; large blocks must never use harsh pure white */
   --ink-primary: var(--text-primary);
   --ink-secondary: var(--text-secondary);
-  --ink-muted: #74747f;
-  --ink-faint: var(--text-muted);
+  --ink-muted: #80808c;
+  --ink-faint: #80808c;
 
   /* Inverted primary action and high-signal badge material */
   --action-primary-bg: var(--badge-inverted-bg);
@@ -62,38 +62,38 @@
   --bubble-user-border: rgba(220, 220, 226, 0.34);
   --bubble-user-fg: #f0f0f3;
 
-  --bubble-orch-bg: #100e22;
-  --bubble-orch-border: #4c3dcc;
+  --bubble-orch-bg: #0d0c16;
+  --bubble-orch-border: #3d35a8;
   --bubble-orch-accent: #8f80ff;
   --bubble-orch-fg: #eceafc;
 
-  --bubble-lead-bg: #071713;
-  --bubble-lead-border: #1c7250;
+  --bubble-lead-bg: #08120f;
+  --bubble-lead-border: #1d5b38;
   --bubble-lead-accent: #3ed598;
   --bubble-lead-fg: #e9f8f1;
 
-  --bubble-builder-bg: #071520;
-  --bubble-builder-border: #236b98;
+  --bubble-builder-bg: #081118;
+  --bubble-builder-border: #1d5570;
   --bubble-builder-accent: #46b7ec;
   --bubble-builder-fg: #eaf6fc;
 
-  --bubble-artist-bg: #170d22;
-  --bubble-artist-border: #7440a8;
+  --bubble-artist-bg: #120e18;
+  --bubble-artist-border: #593579;
   --bubble-artist-accent: #b987ec;
   --bubble-artist-fg: #f4edfb;
 
-  --bubble-research-bg: #061819;
-  --bubble-research-border: #1d6f72;
+  --bubble-research-bg: #071314;
+  --bubble-research-border: #1d5b5e;
   --bubble-research-accent: #39c9c6;
   --bubble-research-fg: #eafafa;
 
-  --bubble-verifier-bg: #200e15;
-  --bubble-verifier-border: #91334d;
+  --bubble-verifier-bg: #170d12;
+  --bubble-verifier-border: #6f2a3e;
   --bubble-verifier-accent: #ef6682;
   --bubble-verifier-fg: #fbeef1;
 
-  --bubble-cub-bg: #181511;
-  --bubble-cub-border: #756047;
+  --bubble-cub-bg: #14120f;
+  --bubble-cub-border: #5e4e3d;
   --bubble-cub-accent: #c8a97f;
   --bubble-cub-fg: #f3ebdf;
 

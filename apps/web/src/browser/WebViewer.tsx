@@ -22,7 +22,7 @@ export function WebViewer({ url }: WebViewerProps): JSX.Element {
           gap: 10,
           padding: 32,
           textAlign: "center",
-          background: "#FAFAFA",
+          background: "var(--bg-surface-1)",
         }}
       >
         <ShieldAlert size={22} strokeWidth={1.4} color="var(--status-warning-ink)" />
@@ -59,7 +59,7 @@ export function WebViewer({ url }: WebViewerProps): JSX.Element {
         height: "100%",
         border: "none",
         display: "block",
-        background: "#FFFFFF",
+        background: "var(--bg-canvas)",
       }}
     />
   );

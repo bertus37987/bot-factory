@@ -190,7 +190,7 @@ export function CodeViewer({ projectId, agentId, filePath }: CodeViewerProps): J
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        background: "#FFFFFF",
+        background: "var(--bg-canvas)",
       }}
     >
       <div
@@ -201,7 +201,7 @@ export function CodeViewer({ projectId, agentId, filePath }: CodeViewerProps): J
           gap: 8,
           padding: "6px 12px",
           borderBottom: "1px solid var(--border-subtle)",
-          background: "#FAFAFA",
+          background: "var(--bg-surface-1)",
           fontSize: "var(--text-2xs)",
           color: "var(--ink-muted)",
           flexShrink: 0,
@@ -264,7 +264,7 @@ export function CodeViewer({ projectId, agentId, filePath }: CodeViewerProps): J
       )}
 
       {file && (
-        <div style={{ flex: 1, overflow: "auto", minHeight: 0, background: "#FFFFFF" }}>
+        <div style={{ flex: 1, overflow: "auto", minHeight: 0, background: "var(--bg-canvas)" }}>
           <pre
             className="iab-code-pre"
             style={{

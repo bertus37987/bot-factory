@@ -4238,3 +4238,64 @@ kbd {
     animation: none;
   }
 }
+
+/* Composer keeps one architectural toolbar row; secondary controls scroll
+   horizontally while send remains pinned instead of wrapping into a loose row. */
+.pc-bar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-right: 48px;
+}
+
+.pc-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.pc-send {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+}
+
+.pc-spacer {
+  flex: 0 0 8px;
+}
+
+@container pc-card (max-width: 560px) {
+  .pc-context-ring {
+    display: none;
+  }
+
+  .pc-model-btn,
+  .pc-model-static {
+    max-width: 108px;
+  }
+}
+
+@container pc-card (max-width: 680px) {
+  .pc-autonomy {
+    padding-inline: 7px;
+  }
+
+  .pc-autonomy > span:last-child {
+    display: none;
+  }
+
+  .pc-model-btn,
+  .pc-model-static {
+    max-width: 136px;
+  }
+
+  .pc-context-ring {
+    padding-inline: 4px;
+    gap: 2px;
+  }
+
+
+  .bf-effort-trigger {
+    padding-inline: 7px;
+    gap: 5px;
+  }
+}

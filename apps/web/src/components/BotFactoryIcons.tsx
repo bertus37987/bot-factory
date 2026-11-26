@@ -88,7 +88,7 @@ export interface AutonomyBarsIconProps extends BotFactoryIconProps {
 
 /**
  * Bot-Factory signature autonomy readout — 3 vertical bars.
- * spec = dashed outlines · low = 1 ink bar · medium = 2 burnt-orange · high = 3.
+ * spec = dashed outlines · low = 1 ink bar · medium/high = indigo signal bars.
  */
 export function AutonomyBarsIcon({ level, size, className }: AutonomyBarsIconProps) {
   const bars = [
@@ -118,7 +118,7 @@ export function AutonomyBarsIcon({ level, size, className }: AutonomyBarsIconPro
             width={2.2}
             height={b.h}
             rx={1.1}
-            fill={level === "low" ? "currentColor" : "#D95D22"}
+            fill={level === "low" ? "currentColor" : "var(--accent-indigo)"}
             stroke="none"
           />
         ) : (

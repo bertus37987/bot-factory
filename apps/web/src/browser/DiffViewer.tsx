@@ -60,7 +60,7 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        background: "#FFFFFF",
+        background: "var(--bg-canvas)",
       }}
     >
       {/* Sticky summary header */}
@@ -73,7 +73,7 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
           gap: 8,
           padding: "7px 14px",
           borderBottom: "1px solid var(--border-subtle)",
-          background: "#FAFAFA",
+          background: "var(--bg-surface-1)",
           fontSize: "var(--text-xs)",
           color: "var(--ink-secondary)",
         }}
@@ -87,10 +87,10 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
             <span>
               {gitDiff.filesChanged} {gitDiff.filesChanged === 1 ? "file" : "files"} changed
             </span>
-            <span style={{ color: "#166534", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>
+            <span style={{ color: "var(--status-success-ink)", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>
               +{gitDiff.insertions}
             </span>
-            <span style={{ color: "#9E2626", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>
+            <span style={{ color: "var(--status-danger-ink)", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>
               -{gitDiff.deletions}
             </span>
           </>
@@ -121,7 +121,7 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
             gap: 6,
             padding: "6px 14px",
             borderBottom: "1px solid var(--border-hairline)",
-            background: "#FFFFFF",
+            background: "var(--bg-canvas)",
             overflowX: "auto",
             scrollbarWidth: "thin",
           }}
@@ -136,7 +136,7 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
                 title={f.path}
                 onClick={() => jumpToFile(f.path)}
                 style={{
-                  background: "#FAFAFA",
+                  background: "var(--bg-surface-1)",
                   fontFamily: "var(--font-mono)",
                   gap: 5,
                 }}
@@ -145,18 +145,18 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
                   style={{
                     color:
                       f.status === "added" || f.status === "untracked"
-                        ? "#166534"
+                        ? "var(--status-success-ink)"
                         : f.status === "deleted"
-                          ? "#9E2626"
-                          : "#D95D22",
+                          ? "var(--status-danger-ink)"
+                          : "var(--accent-orange-ink)",
                     fontWeight: "var(--weight-semibold)",
                   }}
                 >
                   {STATUS_CODE[f.status] ?? f.status}
                 </span>
                 <span>{shortName}</span>
-                <span style={{ color: "#166534" }}>+{f.added}</span>
-                <span style={{ color: "#9E2626" }}>-{f.removed}</span>
+                <span style={{ color: "var(--status-success-ink)" }}>+{f.added}</span>
+                <span style={{ color: "var(--status-danger-ink)" }}>-{f.removed}</span>
               </button>
             );
           })}
@@ -202,7 +202,7 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
                   textAlign: "left",
                   padding: "7px 14px",
                   border: "none",
-                  background: "#FAFAFA",
+                  background: "var(--bg-surface-1)",
                   cursor: "pointer",
                   fontFamily: "var(--font-mono)",
                   fontSize: "var(--text-xs)",
@@ -225,9 +225,9 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
                     fontSize: "var(--text-2xs)",
                     color:
                       f.status === "added" || f.status === "untracked"
-                        ? "#166534"
+                        ? "var(--status-success-ink)"
                         : f.status === "deleted"
-                          ? "#9E2626"
+                          ? "var(--status-danger-ink)"
                           : "var(--ink-secondary)",
                   }}
                 >
@@ -235,10 +235,10 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
                 </span>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.path}</span>
                 <span style={{ flex: 1 }} />
-                <span style={{ color: "#166534", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)" }}>
+                <span style={{ color: "var(--status-success-ink)", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)" }}>
                   +{f.added}
                 </span>
-                <span style={{ color: "#9E2626", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)" }}>
+                <span style={{ color: "var(--status-danger-ink)", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)" }}>
                   -{f.removed}
                 </span>
               </button>
@@ -252,7 +252,7 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
                     fontSize: "var(--text-2xs)",
                     lineHeight: 1.55,
                     overflowX: "auto",
-                    background: "#FFFFFF",
+                    background: "var(--bg-canvas)",
                   }}
                 >
                   {f.patch.split("\n").map((line, i) => {
@@ -272,16 +272,16 @@ export function DiffViewer({ gitDiff, onRefreshDiff }: DiffViewerProps): JSX.Ele
                           padding: "0 14px",
                           whiteSpace: "pre",
                           background: isAdd
-                            ? "#F0FDF4"
+                            ? "var(--status-success-bg)"
                             : isDel
-                              ? "#FEF2F2"
+                              ? "var(--status-danger-bg)"
                               : isHunk
                                 ? "var(--status-active-bg)"
                                 : "transparent",
                           color: isAdd
-                            ? "#166534"
+                            ? "var(--status-success-ink)"
                             : isDel
-                              ? "#9E2626"
+                              ? "var(--status-danger-ink)"
                               : isHunk
                                 ? "var(--status-active-ink)"
                                 : isMeta
