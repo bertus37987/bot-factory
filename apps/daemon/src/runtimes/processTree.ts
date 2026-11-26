@@ -1,5 +1,7 @@
 export interface KillableSubprocess {
   pid?: number | null;
+  exitCode?: number | null;
+  killed?: boolean;
   kill: (signal?: number | NodeJS.Signals) => unknown;
 }
 
@@ -8,6 +10,7 @@ export function processGroupSpawnOptions(): Record<string, unknown> {
 }
 
 export function killPosixProcessGroupSync(proc: KillableSubprocess): void {
+  if (proc.exitCode !== null && proc.exitCode !== undefined) return;
   const pid = proc.pid;
   if (process.platform !== "win32" && pid) {
     try {
