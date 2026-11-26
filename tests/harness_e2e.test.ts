@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startBotFactoryDaemon, type BotFactoryApp } from "../apps/daemon/src/index";
@@ -417,6 +417,19 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
         scope: "peer",
       }) as { agent: { id: string } }
     ).agent;
+
+    const worktreesBeforeDuplicateSpawn = readdirSync(join(projA.project.rootPath, "worktrees")).length;
+    const duplicatePeerA = (
+      app.engine.executeCommand({
+        commandId: "cmd_peer_a",
+        type: "bot.spawn",
+        projectId: projA.project.id,
+        name: "Peer-A",
+        scope: "peer",
+      }) as { agent: { id: string } }
+    ).agent;
+    expect(duplicatePeerA.id).toBe(peerA.id);
+    expect(readdirSync(join(projA.project.rootPath, "worktrees")).length).toBe(worktreesBeforeDuplicateSpawn);
 
     const peerB = (
       app.engine.executeCommand({

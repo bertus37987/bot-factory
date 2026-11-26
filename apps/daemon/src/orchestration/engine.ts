@@ -1130,6 +1130,9 @@ export class OrchestrationEngine {
   }
 
   private handleBotSpawn(cmd: Extract<RpcCommand, { type: "bot.spawn" }>) {
+    const existingReceipt = this.core.getCommandReceipt<{ agent: AgentRecord }>(cmd.commandId);
+    if (existingReceipt) return existingReceipt;
+
     const project = this.db.getProject(cmd.projectId);
     if (!project) throw new Error(`Project not found: ${cmd.projectId}`);
 
