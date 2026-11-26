@@ -3,6 +3,10 @@ node_modules/
 dist/
 apps/web/dist/
 *.tsbuildinfo
+*.log
+coverage/
+test-results/
+playwright-report/
 
 # Local Runtime State & SQLite Databases
 *.db

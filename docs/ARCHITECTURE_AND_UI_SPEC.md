@@ -28,7 +28,7 @@
 ## 2. System & Security Architecture
 
 ### Repository vs. Runtime Separation
-- **Source Repository:** `C:\Users\willy\source\repos\bot-factory` (clean workspace with zero runtime DB files).
+- **Source Repository:** a local checkout such as `~/src/bot-factory` or `C:\Users\<you>\source\repos\bot-factory` (clean workspace with zero runtime DB files).
 - **Runtime Data (`BOT_FACTORY_ROOT`, default `~/bot-factory`):**
   - `system/state.db` (WAL + FTS5 + single-writer PID lock + `runtime_epoch`)
   - `system/config.json` & `system/secrets.env` (write-only secrets via Settings UI or file; never echoed over API)

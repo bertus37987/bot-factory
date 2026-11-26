@@ -13,7 +13,7 @@ See the [Studio V2 handoff](./docs/STUDIO_V2_HANDOFF.md) for the latest implemen
 
 Bot-Factory strictly separates version-controlled source code from live mutable runtime data:
 
-- **Source Repository** (for example `C:\Users\willy\source\repos\bot-factory`): holds only source code (`packages/`, `apps/`), automated tests (`tests/`), documentation, `config.example.json`, `secrets.env.example`, `biome.json`, and CI workflows. Live databases, tokens, secrets, and managed project repos must never live inside the Git repo.
+- **Source Repository** (for example `C:\Users\<you>\source\repos\bot-factory` or `~/src/bot-factory`): holds only source code (`packages/`, `apps/`), automated tests (`tests/`), documentation, `config.example.json`, `secrets.env.example`, `biome.json`, and CI workflows. Live databases, tokens, secrets, and managed project repos must never live inside the Git repo.
 - **Runtime Data Root (`BOT_FACTORY_ROOT`, default `~/bot-factory`)**: holds mutable local state:
   - `system/state.db` (+ `-wal`, `-shm`, `.writer.lock`) — single-writer SQLite state plane
   - `system/config.json` — Open BYOS provider, routing, memory, and guardrail config
@@ -51,9 +51,9 @@ Bot-Factory strictly separates version-controlled source code from live mutable 
 ### Pillar 4 — Open BYOS Runtimes, 4-Tier Autonomy & Localhost Security
 - **Open BYOS Runtimes:**
   - `native_http`: SSE streaming + multi-step tool loop supporting `openai_compatible` (Mistral, OpenAI, Ollama, custom OpenAI-compatible servers), `google_gemini`, and `anthropic` with `reasoningEffort` mapping and deterministic offline fallback (`BOT_FACTORY_OFFLINE_MOCK=1` or missing API key).
-  - `acp_stdio`: JSON-RPC 2.0 stdio CLIs (`devin acp`, `opencode acp`) with per-session scoped MCP Bridge tokens and Windows `taskkill /T /F` process-tree cleanup.
+  - `acp_stdio`: JSON-RPC 2.0 stdio CLIs (`devin acp`, `opencode acp`) with per-session scoped MCP Bridge tokens and process-tree cleanup (Windows `taskkill /T /F`; POSIX detached process-group kill).
   - `cli_stream`: streaming subprocess adapters for `claude` and `codex` CLIs using minimal sanitized env (`buildMinimalCliEnv`, never forwarding `BOT_FACTORY_TOKEN`).
-- **Progressive 4-Tier Autonomy & 120s Permissions:** Every turn respects `spec | low | medium | high` autonomy. Hard-deny rules block protected files (`secrets.env`, `.daemon-token`, `state.db`, `~/bot-factory/system`) and destructive commands; escalated actions pause up to `permissionRequestTimeoutSeconds` (`120s`) for human `Allow Once`, `Allow Session`, or `Deny` via `permission.respond`.
+- **Progressive 4-Tier Autonomy & 120s Permissions:** Every turn respects `spec | low | medium | high` autonomy. Hard-deny rules block protected files (`secrets.env`, `.daemon-token`, `state.db`, `~/bot-factory/system`) and destructive commands; escalated actions pause up to `permissionRequestTimeoutSeconds` (`120s`) for human `Allow Once`, `Allow Session`, or `Deny` via `permission.respond`. **High autonomy is intentionally unsafe:** it can bypass provider CLI permission prompts and auto-approve network or host-affecting commands before OS-level sandboxing exists. Use it only in a disposable VM or otherwise isolated machine.
 - **Localhost Auth & Transport:** `DaemonServer` (`127.0.0.1`) enforces Host/Origin allowlists and authenticates browser sessions via `/?token=...` -> `HttpOnly; SameSite=Strict` HMAC-signed `bf_session` cookie (or `POST /api/auth/session` from `AuthUnlockGate`), and CLI/MCP callers via `x-bf-token` or `Authorization: Bearer`.
 
 ### Pillar 5 — Studio V2 (`apps/web`)
@@ -71,7 +71,7 @@ Bot-Factory strictly separates version-controlled source code from live mutable 
 
 ```text
 bot-factory/
-├── .github/workflows/ci.yml        # GitHub Actions CI (typecheck, Biome lint, web build, tests)
+├── .github/workflows/ci.yml        # GitHub Actions CI (typecheck, lint, security scan, build, tests, browser E2E)
 ├── AGENTS.md                       # AI-Agent engineering guide, invariants, RPC/HTTP map & gotchas
 ├── HANDOFF.md                      # Phase 1-5 implementation scorecard, verification & next-horizon backlog
 ├── DESIGN.md                       # Monochrome Ink Light-Mode design system & Smoke/Pearl Thinking Orbs
@@ -117,14 +117,14 @@ bot-factory/
 - [Bun](https://bun.sh/) `v1.4+`
 - `git` `2.40+`
 - Optional local agent CLIs: `devin`, `opencode`, `claude`, `codex`
-- Optional for local headless browser smoke tests: Python `playwright` with Chromium installed (skipped automatically in CI via `BOT_FACTORY_SKIP_PLAYWRIGHT=1`)
+- Optional for local headless browser smoke tests: Python 3 `playwright` with Chromium installed (CI runs this in a dedicated job)
 
 ### Install, Check & Build
 ```bash
 bun install
-bun run build:web   # Build Studio UI into apps/web/dist (required before Playwright UI E2E on a clean checkout)
-bun run check       # Runs: typecheck && lint (Biome) && test (bun test tests) && build:web
-bun run doctor      # Read-only preflight check of BOT_FACTORY_ROOT, secrets, lock, DB & CLIs
+bun run scan:security  # Socket supply-chain/advisory scan of bun.lock
+bun run check          # Runs: typecheck && lint (Biome) && build:web && test (bun test tests)
+bun run doctor         # Read-only preflight check of BOT_FACTORY_ROOT, secrets, lock, DB & CLIs
 ```
 
 ### Configure Live Model Keys (Optional)
@@ -151,3 +151,9 @@ bun run start
 ## 5. For AI Agents Working in This Repository
 
 Start by reading **[`AGENTS.md`](./AGENTS.md)**, **[`HANDOFF.md`](./HANDOFF.md)**, and **[`DESIGN.md`](./DESIGN.md)**. They document every non-negotiable security and concurrency invariant, protocol contract, and verified workflow.
+
+---
+
+## License
+
+[MIT](./LICENSE)

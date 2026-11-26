@@ -54,10 +54,19 @@ function lexicalWithinRoot(absRoot: string, absTarget: string): boolean {
   return sameDrive && (normTarget === normRoot || normTarget.startsWith(rootPrefix));
 }
 
+function normalizeTargetToRealRoot(target: string, realRoot: string, logicalRoot: string): string {
+  if (lexicalWithinRoot(realRoot, target)) return target;
+  if (logicalRoot !== realRoot && lexicalWithinRoot(logicalRoot, target)) {
+    return join(realRoot, relative(logicalRoot, target));
+  }
+  return target;
+}
+
 function resolveSymlinkStep(
   realRoot: string,
   current: string,
   depth: number,
+  logicalRoot = realRoot,
 ): { exists: boolean; escaped: boolean; resolvedPath: string } {
   let st;
   try {
@@ -98,11 +107,12 @@ function resolveSymlinkStep(
   if (!rawLink || rawLink.includes("\0") || rawLink.startsWith("\\\\") || rawLink.startsWith("//")) {
     return { exists: true, escaped: true, resolvedPath: current };
   }
-  const absLinkTarget = resolve(dirname(current), rawLink);
+  const rawAbsLinkTarget = resolve(dirname(current), rawLink);
+  const absLinkTarget = normalizeTargetToRealRoot(rawAbsLinkTarget, realRoot, logicalRoot);
   if (!lexicalWithinRoot(realRoot, absLinkTarget)) {
     return { exists: true, escaped: true, resolvedPath: absLinkTarget };
   }
-  if (!checkSegmentsWithinRealRoot(realRoot, realRoot, relative(realRoot, absLinkTarget), depth + 1)) {
+  if (!checkSegmentsWithinRealRoot(realRoot, realRoot, relative(realRoot, absLinkTarget), depth + 1, logicalRoot)) {
     return { exists: true, escaped: true, resolvedPath: absLinkTarget };
   }
   return { exists: true, escaped: false, resolvedPath: absLinkTarget };
@@ -113,6 +123,7 @@ function checkSegmentsWithinRealRoot(
   baseStart: string,
   relFromRoot: string,
   depth: number,
+  logicalRoot = realRoot,
 ): boolean {
   if (depth > 16) return false;
   if (!relFromRoot || relFromRoot === ".") return true;
@@ -123,7 +134,7 @@ function checkSegmentsWithinRealRoot(
   for (const seg of segments) {
     if (seg === "..") return false;
     current = join(current, seg);
-    const step = resolveSymlinkStep(realRoot, current, depth);
+    const step = resolveSymlinkStep(realRoot, current, depth, logicalRoot);
     if (step.escaped) return false;
     if (!step.exists) return true;
     current = step.resolvedPath;
@@ -132,7 +143,7 @@ function checkSegmentsWithinRealRoot(
   return true;
 }
 
-function checkRawRelativeSegmentsWithinRealRoot(realRoot: string, candidatePath: string): boolean {
+function checkRawRelativeSegmentsWithinRealRoot(realRoot: string, candidatePath: string, logicalRoot = realRoot): boolean {
   if (isAbsolute(candidatePath)) return true;
   const rawParts = candidatePath.split(/[\\/]+/).filter(Boolean);
   if (!rawParts.includes("..")) return true;
@@ -152,7 +163,7 @@ function checkRawRelativeSegmentsWithinRealRoot(realRoot: string, candidatePath:
     }
     current = join(current, seg);
     if (missingPrefix) continue;
-    const step = resolveSymlinkStep(realRoot, current, 0);
+    const step = resolveSymlinkStep(realRoot, current, 0, logicalRoot);
     if (step.escaped) return false;
     if (!step.exists) {
       missingPrefix = true;
@@ -184,11 +195,11 @@ export function isPathStrictlyWithinRoot(rootDir: string, candidatePath: string)
       return { ok: false, absTarget };
     }
     const realRoot = stripWinExtendedPrefix(realpathSync(absRoot));
-    if (!checkRawRelativeSegmentsWithinRealRoot(realRoot, candidatePath)) {
+    if (!checkRawRelativeSegmentsWithinRealRoot(realRoot, candidatePath, absRoot)) {
       return { ok: false, absTarget };
     }
     const relFromRoot = relative(absRoot, absTarget);
-    if (!checkSegmentsWithinRealRoot(realRoot, realRoot, relFromRoot, 0)) {
+    if (!checkSegmentsWithinRealRoot(realRoot, realRoot, relFromRoot, 0, absRoot)) {
       return { ok: false, absTarget };
     }
   } catch {

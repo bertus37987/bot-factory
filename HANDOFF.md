@@ -33,14 +33,14 @@ Bot-Factory has completed the full 5-phase buildout from local control-plane fou
 
 ## 3. Verified Commands
 
-Run from the repository root (`C:\Users\willy\source\repos\bot-factory`):
+Run from the repository root (for example `~/src/bot-factory` or `C:\Users\<you>\source\repos\bot-factory`):
 
 | Command | Purpose | Notes |
 |---|---|---|
-| `bun run check` | Full local verification (`typecheck` -> `lint` -> `test` -> `build:web`) | Ensure `bun run build:web` has already built `apps/web/dist` at least once on a clean checkout so Playwright UI E2E finds `apps/web/dist/index.html` (or set `BOT_FACTORY_SKIP_PLAYWRIGHT=1`). |
+| `bun run check` | Full local verification (`typecheck` -> `lint` -> `build:web` -> `test`) | Builds `apps/web/dist` before tests so Playwright UI E2E can run when Python 3 Playwright + Chromium are installed (or set `BOT_FACTORY_SKIP_PLAYWRIGHT=1`). |
 | `bun run typecheck` | Typecheck `packages/*`, `apps/*`, and `tests/*` (`tsc --noEmit`) | Zero-error TypeScript strict mode across monorepo. |
 | `bun run lint` | Run Biome checks (`bun x biome check packages apps tests`) | Uses `biome.json` (`preset: "recommended"`, ignores `node_modules`, `dist`, `.dev-runtime`, `coverage`, unknown extensions). |
-| `bun test tests` | Execute all Bun integration, security, autonomy & Playwright UI E2E suites | Set `BOT_FACTORY_SKIP_PLAYWRIGHT=1` in environments without Chromium (already configured in `.github/workflows/ci.yml`). |
+| `bun test tests` | Execute all Bun integration, security, autonomy & Playwright UI E2E suites | Set `BOT_FACTORY_SKIP_PLAYWRIGHT=1` in environments without Chromium. CI runs browser E2E in a dedicated Ubuntu job with Python 3 Playwright. |
 | `bun run build:web` | Build production Studio UI bundle into `apps/web/dist` | Splits Three.js `Model3DViewer` into a lazy chunk and bundles self-hosted `@fontsource/inter` & `@fontsource/jetbrains-mono`. |
 | `bun run doctor` | Read-only preflight inspection of `BOT_FACTORY_ROOT`, secrets, `.writer.lock`, DB & CLIs | Never mutates `state.db` or acquires `.writer.lock` (inspects WAL/SHM via temp copy). |
 | `bun run dev:daemon:isolated` | Start daemon against isolated `./.dev-runtime` (`BOT_FACTORY_ROOT`) | Safe for live UI/browser testing without touching `~/bot-factory`; prints tokenized localhost URL. |
@@ -51,5 +51,5 @@ Run from the repository root (`C:\Users\willy\source\repos\bot-factory`):
 
 ## 4. CI & Quality Gate Notes
 
-- **CI Workflow ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)):** Triggers on `push` and `pull_request` to `main` on `ubuntu-latest` using `oven-sh/setup-bun@v2`, runs `bun install --frozen-lockfile`, `bun run typecheck`, `bun run lint`, `bun run build:web`, and `bun test tests` with `BOT_FACTORY_SKIP_PLAYWRIGHT=1`.
+- **CI Workflow ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)):** Triggers on `push` and `pull_request` to `main` on `ubuntu-latest`. The main verify job runs `bun install --frozen-lockfile`, `bun run typecheck`, `bun run lint`, `bun run scan:security`, `bun run build:web`, and `bun test tests` with `BOT_FACTORY_SKIP_PLAYWRIGHT=1`; a separate `ui-e2e` job installs Python 3 Playwright + Chromium and runs `tests/ui_e2e.test.ts` without the skip flag.
 - **Biome Configuration ([`biome.json`](./biome.json)):** Enforces recommended TypeScript/React/CSS lint rules (`useValidAriaRole` with `ignoreNonDom: true` for custom React `role` props), keeps `formatter.enabled: false` and `assist.enabled: false` so mixed CRLF/LF line endings do not trigger noisy diff churn, and excludes `node_modules`, `dist`, `.dev-runtime`, and `coverage`.

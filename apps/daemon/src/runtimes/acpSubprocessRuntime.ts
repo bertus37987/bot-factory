@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { HubConfig } from "@bot-factory/shared";
 import { SecretScrubber } from "../config";
 import { isPathStrictlyWithinRoot } from "./nativeHttpRuntime";
+import { killPosixProcessGroupSync, processGroupSpawnOptions } from "./processTree";
 import type {
   AgentRuntime,
   AutonomyLevel,
@@ -104,8 +105,10 @@ const SAFE_READ_BUILD_TEST_PREFIXES = [
   /^(?:run\s+|execute\s+)?cargo\s+(?:test|check|build|clippy)\b/i,
   /^(?:run\s+|execute\s+)?go\s+(?:test|vet|build)\b/i,
   /^(?:run\s+|execute\s+)?git\s+(?:status|diff|log|show|branch|rev-parse)\b/i,
-  /^(?:run\s+|execute\s+)?(?:ls|dir|pwd|which|where|cat|head|tail|rg|grep|find)\b/i,
+  /^(?:run\s+|execute\s+)?(?:pwd|which|where)\b/i,
 ];
+
+const PATH_SENSITIVE_SHELL_COMMANDS = new Set(["cat", "head", "tail", "rg", "grep", "find", "ls", "dir"]);
 
 const SAFE_CHILD_ENV_KEYS = [
   "PATH",
@@ -181,14 +184,92 @@ function isProtectedPathTarget(locPath: string, worktreePath: string, protectedD
   return null;
 }
 
-function isSafeMediumShellCommand(title: string): boolean {
+function tokenizeShellSegment(segment: string): string[] | null {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+
+  for (const ch of segment) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else current += ch;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      else if (ch === "\\") escaped = true;
+      else current += ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    current += ch;
+  }
+  if (quote || escaped) return null;
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function shellPathTokenWithinWorktree(token: string, worktreePath: string): boolean {
+  if (!token || token === "-") return true;
+  if (token.startsWith("~")) {
+    if (token !== "~" && !token.startsWith("~/") && !token.startsWith("~\\")) return false;
+    const expanded = token === "~" ? homedir() : join(homedir(), token.slice(2));
+    return isPathStrictlyWithinRoot(worktreePath, expanded).ok;
+  }
+  if (/^[A-Za-z]:[\\/]/.test(token) && process.platform !== "win32") return false;
+  return isPathStrictlyWithinRoot(worktreePath, token).ok;
+}
+
+function pathSensitiveShellArgsWithinWorktree(command: string, tokens: string[], worktreePath: string): boolean {
+  if (command === "find") return false;
+  for (const token of tokens) {
+    if (token === "--pre" || token.startsWith("--pre=") || token === "--hostname-bin" || token.startsWith("--hostname-bin=")) return false;
+    if (token.startsWith("-")) continue;
+    if (!shellPathTokenWithinWorktree(token, worktreePath)) return false;
+  }
+  return true;
+}
+
+function isSafeMediumShellCommand(title: string, worktreePath: string): boolean {
   const trimmed = title.trim();
   if (!trimmed) return false;
-  if (/[;|`]|(\$\()|(>>?)/.test(trimmed)) return false;
+  if (/[;|`\n\r]|(\$\()|(>>?)/.test(trimmed)) return false;
+  if (trimmed.replace(/&&/g, "").includes("&")) return false;
 
   const segments = trimmed.split(/\s*&&\s*/).filter(Boolean);
   if (segments.length === 0) return false;
-  return segments.every((seg) => SAFE_READ_BUILD_TEST_PREFIXES.some((rx) => rx.test(seg.trim())));
+  return segments.every((segment) => {
+    const tokens = tokenizeShellSegment(segment.trim());
+    if (!tokens || tokens.length === 0) return false;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0] ?? "")) return false;
+    const commandIndex = tokens[0] === "run" || tokens[0] === "execute" ? 1 : 0;
+    const command = (tokens[commandIndex] ?? "").toLowerCase();
+    const args = tokens.slice(commandIndex + 1);
+    if (PATH_SENSITIVE_SHELL_COMMANDS.has(command)) {
+      return pathSensitiveShellArgsWithinWorktree(command, args, worktreePath);
+    }
+    return SAFE_READ_BUILD_TEST_PREFIXES.some((rx) => rx.test(segment.trim()));
+  });
 }
 
 /**
@@ -301,7 +382,7 @@ export function evaluateAutonomyPermission(
         return { decision: "escalate", reason: `network_command_requires_approval:${title.slice(0, 80)}`, commandOrPath };
       }
     }
-    if (isSafeMediumShellCommand(title)) {
+    if (isSafeMediumShellCommand(title, worktreePath)) {
       return { decision: "allow", reason: "safe_shell_command_in_worktree", commandOrPath };
     }
     return { decision: "escalate", reason: `shell_command_requires_approval:${title.slice(0, 80)}`, commandOrPath };
@@ -574,6 +655,7 @@ export class AcpSubprocessRuntime implements AgentRuntime {
       stdout: "pipe",
       stderr: "pipe",
       env: childEnv,
+      ...processGroupSpawnOptions(),
     });
 
     const state: ActiveAcpProcess = {
@@ -933,11 +1015,7 @@ export class AcpSubprocessRuntime implements AgentRuntime {
         }
       }
     } else {
-      try {
-        state.proc.kill();
-      } catch {
-        // ignore
-      }
+      killPosixProcessGroupSync(state.proc);
     }
 
     for (const pending of state.pendingClientRequests.values()) {
@@ -970,11 +1048,7 @@ export class AcpSubprocessRuntime implements AgentRuntime {
         }
       }
     } else {
-      try {
-        state.proc.kill();
-      } catch {
-        // ignore
-      }
+      killPosixProcessGroupSync(state.proc);
     }
 
     for (const pending of state.pendingClientRequests.values()) {

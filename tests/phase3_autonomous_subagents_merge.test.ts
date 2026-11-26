@@ -1138,8 +1138,10 @@ process.stdin.on("data", (chunk) => {
   it("enforces IndependentVerifier empty-diff fail-closed gate, check timeout tree kill, and secret scrubbing", async () => {
     rememberEnv("BOT_FACTORY_OFFLINE_MOCK");
     rememberEnv("BOT_FACTORY_TOKEN");
+    rememberEnv("VERIFY_PARENT_SECRET");
     delete process.env.BOT_FACTORY_OFFLINE_MOCK;
     process.env.BOT_FACTORY_TOKEN = "parent_daemon_token_must_not_leak";
+    process.env.VERIFY_PARENT_SECRET = "parent-process-secret-must-not-leak";
 
     const rootDir = makeTempRoot("bf-p3-ver-");
     const repoDir = makeTempRoot("bf-p3-ver-repo-");
@@ -1147,7 +1149,7 @@ process.stdin.on("data", (chunk) => {
 
     initTempGitRepo(repoDir, {
       "README.md": "# Verifier Edge Cases\n",
-      "check-secret.ts": `console.log("CHECK_OUT secret=${leakedSecret} token=" + (process.env.BOT_FACTORY_TOKEN ?? "ABSENT"));
+      "check-secret.ts": `console.log("CHECK_OUT secret=${leakedSecret} token=" + (process.env.BOT_FACTORY_TOKEN ?? "ABSENT") + " parent=" + (process.env.VERIFY_PARENT_SECRET ?? "ABSENT"));
 console.error("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.verifyPayload1234");
 `,
       "sleep-child.ts": `setInterval(() => {}, 1000);\n`,
@@ -1170,6 +1172,8 @@ setInterval(() => {}, 1000);
     expect(checkResults[0]!.name).toBe("cmd:scrub-and-env");
     expect(checkResults[0]!.passed).toBe(true);
     expect(checkResults[0]!.detail).toContain("token=ABSENT");
+    expect(checkResults[0]!.detail).toContain("parent=ABSENT");
+    expect(checkResults[0]!.detail).not.toContain("parent-process-secret-must-not-leak");
     expect(checkResults[0]!.detail).not.toContain(leakedSecret);
     expect(checkResults[0]!.detail).not.toContain("eyJhbGciOiJIUzI1NiJ9");
     expect(checkResults[0]!.detail).toContain("[REDACTED_SECRET]");

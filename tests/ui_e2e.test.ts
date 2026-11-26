@@ -13,40 +13,35 @@ interface PlaywrightProbeResult {
   reason?: string;
 }
 
+let pythonCommand: string | null = null;
+
 function probePythonPlaywright(): PlaywrightProbeResult {
   if (process.env.BOT_FACTORY_SKIP_PLAYWRIGHT === "1") {
     return { available: false, reason: "BOT_FACTORY_SKIP_PLAYWRIGHT=1" };
   }
-  try {
-    const probe = Bun.spawnSync(
-      [
-        "python",
-        "-c",
-        [
-          "import os",
-          "from playwright.sync_api import sync_playwright",
-          "with sync_playwright() as p:",
-          "    exe = p.chromium.executable_path",
-          "    assert exe and os.path.exists(exe), f'missing chromium executable: {exe}'",
-        ].join("\n"),
-      ],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    if (probe.exitCode !== 0) {
+  const probeSource = [
+    "import os",
+    "from playwright.sync_api import sync_playwright",
+    "with sync_playwright() as p:",
+    "    exe = p.chromium.executable_path",
+    "    assert exe and os.path.exists(exe), f'missing chromium executable: {exe}'",
+  ].join("\n");
+  let lastFailure = "python_not_found";
+  for (const candidate of ["python3", "python"]) {
+    try {
+      const probe = Bun.spawnSync([candidate, "-c", probeSource], { stdout: "pipe", stderr: "pipe" });
+      if (probe.exitCode === 0) {
+        pythonCommand = candidate;
+        return { available: true };
+      }
       const stderr = probe.stderr.toString("utf8").trim();
       const stdout = probe.stdout.toString("utf8").trim();
-      return {
-        available: false,
-        reason: stderr || stdout || `python_exit_${probe.exitCode}`,
-      };
+      lastFailure = stderr || stdout || `${candidate}_exit_${probe.exitCode}`;
+    } catch (err) {
+      lastFailure = err instanceof Error ? err.message : String(err);
     }
-    return { available: true };
-  } catch (err) {
-    return {
-      available: false,
-      reason: err instanceof Error ? err.message : String(err),
-    };
   }
+  return { available: false, reason: lastFailure };
 }
 
 const playwrightProbe = probePythonPlaywright();
@@ -116,7 +111,7 @@ describe("Bot-Factory Studio Playwright UI E2E", () => {
       };
       delete childEnv.OPENAI_API_KEY;
 
-      const proc = Bun.spawn(["python", PLAYWRIGHT_SCRIPT], {
+      const proc = Bun.spawn([pythonCommand ?? "python3", PLAYWRIGHT_SCRIPT], {
         cwd: REPO_ROOT,
         env: childEnv,
         stdout: "pipe",

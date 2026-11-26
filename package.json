@@ -2,6 +2,7 @@
   "name": "bot-factory-harness",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -16,10 +17,12 @@
     "typecheck": "bun x tsc --noEmit",
     "lint": "bun x biome check packages apps tests",
     "test": "bun test tests",
-    "check": "bun run typecheck && bun run lint && bun test tests && bun run build:web"
+    "scan:security": "bun pm scan",
+    "check": "bun run typecheck && bun run lint && bun run build:web && bun test tests"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.8",
+    "@socketsecurity/bun-security-scanner": "1.1.3",
     "@types/bun": "1.2.15",
     "typescript": "5.8.3"
   }

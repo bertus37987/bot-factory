@@ -79,10 +79,13 @@ bun run build:web
 # 4. Run full Bun test suite (set BOT_FACTORY_SKIP_PLAYWRIGHT=1 if Chromium is absent)
 bun test tests
 
-# 5. Full check pipeline (typecheck + lint + tests + build:web; build first on a clean checkout)
+# 5. Full check pipeline (typecheck + lint + build:web + tests)
 bun run check
 
-# 6. Read-only preflight diagnostics (never modifies state.db or .writer.lock)
+# 6. Dependency supply-chain/advisory scan
+bun run scan:security
+
+# 7. Read-only preflight diagnostics (never modifies state.db or .writer.lock)
 bun run doctor
 ```
 
@@ -130,7 +133,7 @@ bun run dev:daemon:isolated
 ## 5. Known Constraints & Engineering Traps
 
 1. **`biome.json` keeps `formatter.enabled: false` and `assist.enabled: false` intentionally.** Existing repository files mix CRLF/LF line endings and deliberate multi-line formatting; `bun run lint` (`bun x biome check packages apps tests`) runs recommended TS/TSX/CSS lint rules without failing on line-ending diffs.
-2. **Playwright E2E requires built `apps/web/dist/index.html`.** Run `bun run build:web` before `bun test tests` on a fresh checkout unless `BOT_FACTORY_SKIP_PLAYWRIGHT=1` is set.
+2. **Playwright E2E requires built `apps/web/dist/index.html` and Python 3 Playwright Chromium.** `bun run check` builds the web UI before tests. Set `BOT_FACTORY_SKIP_PLAYWRIGHT=1` when Chromium is intentionally unavailable.
 3. **Git `status --porcelain` leading space trap.** `runGitSync` trims stdout, so `" M file"` becomes `"M file"`. Always keep the regex parser in `parsePorcelainStatus` (`worktrees.ts`).
 4. **Git worktree `.git` is a file, not a directory.** Always filter `.git` entries on both files and directories in repo listing/tree walkers (`worktrees.ts`, `agentTools.ts`).
 5. **SQLite schema v3 + FTS triggers.** `database.ts` idempotently migrates v1 schema and timestamps, then adds v3 message attribution (`sender_agent_id`, `sender_role`). Never bypass `StateDatabase` migrations.
