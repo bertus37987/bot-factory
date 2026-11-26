@@ -533,6 +533,35 @@ export function createBotWorktree(params: {
   return { worktreePath, branch };
 }
 
+export function worktreeHasUnmergedChangesSync(params: {
+  repoPath: string;
+  worktreePath?: string | null;
+  branch?: string | null;
+}): boolean {
+  if (!params.worktreePath || !params.branch || !existsSync(params.worktreePath)) return false;
+  if (!params.repoPath || !existsSync(params.repoPath)) return true;
+
+  try {
+    const inside = runGitSync(["rev-parse", "--is-inside-work-tree"], params.worktreePath, { allowFail: true });
+    if (inside.code !== 0) return true;
+
+    const status = runGitSync(["--no-optional-locks", "status", "--porcelain", "-uall"], params.worktreePath, {
+      allowFail: true,
+    });
+    if (status.code !== 0 || status.stdout.trim().length > 0) return true;
+
+    const baseHead = runGitSync(["rev-parse", "--verify", "HEAD"], params.repoPath, { allowFail: true });
+    if (baseHead.code !== 0 || !baseHead.stdout) return true;
+    const ahead = runGitSync(["rev-list", "--count", `${baseHead.stdout}..${params.branch}`], params.repoPath, {
+      allowFail: true,
+    });
+    if (ahead.code !== 0) return true;
+    return Number(ahead.stdout || "0") > 0;
+  } catch {
+    return true;
+  }
+}
+
 export function removeBotWorktree(repoPath: string, worktreePath: string): void {
   let removeError: Error | null = null;
   if (existsSync(worktreePath)) {

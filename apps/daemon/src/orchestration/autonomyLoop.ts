@@ -15,6 +15,7 @@ import {
 import type { SecretScrubber } from "../config";
 import type { CommandCore } from "../core/commandCore";
 import type { StateDatabase } from "../db/database";
+import { worktreeHasUnmergedChangesSync } from "../git/worktrees";
 
 export interface GoalContext {
   goalId: string;
@@ -593,12 +594,29 @@ export class AutonomyLoop {
     const idlePeers = selectablePeers.filter((a) => a.status === "idle");
 
     const allTasks = this.db.listTasks(projectId);
+    const projectRepoPath = this.db.getProject(projectId)?.repoPath ?? "";
+    const agentById = new Map(allAgents.map((agent) => [agent.id, agent]));
+    const blockedWorktreeProtection = new Map<string, boolean>();
+    const protectsBlockedWorktree = (agentId: string): boolean => {
+      const cached = blockedWorktreeProtection.get(agentId);
+      if (cached !== undefined) return cached;
+      const agent = agentById.get(agentId);
+      const protectedWork = agent
+        ? worktreeHasUnmergedChangesSync({
+            repoPath: projectRepoPath,
+            worktreePath: agent.worktreePath,
+            branch: agent.worktreeBranch,
+          })
+        : false;
+      blockedWorktreeProtection.set(agentId, protectedWork);
+      return protectedWork;
+    };
     const hasUnmergedWork = (agentId: string): boolean =>
-      allTasks.some(
-        (t) =>
-          t.assignedAgentId === agentId &&
-          (t.status === "claimed" || t.status === "in_review" || t.status === "verified" || t.status === "blocked"),
-      );
+      allTasks.some((t) => {
+        if (t.assignedAgentId !== agentId) return false;
+        if (t.status === "claimed" || t.status === "in_review" || t.status === "verified") return true;
+        return t.status === "blocked" && protectsBlockedWorktree(agentId);
+      });
 
     if (task.assignedAgentId) {
       const preferred = idlePeers.find((a) => a.id === task.assignedAgentId && !hasUnmergedWork(a.id));

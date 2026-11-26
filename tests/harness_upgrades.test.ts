@@ -6,7 +6,7 @@ import { newId, type HubConfig, type TaskRecord, type VerificationReportRecord }
 import { loadHubConfig, saveHubConfig, SecretScrubber } from "../apps/daemon/src/config";
 import { CommandCore } from "../apps/daemon/src/core/commandCore";
 import { StateDatabase } from "../apps/daemon/src/db/database";
-import { createSubagentWorktree, extractAndApplySubagentPatch } from "../apps/daemon/src/git/worktrees";
+import { createBotWorktree, createSubagentWorktree, extractAndApplySubagentPatch } from "../apps/daemon/src/git/worktrees";
 import { startBotFactoryDaemon, type BotFactoryApp } from "../apps/daemon/src/index";
 import { computeMcpFetchTimeoutMs, DEFAULT_SUBAGENT_WAIT_MS } from "../apps/daemon/src/mcp/mcpBridge";
 import { LocalSuperHermesMemory } from "../apps/daemon/src/memory/memoryEngine";
@@ -1055,16 +1055,23 @@ describe("Wave 2 Harness & Multi-Agent Upgrades", () => {
 
     const db = new StateDatabase(dbPath);
     try {
+      const repoDir = initTempGitRepo(rootDir);
       db.insertProject({
         id: projectId,
         name: "Crash Admission Lab",
         slug: "crash-admission-lab",
         rootPath: rootDir,
-        repoPath: rootDir,
+        repoPath: repoDir,
         routingOverrides: {},
         verifyChecks: [],
         status: "active",
         createdAt: now,
+      });
+      const cleanWorktree = createBotWorktree({
+        projectRoot: rootDir,
+        repoPath: repoDir,
+        agentId,
+        taskId: "bootstrap_clean_worktree",
       });
       db.upsertAgent({
         id: agentId,
@@ -1076,8 +1083,8 @@ describe("Wave 2 Harness & Multi-Agent Upgrades", () => {
         provider: "mock",
         model: "smart",
         status: "idle",
-        worktreePath: rootDir,
-        worktreeBranch: "main",
+        worktreePath: cleanWorktree.worktreePath,
+        worktreeBranch: cleanWorktree.branch,
         pid: null,
         activeSessionId: sessionId,
         lastSummary: "",
@@ -1175,6 +1182,11 @@ describe("Wave 2 Harness & Multi-Agent Upgrades", () => {
       expect(dispatched).toEqual([]);
 
       db.upsertTask({ ...crashedTask, status: "blocked", updatedAt: Date.now() });
+      expect(loop.resumePersistedGoals()).toBe(1);
+      expect(dispatched).toEqual([taskId]);
+
+      writeFileSync(join(cleanWorktree.worktreePath, "failed-wip.txt"), "unmerged failed attempt\n", "utf8");
+      dispatched.length = 0;
       expect(loop.resumePersistedGoals()).toBe(0);
       expect(dispatched).toEqual([]);
     } finally {
