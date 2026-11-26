@@ -559,13 +559,19 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
         scope: "peer",
       }) as { agent: { id: string } }
     ).agent;
+    const staleClaimTask = app.db.getTask(taskB.id)!;
+    app.db.runAtomicWrite(() => {
+      app.db.upsertTask({ ...staleClaimTask, worktreeBranch: "bf/stale-previous-claimer", updatedAt: Date.now() });
+    });
     const claimed = (await app.engine.handleMcpToolCall("bf_task_claim", {
       projectId: projB.project.id,
       agentId: peerB2.id,
       args: {},
-    })) as { task?: { id: string; status: string } };
+    })) as { task?: { id: string; status: string; worktreeBranch?: string | null } };
+    const peerB2State = app.db.getAgent(peerB2.id)!;
     expect(claimed.task?.id).toBe(taskB.id);
     expect(claimed.task?.status).toBe("claimed");
+    expect(claimed.task?.worktreeBranch).toBe(peerB2State.worktreeBranch);
 
     // 5. Bound port propagated to engine URL & IPv6 loopback origin allowed
     const token = readFileSync(join(rootDir, "system", ".daemon-token"), "utf8").trim();

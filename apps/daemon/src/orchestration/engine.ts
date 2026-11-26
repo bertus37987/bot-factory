@@ -2444,7 +2444,7 @@ export class OrchestrationEngine {
             ...task,
             status: "claimed",
             assignedAgentId: agent.id,
-            worktreeBranch: task.worktreeBranch ?? agent.worktreeBranch,
+            worktreeBranch: agent.worktreeBranch,
             updatedAt: Date.now(),
           };
           this.db.upsertTask(updated);
