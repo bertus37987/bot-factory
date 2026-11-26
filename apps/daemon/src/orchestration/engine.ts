@@ -1444,7 +1444,7 @@ export class OrchestrationEngine {
             branch: bot!.worktreeBranch,
           }),
       )
-      .map((t) => ({ ...t, assignedAgentId: null, worktreeBranch: null, updatedAt: Date.now() }));
+      .map((t) => ({ ...t, worktreeBranch: null, updatedAt: Date.now() }));
 
     const updatedTask: TaskRecord = {
       ...task,
@@ -1463,7 +1463,7 @@ export class OrchestrationEngine {
           }
           for (const released of releasedBlockedTasks) {
             const freshReleased = this.db.getTask(released.id);
-            if (freshReleased?.status === "blocked" && freshReleased.assignedAgentId === bot!.id) {
+            if (freshReleased?.status === "blocked" && freshReleased.assignedAgentId === bot!.id && freshReleased.worktreeBranch) {
               this.db.upsertTask(released);
             }
           }

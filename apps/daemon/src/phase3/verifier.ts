@@ -464,7 +464,7 @@ export class IndependentVerifier {
     const handoff = this.checkHandoffExists(task, project.rootPath);
     const checks: VerificationCheckResult[] = [handoff.result, this.checkSecretScan(handoff.content, handoff.result.passed)];
 
-    const worktreeBase = author?.worktreePath ?? project.repoPath;
+    const worktreeBase = task.worktreeBranch ? (author?.worktreePath ?? project.repoPath) : project.repoPath;
     const worktree = await this.checkWorktreeEvidence({
       basePath: worktreeBase,
       project,

@@ -521,7 +521,7 @@ describe("Bot-Factory Phase 1 + Phase 2 Core E2E", () => {
       taskId: taskA.id,
       agentId: peerA.id,
     });
-    expect(app.db.getTask(blockedCleanTask.id)!.assignedAgentId).toBeNull();
+    expect(app.db.getTask(blockedCleanTask.id)!.assignedAgentId).toBe(peerA.id);
     expect(app.db.getTask(blockedCleanTask.id)!.worktreeBranch).toBeNull();
     expect(() =>
       app.engine.executeCommand({
