@@ -4242,6 +4242,7 @@ kbd {
 /* Composer keeps one architectural toolbar row; lower-priority controls compress
    while send remains pinned instead of wrapping into a loose row. */
 .pc-bar {
+  position: relative;
   flex-wrap: nowrap;
   overflow: visible;
   padding-right: 48px;
