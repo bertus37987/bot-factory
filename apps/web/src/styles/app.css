@@ -4295,3 +4295,42 @@ kbd {
     gap: 5px;
   }
 }
+
+
+@container pc-card (max-width: 520px) {
+  .bf-effort-label,
+  .pc-context-ring > span {
+    display: none;
+  }
+}
+
+@container pc-card (max-width: 420px) {
+  .pc-context-ring {
+    display: none;
+  }
+
+  .pc-model-btn,
+  .pc-model-static {
+    max-width: 104px;
+  }
+}
+
+@container pc-card (max-width: 340px) {
+  .pc-bar {
+    gap: 3px;
+    padding: 6px 42px 8px 5px;
+  }
+
+  .pc-btn {
+    width: 24px;
+  }
+
+  .pc-model-btn,
+  .pc-model-static {
+    max-width: 76px;
+  }
+
+  .bf-effort-trigger > span:last-child {
+    display: none;
+  }
+}
